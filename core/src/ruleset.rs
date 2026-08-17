@@ -1,15 +1,18 @@
-//! Immutable `Ruleset` compilation (ADR-0001/0002/0003).
+//! Immutable `Ruleset` compilation and the batch query engine
+//! (ADR-0001/0002/0003/0004/0005).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use geo::{BoundingRect, Geometry, Rect};
+use geo::{BoundingRect, Geometry, Rect, Relate, Validation};
 
+use crate::candidate::Candidate;
 use crate::error::{ErrorCode, SpatialError};
 use crate::property_index::PropertyIndex;
 use crate::properties::PropertyValue;
+use crate::query::{CandidateOutcome, Query, SpatialPredicate};
 use crate::rule::{Rule, RuleId};
 use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
-use crate::validation::validate_rule_geometry;
+use crate::validation::{ensure_supported_geometry, validate_rule_geometry};
 
 /// An immutable, query-optimized collection of rules (CONTEXT.md §6).
 ///
@@ -31,6 +34,22 @@ impl std::fmt::Debug for Ruleset {
             .field("rule_count", &self.rules.len())
             .field("rule_ids", &ids)
             .finish()
+    }
+}
+
+/// Answer a spatial predicate between a candidate and a rule via DE-9IM
+/// (ADR-0008). `contains`/`within` are directional: `candidate` relates to
+/// `rule`.
+fn spatial_predicate_holds(
+    predicate: SpatialPredicate,
+    candidate: &Geometry<f64>,
+    rule: &Geometry<f64>,
+) -> bool {
+    let matrix = candidate.relate(rule);
+    match predicate {
+        SpatialPredicate::Intersects => matrix.is_intersects(),
+        SpatialPredicate::Contains => matrix.is_contains(),
+        SpatialPredicate::Within => matrix.is_within(),
     }
 }
 
@@ -141,5 +160,69 @@ impl Ruleset {
     /// The compile-time property equality/`$in` index.
     pub fn property_index(&self) -> &PropertyIndex {
         &self.property_index
+    }
+
+    /// Evaluate a batch of candidates against `query`, returning one outcome
+    /// per candidate in input order (ADR-0004). Invalid candidates produce an
+    /// [`CandidateOutcome::Invalid`] outcome without failing the batch
+    /// (ADR-0005).
+    pub fn query(&self, candidates: &[Candidate], query: &Query) -> Vec<CandidateOutcome> {
+        let excluded: HashSet<RuleId> = query
+            .exclude_rule_ids
+            .iter()
+            .filter_map(|id| self.rule_id(id))
+            .collect();
+        candidates
+            .iter()
+            .map(|candidate| self.evaluate_candidate(candidate, query, &excluded))
+            .collect()
+    }
+
+    fn evaluate_candidate(
+        &self,
+        candidate: &Candidate,
+        query: &Query,
+        excluded: &HashSet<RuleId>,
+    ) -> CandidateOutcome {
+        // Candidate-level gate: unsupported type or invalid geometry yields an
+        // `Invalid` outcome (never a batch failure, ADR-0005).
+        if let Err(e) = ensure_supported_geometry(&candidate.geometry) {
+            return CandidateOutcome::Invalid { reason: e.message };
+        }
+        if !candidate.geometry.is_valid() {
+            return CandidateOutcome::Invalid {
+                reason: format!("invalid geometry: {:?}", candidate.geometry.validation_errors()),
+            };
+        }
+        let Some(bbox) = candidate.geometry.bounding_rect() else {
+            return CandidateOutcome::Invalid {
+                reason: "geometry has no bounding rectangle".to_string(),
+            };
+        };
+
+        // Fixed pipeline: spatial bbox filter -> property predicate -> exact
+        // DE-9IM relate (§15). Prepared geometries are a later ladder decision
+        // (E/F, research 03); plain `Relate` is used here for correctness.
+        let mut matched: Vec<RuleId> = Vec::new();
+        for rule_id in self.query_envelope(&bbox) {
+            if excluded.contains(&rule_id) {
+                continue;
+            }
+            let rule = &self.rules[rule_id.0 as usize];
+            if let Some(where_clause) = &query.where_clause {
+                if !where_clause.eval(&rule.properties) {
+                    continue;
+                }
+            }
+            if spatial_predicate_holds(query.spatial, &candidate.geometry, &rule.geometry) {
+                matched.push(rule_id);
+            }
+        }
+
+        if matched.is_empty() {
+            CandidateOutcome::NotMatched
+        } else {
+            CandidateOutcome::Matched { rule_ids: matched }
+        }
     }
 }

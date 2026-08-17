@@ -11,10 +11,12 @@ mod error;
 mod ingestion;
 mod properties;
 mod property_index;
+mod query;
 mod rule;
 mod ruleset;
 mod spatial_index;
 mod validation;
+mod where_expr;
 
 pub use candidate::Candidate;
 pub use error::{ErrorCode, SpatialError};
@@ -24,7 +26,9 @@ pub use ingestion::{
 };
 pub use properties::{properties_from_json, PropertyValue};
 pub use property_index::PropertyIndex;
+pub use query::{CandidateOutcome, Query, SpatialPredicate};
 pub use rule::{Rule, RuleId};
 pub use ruleset::Ruleset;
 pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};
 pub use validation::{ensure_supported_geometry, validate_rule_geometry};
+pub use where_expr::{FieldOp, FieldPredicate, WhereExpr};

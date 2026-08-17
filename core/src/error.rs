@@ -78,6 +78,22 @@ impl SpatialError {
     pub fn unsupported_geometry_type(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::UnsupportedGeometryType, message)
     }
+
+    pub fn invalid_query(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InvalidQuery, message)
+    }
+
+    pub fn invalid_property_predicate(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InvalidPropertyPredicate, message)
+    }
+
+    pub fn unsupported_property_operator(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::UnsupportedPropertyOperator, message)
+    }
+
+    pub fn unsupported_spatial_predicate(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::UnsupportedSpatialPredicate, message)
+    }
 }
 
 impl fmt::Display for SpatialError {

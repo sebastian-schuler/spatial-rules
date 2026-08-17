@@ -31,6 +31,7 @@ Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md
 - [Sync vs async query and replacement API](issues/08-sync-async-api.md) — sync-first `query()`/`replace()`; `replace()` returns ADR-0007 observability; add `queryAsync()` only if harness p95 > 50 ms on the 1,000-candidate workload (ADR-0009).
 - [Rust core: scaffolding, types, GeoJSON ingestion, validation](issues/13-core-scaffolding-ingestion.md) — Cargo workspace `core`/`node`/`benchmarks`; `Rule`/`Candidate`/`PropertyValue`/`RuleId`; geojson→geo_types ingestion; `geo::Validation` strict gate (`SR_INVALID_GEOJSON`/`SR_INVALID_GEOMETRY`/`SR_UNSUPPORTED_GEOMETRY_TYPE`); 24 tests green, clippy clean.
 - [Rust core: ruleset compilation](issues/14-ruleset-compilation.md) — immutable `Ruleset`; `SpatialIndex` trait (rstar `bulk_load` default + linear-scan ladder baseline); equality+`$in` `PropertyIndex`; precomputed envelopes; `RuleId` `0..n-1` mapping; 38 tests green, clippy clean.
+- [Rust core: batch query engine](issues/15-batch-query-engine.md) — `Ruleset::query` fixed pipeline (bbox → property → DE-9IM `Relate`); Mongo-style `where` AST (`$ne`/`$gt/$gte/$lt/$lte`/`$in`/`$and`/`$or`; missing/mismatch = non-match); `Vec<CandidateOutcome>` aligned to input with candidate-level `Invalid`; 62 tests green, clippy clean.
 
 ## Not yet specified
 
