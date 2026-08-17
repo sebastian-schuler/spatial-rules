@@ -33,6 +33,7 @@ Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md
 - [Rust core: ruleset compilation](issues/14-ruleset-compilation.md) — immutable `Ruleset`; `SpatialIndex` trait (rstar `bulk_load` default + linear-scan ladder baseline); equality+`$in` `PropertyIndex`; precomputed envelopes; `RuleId` `0..n-1` mapping; 38 tests green, clippy clean.
 - [Rust core: batch query engine](issues/15-batch-query-engine.md) — `Ruleset::query` fixed pipeline (bbox → property → DE-9IM `Relate`); Mongo-style `where` AST (`$ne`/`$gt/$gte/$lt/$lte`/`$in`/`$and`/`$or`; missing/mismatch = non-match); `Vec<CandidateOutcome>` aligned to input with candidate-level `Invalid`; 62 tests green, clippy clean.
 - [Benchmark dataset, harness, and reference cross-checks](issues/12-benchmark-reference-harness.md) — deterministic dataset (`benchmarks/data/*.geojson`) + criterion ladder; B naive 436.8 ms / C scan 465.9 ms / D rstar 458.5 ms / build 23.6 ms ⇒ exact `Relate` dominates, bbox index ≈0 help at 30 large rules; ADR-0009 async trigger fired; turf.js cross-check green (turf v6 `booleanContains` MultiPolygon quirk recorded). Deferred: ladder A (out-of-repo), E/F (needs core prepare path), memory (Docker tickets 17/19).
+- [Node binding implementation](issues/16-node-binding-implementation.md) — napi-rs (napi 3/napi8) `SpatialRuleset`; `query(Buffer, query) -> Uint8Array` mask + `queryRich` JSON; `SpatialRulesError` with `SR_*` code; smoke test green under Node 24 and Bun 1.3.14. `replace()`/`queryAsync()`/prebuilds deferred to 19/18.
 
 ## Not yet specified
 
