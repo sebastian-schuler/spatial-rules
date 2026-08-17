@@ -1,0 +1,11 @@
+{
+  "name": "spatial-rules-benchmarks-js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cross-check": "node cross_check.mjs"
+  },
+  "devDependencies": {
+    "@turf/turf": "6.5.0"
+  }
+}

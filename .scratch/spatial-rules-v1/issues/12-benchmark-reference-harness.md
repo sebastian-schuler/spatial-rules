@@ -1,7 +1,7 @@
 # Benchmark dataset, harness, and reference cross-checks
 
 Type: task
-Status: claimed
+Status: resolved
 Blocked by: 01, 02, 03
 
 ## Question
@@ -34,4 +34,19 @@ Answer records where the dataset lives, how to run the harness, and the initial 
 - ADR-0009 trigger fires: sync query p50 ≈ 458 ms ≫ 50 ms ⇒ `queryAsync()` is warranted, after prepared geometry.
 - Still open: turf.js cross-check (item 4), JS baseline A, memory (steady-state/peak — best measured in the Docker container, tickets 17/19), prepared-geometry ladder E/F (needs a prepare path in core).
 
-Status stays `claimed` until the turf.js cross-check lands. This ticket unblocks Sync vs async query and replacement API.
+Status stays `claimed` until the turf.js cross-check lands.
+
+## Answer
+
+Built the benchmark dataset, harness, and turf.js cross-check; committed to `main`.
+
+- **Dataset** (`benchmarks/src/dataset.rs`, deterministic): 30 country-scale MultiPolygon rules (1–3 parts, 60–400 vertices, ~35% with holes) + 1,000 footprint candidates. Generator: `cargo run -p spatial-rules-benchmarks --bin generate_dataset` → `benchmarks/data/{rules,candidates}.geojson` (committed). Synthetic/representative, not Natural Earth; real open data drops in without changing the harness.
+- **Harness** (`benchmarks/benches/ladder.rs`, criterion): `cargo bench -p spatial-rules-benchmarks --bench ladder` — batch latency/throughput for B/C/D plus ruleset build time.
+- **Initial numbers** (release, 1,000 × 30): B naive **436.8 ms**, C linear-scan bbox **465.9 ms**, D rstar bbox **458.5 ms**, build **23.6 ms**. Exact DE-9IM `Relate` dominates; the bbox index gives ≈0 help at 30 large rules (research 02/03). ADR-0009 trigger fired: sync p50 ≈ 458 ms ≫ 50 ms.
+- **turf.js cross-check** (`benchmarks/js/` + `benchmarks/src/bin/cross_check.rs`): a 10-pair DE-9IM matrix (disjoint, overlap, touching edge/corner, identical, containment, holes, MultiPolygon) diffed against pinned `@turf/turf@6.5.0` (JSTS-based). **Green.** Known quirk: turf v6 `booleanContains` rejects a MultiPolygon *contained* geometry, so `contains` is skipped for those pairs (`intersects`/`within` still verified; the skipped value is hand-checked per DE-9IM). Run: `cargo build --release -p spatial-rules-benchmarks --bin cross_check`, then `cd benchmarks/js && npm install && npm run cross-check`.
+
+**Explicit deferrals** (documented, not blockers):
+- Ladder **A** (existing JS implementation) is out-of-repo — compare the production app separately.
+- Ladder **E/F** (prepared geometries) needs a per-worker prepare path in core first (research 03); the numbers show it is the dominant lever.
+- **Memory** (steady-state/peak) is best measured in the Docker container (tickets 17/19).
+ This ticket unblocks Sync vs async query and replacement API.

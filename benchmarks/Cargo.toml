@@ -14,8 +14,13 @@ path = "src/lib.rs"
 name = "generate_dataset"
 path = "src/main.rs"
 
+[[bin]]
+name = "cross_check"
+path = "src/bin/cross_check.rs"
+
 [dependencies]
 geo.workspace = true
+geojson.workspace = true
 serde_json.workspace = true
 spatial-rules-core = { path = "../core" }
 
