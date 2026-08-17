@@ -10,7 +10,10 @@ mod candidate;
 mod error;
 mod ingestion;
 mod properties;
+mod property_index;
 mod rule;
+mod ruleset;
+mod spatial_index;
 mod validation;
 
 pub use candidate::Candidate;
@@ -20,5 +23,8 @@ pub use ingestion::{
     rule_from_feature, rules_from_geojson,
 };
 pub use properties::{properties_from_json, PropertyValue};
+pub use property_index::PropertyIndex;
 pub use rule::{Rule, RuleId};
+pub use ruleset::Ruleset;
+pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};
 pub use validation::{ensure_supported_geometry, validate_rule_geometry};

@@ -8,13 +8,71 @@ use std::fmt;
 /// JSON numbers become [`PropertyValue::Int`] when integral and
 /// [`PropertyValue::Float`] otherwise. Nested objects and arrays are out of
 /// scope for v1 and are not stored.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum PropertyValue {
     Null,
     Bool(bool),
     Int(i64),
     Float(f64),
     Str(String),
+}
+
+// Floats are only ever non-integral and finite (integral JSON numbers become
+// `Int`; serde_json rejects non-finite values), so bit equality equals value
+// equality and `to_bits()` gives a total order consistent with `Eq`.
+impl PartialEq for PropertyValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PropertyValue::Null, PropertyValue::Null) => true,
+            (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a == b,
+            (PropertyValue::Int(a), PropertyValue::Int(b)) => a == b,
+            (PropertyValue::Float(a), PropertyValue::Float(b)) => a.to_bits() == b.to_bits(),
+            (PropertyValue::Str(a), PropertyValue::Str(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PropertyValue {}
+
+impl PartialOrd for PropertyValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PropertyValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (PropertyValue::Null, PropertyValue::Null) => Ordering::Equal,
+            (PropertyValue::Null, _) => Ordering::Less,
+            (_, PropertyValue::Null) => Ordering::Greater,
+            (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a.cmp(b),
+            (PropertyValue::Bool(_), _) => Ordering::Less,
+            (_, PropertyValue::Bool(_)) => Ordering::Greater,
+            (PropertyValue::Int(a), PropertyValue::Int(b)) => a.cmp(b),
+            (PropertyValue::Int(_), _) => Ordering::Less,
+            (_, PropertyValue::Int(_)) => Ordering::Greater,
+            (PropertyValue::Float(a), PropertyValue::Float(b)) => a.to_bits().cmp(&b.to_bits()),
+            (PropertyValue::Float(_), _) => Ordering::Less,
+            (_, PropertyValue::Float(_)) => Ordering::Greater,
+            (PropertyValue::Str(a), PropertyValue::Str(b)) => a.cmp(b),
+        }
+    }
+}
+
+impl std::hash::Hash for PropertyValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            PropertyValue::Null => {}
+            PropertyValue::Bool(b) => b.hash(state),
+            PropertyValue::Int(i) => i.hash(state),
+            PropertyValue::Float(f) => f.to_bits().hash(state),
+            PropertyValue::Str(s) => s.hash(state),
+        }
+    }
 }
 
 impl PropertyValue {

@@ -11,4 +11,5 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 geo = "0.33"
 geojson = "1.0"
+rstar = "0.13"
 serde_json = "1"

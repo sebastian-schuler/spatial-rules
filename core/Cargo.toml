@@ -9,4 +9,5 @@ description = "Pure-Rust spatial rules/query engine core"
 [dependencies]
 geo.workspace = true
 geojson.workspace = true
+rstar.workspace = true
 serde_json.workspace = true

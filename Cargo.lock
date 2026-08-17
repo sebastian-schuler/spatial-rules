@@ -613,6 +613,7 @@ version = "0.1.0"
 dependencies = [
  "geo",
  "geojson",
+ "rstar 0.13.0",
  "serde_json",
 ]
 
