@@ -1,7 +1,7 @@
 # Benchmark dataset, harness, and reference cross-checks
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 01, 02, 03
 
 ## Question
@@ -13,4 +13,25 @@ Build the measurement infrastructure the benchmark-driven decisions depend on (�
 3. **Algorithm ladder** — A existing JS implementation, B Rust naive (candidate×rule), C + bbox filtering, D + spatial index, E + prepared geometries, F index+prepared (§32).
 4. **turf.js cross-checks** — a correctness suite comparing predicate results against turf.js as the trusted reference (§33).
 
-Answer records where the dataset lives, how to run the harness, and the initial numbers once the core exists. This ticket unblocks Sync vs async query and replacement API.
+Answer records where the dataset lives, how to run the harness, and the initial numbers once the core exists.
+
+## Comments
+
+### 2026-08-18 — dataset + harness + B/C/D ladder (progress)
+
+**Dataset**: synthesized deterministically in `benchmarks/src/dataset.rs` — 30 country-scale MultiPolygon rules (1–3 parts each, 60–400 vertices, ~35% with holes) plus 1,000 footprint candidates. Generator: `cargo run -p spatial-rules-benchmarks --bin generate_dataset` → `benchmarks/data/{rules,candidates}.geojson` (committed). Geometry is synthetic/representative, not Natural Earth; real open data can be dropped in later without changing the harness.
+
+**Harness**: criterion benches in `benchmarks/benches/ladder.rs`. Run: `cargo bench -p spatial-rules-benchmarks --bench ladder`.
+
+**Initial numbers** (release, 1,000 candidates × 30 rules):
+- B naive (candidate×rule, no bbox): **436.8 ms**/batch (~2.29 Kelem/s)
+- C + linear-scan bbox: **465.9 ms**/batch (~2.15 Kelem/s)
+- D + rstar bbox: **458.5 ms**/batch (~2.18 Kelem/s)
+- ruleset build (30 rules): **23.6 ms**
+
+**Findings**:
+- Exact DE-9IM `Relate` on complex MultiPolygons dominates; the bbox index gives ≈0 speedup at 30 large rules (consistent with research 02/03). The real lever is prepared geometries (E/F), not the spatial index.
+- ADR-0009 trigger fires: sync query p50 ≈ 458 ms ≫ 50 ms ⇒ `queryAsync()` is warranted, after prepared geometry.
+- Still open: turf.js cross-check (item 4), JS baseline A, memory (steady-state/peak — best measured in the Docker container, tickets 17/19), prepared-geometry ladder E/F (needs a prepare path in core).
+
+Status stays `claimed` until the turf.js cross-check lands. This ticket unblocks Sync vs async query and replacement API.
