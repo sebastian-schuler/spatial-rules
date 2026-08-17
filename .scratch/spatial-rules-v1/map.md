@@ -29,6 +29,7 @@ Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md
 - [Ruleset build cancellation and replacement progress](issues/10-ruleset-build-cancellation.md) — no cancellation/progress in v1; atomic `Arc` swap; observability `lastSwapTime`/`buildDurationMs`/active id (ADR-0007).
 - [Predicate semantics and turf cross-check matrix](issues/11-predicate-semantics.md) — DE-9IM authoritative (`intersects`≠`FF*FF****`; `contains` `T*F**F***`; `within` `T**F*F***`); turf pinned as JTS-faithful oracle; disagreements investigated; predicates assume valid inputs (ADR-0008).
 - [Sync vs async query and replacement API](issues/08-sync-async-api.md) — sync-first `query()`/`replace()`; `replace()` returns ADR-0007 observability; add `queryAsync()` only if harness p95 > 50 ms on the 1,000-candidate workload (ADR-0009).
+- [Rust core: scaffolding, types, GeoJSON ingestion, validation](issues/13-core-scaffolding-ingestion.md) — Cargo workspace `core`/`node`/`benchmarks`; `Rule`/`Candidate`/`PropertyValue`/`RuleId`; geojson→geo_types ingestion; `geo::Validation` strict gate (`SR_INVALID_GEOJSON`/`SR_INVALID_GEOMETRY`/`SR_UNSUPPORTED_GEOMETRY_TYPE`); 24 tests green, clippy clean.
 
 ## Not yet specified
 

@@ -1,0 +1,12 @@
+[package]
+name = "spatial-rules-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Node-API (napi-rs) binding for the spatial rules core"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]

@@ -1,7 +1,7 @@
 # Rust core: scaffolding, types, GeoJSON ingestion, validation
 
 Type: task
-Status: open
+Status: resolved
 
 ## Context — read first
 
@@ -21,3 +21,26 @@ Build the foundation of `spatial-rules-core` (execution on the map — destinati
 - `geojson` → `geo_types::Geometry<f64>` ingestion (permissive parse; validity is separate).
 - `geo::Validation::is_valid()` gate for rule geometries; strict reject per ADR-0005.
 - Workspace compiles; ingestion + validation unit tests green; tests where sensible cross-checked against turf.js.
+
+## Answer
+
+Built the `spatial-rules-core` foundation (TDD at the pre-agreed seams below), committed to `main`.
+
+**Workspace** (`Cargo.toml` root, `resolver = "2"`): `core/` (crate `spatial-rules-core`), `node/` (`spatial-rules-node`, empty `cdylib` stub), `benchmarks/` (`spatial-rules-benchmarks`, empty bin stub). Deps pinned via `[workspace.dependencies]`: `geo 0.33`, `geo-types 0.7`, `geojson 1.0`, `serde_json 1`.
+
+**Types** (`core/src/{rule,candidate,properties}.rs`):
+- `Rule { id, properties, geometry }` — string id, `BTreeMap<String, PropertyValue>`, `Geometry<f64>`.
+- `Candidate { id, geometry }` — candidate properties are not used by the engine in v1.
+- `PropertyValue::{Null,Bool,Int(i64),Float(f64),Str}`; JSON numbers → `Int` when integral (by value, so `10.0` → `Int(10)`), else `Float`; nested objects/arrays are skipped (out of v1 scope).
+- `RuleId(u32)` newtype for the `0..n-1` mapping (assigned at ruleset build in ticket 14).
+
+**Errors** (`core/src/error.rs`): `SpatialError { code, message }` + `ErrorCode` with the full stable `SR_*` set from ADR-0005.
+
+**Ingestion** (`core/src/ingestion.rs`): `parse_geojson` (permissive geometry, strict on malformed JSON → `SR_INVALID_GEOJSON`); `feature_geometry` (`geojson` → `geo_types::Geometry<f64>` via fallible `TryFrom`); `rule_from_feature` / `candidate_from_feature`; `rules_from_geojson` / `candidates_from_geojson`. Feature id comes from `id` or `properties.id`; missing → `SR_INVALID_GEOJSON`.
+
+**Validation** (`core/src/validation.rs`): `ensure_supported_geometry` (Polygon/MultiPolygon only → `SR_UNSUPPORTED_GEOMETRY_TYPE`); `validate_rule_geometry` (supported type + `geo::Validation::is_valid()` → `SR_INVALID_GEOMETRY`; strict reject per ADR-0005).
+
+**Tests**: 24 green (`cargo test --workspace`), 6 unit + 18 integration; clippy clean. Seams tested: error-code strings; property typing (integral/float/nested-skip); parse/malformed; polygon & multipolygon round-trip; id fallback; missing id/geometry; hole-contained valid vs hole-outside invalid; self-intersection (bowtie) invalid; NaN invalid; unsupported Point. No turf cross-check here — predicate semantics is ticket 15's concern.
+
+Run: `cargo test --workspace` / `cargo clippy --workspace --all-targets`.
+

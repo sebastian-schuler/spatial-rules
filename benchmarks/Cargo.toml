@@ -1,0 +1,13 @@
+[package]
+name = "spatial-rules-benchmarks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Benchmark harness and reference cross-checks"
+
+[[bin]]
+name = "spatial-rules-benchmarks"
+path = "src/main.rs"
+
+[dependencies]
