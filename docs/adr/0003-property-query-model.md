@@ -1,0 +1,3 @@
+# Property query model: typed values, Mongo-style where, equality/IN indexes
+
+Rule properties are stored as a compact typed `PropertyValue` enum (`Null`/`Bool`/`Int(i64)`/`Float(f64)`/`Str`; JSON numbers become `Int` when integral, else `Float`), and queries use a Mongo-style `where` subset — implicit top-level `AND`, plain-value equality, `$ne`, `$gt/$gte/$lt/$lte`, `$in`, and `$and`/`$or`. A missing property or type mismatch evaluates as non-match (even for `$ne`); only malformed queries error (`docs/Initial-plan.md` §35). Equality and `$in` indexes are built for every property at ruleset compile; range predicates scan. Evaluation is fixed-order spatial-bbox → property → exact geometry (§15), with a hook for a cost-based planner later.

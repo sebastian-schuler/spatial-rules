@@ -1,0 +1,3 @@
+# Node binding: napi-rs with per-platform npm prebuilds
+
+The Node/Bun addon uses napi-rs (`napi` 3.x with the `napi8` feature — matching the Node-API-8 lock) and `@napi-rs/cli` per-platform `optionalDependencies` packages (`linux-x64-gnu`, `linux-x64-musl`, `linux-arm64-gnu`, `linux-arm64-musl`, plus `win32-x64-msvc` and optionally `win32-arm64-msvc`), so `npm install` is zero-toolchain (`docs/Initial-plan.md` §26–§27). The hot path is byte-oriented (`query(Buffer, query) → Uint8Array mask`); a rich object API returns per-candidate outcomes (ADR-0004). Bun compatibility is smoke-tested in CI, non-blocking (best-effort per the runtime matrix). Async, when added, uses `#[napi] async fn` off the JS thread.

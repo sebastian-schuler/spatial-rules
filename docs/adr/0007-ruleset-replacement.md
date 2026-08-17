@@ -1,0 +1,3 @@
+# Ruleset replacement: no cancellation, atomic Arc swap, coarse observability
+
+Ruleset builds are not cancellable and expose no per-step progress in v1 — building ~30 rules is fast and rare (weekly), so cancellation/progress machinery isn't warranted; revisit only if rule counts grow (`docs/Initial-plan.md` §4.1). Replacement builds the new ruleset fully off the request path, then publishes via an atomic `Arc` swap: in-flight queries keep using the old ruleset, which stays alive while referenced and is released when none are (§25, §29). The app observes `lastSwapTime`, `buildDurationMs`, and the active ruleset identity/count.

@@ -1,0 +1,3 @@
+# Spatial index: packed rstar R*-tree behind a trait
+
+Rule bbox pre-filtering uses a packed `rstar::RTree` (bulk-loaded `GeomWithData<Geometry, RuleId>`, built once per ruleset), queried per candidate via envelope lookup. A linear `Vec<Envelope>` scan is retained only as the benchmark-ladder baseline: the tree was chosen over the scan because the rule count is ~30 today but must not be capped (`docs/Initial-plan.md` §4.1), and a scan's per-candidate cost grows linearly with the rule count. The index sits behind a `SpatialIndex` trait so the ladder can swap scan vs tree; a criterion sweep (30 → 100 → 1,000 rules) decides the final shipped pick at scale.

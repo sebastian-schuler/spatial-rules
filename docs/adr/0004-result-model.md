@@ -1,0 +1,3 @@
+# Result model: aligned outcomes, Uint8 mask, rich per-candidate API
+
+A batch query returns `Vec<CandidateOutcome>` aligned to input order, one entry per candidate — `Matched { rule_ids }`, `NotMatched`, or `Invalid { reason }` — with internal numeric rule IDs (`docs/Initial-plan.md` §9). The Node binding's compact filtering path returns a single `Uint8Array` mask (`0` = no match, `1` = matched, `2` = invalid) to minimize allocation and JS↔Rust crossings; a richer diagnostic API returns per-candidate objects with original string rule IDs and the invalid reason. A `Uint32Array` of matched indices may be added later if benchmarks justify it.
