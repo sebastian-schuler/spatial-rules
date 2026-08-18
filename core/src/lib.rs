@@ -27,7 +27,6 @@ pub use ingestion::{
     rule_from_feature, rules_from_geojson,
 };
 pub use properties::{properties_from_json, PropertyValue};
-pub use property_index::PropertyIndex;
 pub use query::{CandidateOutcome, Query, SpatialPredicate};
 pub use rule::{Rule, RuleId};
 pub use ruleset::Ruleset;

@@ -24,6 +24,12 @@ const rules = Buffer.from(
         properties: { active: false },
         geometry: { type: 'Polygon', coordinates: [[[100, 100], [100, 110], [110, 110], [110, 100], [100, 100]]] },
       },
+      {
+        type: 'Feature',
+        id: 'zone-c',
+        properties: { active: true },
+        geometry: { type: 'Polygon', coordinates: [[[2, 2], [2, 12], [12, 12], [12, 2], [2, 2]]] },
+      },
     ],
   }),
 );
@@ -56,11 +62,16 @@ assert.deepEqual(Array.from(mask), [1, 0, 2]);
 const active = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: true } }));
 assert.deepEqual(Array.from(active), [1, 0, 2]);
 
+// excludeRuleIds removes named rules: excluding both matching zones leaves none.
+const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, excludeRuleIds: ['zone-a', 'zone-c'] }));
+assert.deepEqual(Array.from(excluding), [0, 0, 2]);
+
 // Rich per-candidate outcomes with original string rule ids.
 const rich = JSON.parse(ruleset.queryRich(candidates, intersects));
 assert.equal(rich.length, 3);
 assert.equal(rich[0].outcome, 'matched');
-assert.deepEqual(rich[0].ruleIds, ['zone-a']);
+// The first candidate intersects both zone-a and zone-c (multi-match).
+assert.deepEqual(rich[0].ruleIds, ['zone-a', 'zone-c']);
 assert.equal(rich[1].outcome, 'notMatched');
 assert.equal(rich[2].outcome, 'invalid');
 
@@ -81,7 +92,7 @@ assert.throws(
 // Dynamic replacement (ADR-0007): atomic swap + observability.
 const stats = JSON.parse(ruleset.stats());
 assert.equal(stats.version, 1);
-assert.equal(stats.ruleCount, 2);
+assert.equal(stats.ruleCount, 3);
 
 const replacement = Buffer.from(
   JSON.stringify({

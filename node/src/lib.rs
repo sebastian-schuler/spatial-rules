@@ -11,7 +11,8 @@ use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
 use spatial_rules_core::{
-    candidates_from_geojson, CandidateOutcome, Engine, Query, ReplaceReport, SpatialError,
+    candidates_from_geojson, Candidate, CandidateOutcome, Engine, Query, ReplaceReport,
+    SpatialError,
 };
 
 fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
@@ -31,6 +32,17 @@ fn parse_query(query_json: &str) -> napi::Result<Query, &'static str> {
     let value: serde_json::Value = serde_json::from_str(query_json)
         .map_err(|e| Error::new("SR_INVALID_QUERY", format!("query is not valid JSON: {e}")))?;
     Query::from_json(&value).map_err(spatial_error_to_napi)
+}
+
+/// Parse a candidates buffer and query string into the types the engine needs.
+fn parse_inputs(
+    candidates: Buffer,
+    query: String,
+) -> napi::Result<(Vec<Candidate>, Query), &'static str> {
+    let text = bytes_to_str(&candidates, "candidates")?;
+    let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
+    let query = parse_query(&query)?;
+    Ok((candidates, query))
 }
 
 fn report_to_json(report: ReplaceReport) -> serde_json::Value {
@@ -66,28 +78,15 @@ impl SpatialRuleset {
     /// return a `Uint8Array` mask: `0` no match, `1` matched, `2` invalid.
     #[napi]
     pub fn query(&self, candidates: Buffer, query: String) -> napi::Result<Uint8Array, &'static str> {
-        let text = bytes_to_str(&candidates, "candidates")?;
-        let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
-        let query = parse_query(&query)?;
-        let outcomes = self.engine.query(&candidates, &query);
-        let mut mask = vec![0u8; outcomes.len()];
-        for (index, outcome) in outcomes.iter().enumerate() {
-            mask[index] = match outcome {
-                CandidateOutcome::NotMatched => 0,
-                CandidateOutcome::Matched { .. } => 1,
-                CandidateOutcome::Invalid { .. } => 2,
-            };
-        }
-        Ok(Uint8Array::from(mask))
+        let (candidates, query) = parse_inputs(candidates, query)?;
+        Ok(Uint8Array::from(self.engine.query_mask(&candidates, &query)))
     }
 
     /// Rich per-candidate outcomes as a JSON string (string rule ids, invalid
     /// reasons), aligned to input order (ADR-0004).
     #[napi]
     pub fn query_rich(&self, candidates: Buffer, query: String) -> napi::Result<String, &'static str> {
-        let text = bytes_to_str(&candidates, "candidates")?;
-        let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
-        let query = parse_query(&query)?;
+        let (candidates, query) = parse_inputs(candidates, query)?;
         // Snapshot once so outcomes and their string ids come from the same
         // ruleset (a concurrent replace can't tear them apart, ADR-0007).
         let ruleset = self.engine.snapshot();

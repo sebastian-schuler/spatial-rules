@@ -90,6 +90,10 @@ fn intersects() -> Query {
     Query::new(SpatialPredicate::Intersects)
 }
 
+fn square_id(ruleset: &Ruleset) -> RuleId {
+    ruleset.rule_id("square").unwrap()
+}
+
 #[test]
 fn query_returns_outcomes_aligned_to_input() {
     let ruleset = default_ruleset();
@@ -100,7 +104,7 @@ fn query_returns_outcomes_aligned_to_input() {
     ];
     let outcomes = ruleset.query(&candidates, &intersects());
     assert_eq!(outcomes.len(), 3);
-    assert_eq!(outcomes[0], CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] });
+    assert_eq!(outcomes[0], CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] });
     assert_eq!(outcomes[1], CandidateOutcome::NotMatched);
     assert_eq!(outcomes[2], CandidateOutcome::NotMatched);
 }
@@ -121,7 +125,7 @@ fn contains_predicate_is_directional() {
     let query = Query::new(SpatialPredicate::Contains);
     assert_eq!(
         ruleset.query(std::slice::from_ref(&containing), &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
     assert_eq!(ruleset.query(&[inside], &query), vec![CandidateOutcome::NotMatched]);
 }
@@ -135,7 +139,7 @@ fn within_predicate_is_directional() {
     let query = Query::new(SpatialPredicate::Within);
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
     assert_eq!(ruleset.query(&[containing], &query), vec![CandidateOutcome::NotMatched]);
 }
@@ -148,7 +152,7 @@ fn touching_boundary_intersects_but_does_not_contain() {
 
     assert_eq!(
         ruleset.query(std::slice::from_ref(&adjacent), &intersects()),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
     assert_eq!(
         ruleset.query(std::slice::from_ref(&adjacent), &Query::new(SpatialPredicate::Contains)),
@@ -172,7 +176,7 @@ fn identical_geometry_matches_all_predicates() {
     ] {
         assert_eq!(
             ruleset.query(std::slice::from_ref(&identical), &Query::new(predicate)),
-            vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }],
+            vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }],
             "predicate {:?}",
             predicate
         );
@@ -198,7 +202,7 @@ fn where_equality_filters() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 }
 
@@ -214,7 +218,7 @@ fn missing_property_is_non_match() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 }
 
@@ -245,7 +249,7 @@ fn ne_requires_same_type_and_presence() {
 fn numeric_range_operators() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }];
+    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
 
     let run = |operator: &str, value: i64| {
         let mut op = serde_json::Map::new();
@@ -279,7 +283,7 @@ fn in_operator() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 }
 
@@ -295,7 +299,7 @@ fn and_or_combinators() {
     .unwrap();
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside), &and_query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 
     let or_query = Query::from_json(&json!({
@@ -305,7 +309,7 @@ fn and_or_combinators() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &or_query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 }
 
@@ -332,7 +336,7 @@ fn exclude_unknown_rule_id_is_ignored() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 }
 
@@ -356,7 +360,7 @@ fn invalid_candidate_stays_in_result() {
     let outcomes = ruleset.query(&[bowtie, inside], &intersects());
     assert_eq!(outcomes.len(), 2);
     assert!(matches!(&outcomes[0], CandidateOutcome::Invalid { .. }));
-    assert_eq!(outcomes[1], CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] });
+    assert_eq!(outcomes[1], CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] });
 }
 
 #[test]
@@ -367,7 +371,53 @@ fn unsupported_candidate_type_is_invalid() {
         geometry: geo::Geometry::Point(Point::new(1.0, 1.0)),
     };
     let outcomes = ruleset.query(&[point], &intersects());
-    assert!(matches!(&outcomes[0], CandidateOutcome::Invalid { .. }));
+    assert_eq!(
+        outcomes[0],
+        CandidateOutcome::Invalid {
+            reason: "unsupported geometry type: Point".to_string()
+        }
+    );
+}
+
+#[test]
+fn invalid_geometry_reason_is_stable() {
+    let ruleset = default_ruleset();
+    let bowtie = Candidate {
+        id: "bowtie".to_string(),
+        geometry: geo::Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    };
+    let outcomes = ruleset.query(&[bowtie], &intersects());
+    let CandidateOutcome::Invalid { reason } = &outcomes[0] else {
+        panic!("expected an invalid outcome");
+    };
+    assert!(reason.starts_with("invalid geometry:"));
+}
+
+#[test]
+fn candidate_matching_multiple_rules_reports_all_ids() {
+    let ruleset = Ruleset::build(vec![
+        rule("a", square(0.0, 0.0, 10.0, 10.0), &[]),
+        rule("b", square(5.0, 5.0, 15.0, 15.0), &[]),
+    ])
+    .unwrap();
+    let both = candidate("both", square(6.0, 6.0, 8.0, 8.0));
+    let outcomes = ruleset.query(&[both], &intersects());
+    let CandidateOutcome::Matched { rule_ids } = &outcomes[0] else {
+        panic!("expected a match");
+    };
+    assert_eq!(
+        rule_ids,
+        &[ruleset.rule_id("a").unwrap(), ruleset.rule_id("b").unwrap()]
+    );
 }
 
 #[test]
@@ -416,7 +466,7 @@ fn empty_where_matches_all() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
     );
 }
 
@@ -439,6 +489,6 @@ fn typed_query_builder_produces_expected_struct() {
     let bare = candidate("bare", square(1.0, 1.0, 2.0, 2.0));
     assert_eq!(
         ruleset.query(&[bare], &intersects()),
-        vec![CandidateOutcome::Matched { rule_ids: vec![RuleId(0)] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![ruleset.rule_id("bare").unwrap()] }]
     );
 }

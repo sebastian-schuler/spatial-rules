@@ -24,11 +24,20 @@ fn bench_ladder(criterion: &mut Criterion) {
     let query = Query::new(SpatialPredicate::Intersects);
     let candidate_count = candidates.len() as u64;
 
-    // Prepared geometries are built once outside the timed loop (per-worker
-    // preparation, research 03). They borrow `rules` and stay on this thread.
-    let prepared: Vec<PreparedGeometry<'_, &geo::Geometry<f64>>> = rules
+    // Rule geometries in ruleset order, prepared once outside the timed loop.
+    // `prepared_by_id` maps an opaque RuleId to its position so the
+    // bbox-filtered prepared stage (F) reuses the same prepared slice without
+    // reconstructing a rule's position.
+    let geometries = rstar.rule_geometries();
+    let prepared: Vec<PreparedGeometry<'_, &geo::Geometry<f64>>> = geometries
         .iter()
-        .map(|rule| PreparedGeometry::from(&rule.geometry))
+        .map(|geometry| PreparedGeometry::from(*geometry))
+        .collect();
+    let prepared_by_id: std::collections::HashMap<RuleId, usize> = rstar
+        .rule_ids()
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
         .collect();
 
     let mut group = criterion.benchmark_group("batch_query");
@@ -38,9 +47,8 @@ fn bench_ladder(criterion: &mut Criterion) {
         bencher.iter(|| {
             let mut matches = 0usize;
             for candidate in &candidates {
-                for index in 0..rstar.len() {
-                    let rule_geometry = rstar.geometry(RuleId(index as u32));
-                    if candidate.geometry.relate(rule_geometry).is_intersects() {
+                for geometry in &geometries {
+                    if candidate.geometry.relate(*geometry).is_intersects() {
                         matches += 1;
                     }
                 }
@@ -77,8 +85,11 @@ fn bench_ladder(criterion: &mut Criterion) {
             for candidate in &candidates {
                 let bbox = candidate.geometry.bounding_rect().expect("candidate bbox");
                 for rule_id in rstar.query_envelope(&bbox) {
-                    let prepared_rule = &prepared[rule_id.0 as usize];
-                    if candidate.geometry.relate(prepared_rule).is_intersects() {
+                    if candidate
+                        .geometry
+                        .relate(&prepared[prepared_by_id[&rule_id]])
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }
@@ -99,9 +110,9 @@ fn bench_ladder(criterion: &mut Criterion) {
     prepare.bench_function("prepare_30_rules", |bencher| {
         bencher.iter(|| {
             black_box(
-                rules
+                geometries
                     .iter()
-                    .map(|rule| PreparedGeometry::from(&rule.geometry))
+                    .map(|geometry| PreparedGeometry::from(*geometry))
                     .collect::<Vec<_>>(),
             )
         })

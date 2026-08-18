@@ -49,8 +49,8 @@ fn matched_count(outcomes: &[spatial_rules_core::CandidateOutcome]) -> usize {
 fn replace_swaps_ruleset_and_reports_observability() {
     let engine = Engine::from_geojson(RULE_A).unwrap();
     let candidates = candidates_from_geojson(CANDIDATES).unwrap();
-    assert_eq!(engine.version(), 1);
-    assert_eq!(engine.rule_count(), 1);
+    assert_eq!(engine.current().version, 1);
+    assert_eq!(engine.current().rule_count, 1);
 
     // Rule A active: only "inside-a" matches.
     let outcomes = engine.query(&candidates, &intersects());
@@ -59,7 +59,7 @@ fn replace_swaps_ruleset_and_reports_observability() {
     let report = engine.replace_from_geojson(RULE_B).unwrap();
     assert_eq!(report.version, 2);
     assert_eq!(report.rule_count, 1);
-    assert_eq!(engine.version(), 2);
+    assert_eq!(engine.current().version, 2);
 
     // Rule B active: only "inside-b" matches.
     let outcomes = engine.query(&candidates, &intersects());
@@ -76,7 +76,6 @@ fn repeated_replacement_versions_increment() {
         let report = engine.replace_from_geojson(if expected % 2 == 0 { RULE_B } else { RULE_A }).unwrap();
         assert_eq!(report.version, expected);
     }
-    assert_eq!(engine.version(), 5);
     assert_eq!(engine.current().version, 5);
 }
 
@@ -104,7 +103,7 @@ fn replace_with_invalid_rules_fails_and_keeps_old() {
     assert_eq!(err.code, spatial_rules_core::ErrorCode::InvalidGeometry);
 
     // Old ruleset is still active and observable.
-    assert_eq!(engine.version(), 1);
+    assert_eq!(engine.current().version, 1);
     let candidates = candidates_from_geojson(CANDIDATES).unwrap();
     let outcomes = engine.query(&candidates, &intersects());
     assert_eq!(matched_count(&outcomes), 1);
@@ -140,7 +139,7 @@ fn concurrent_queries_survive_replacement() {
     for handle in handles {
         handle.join().unwrap();
     }
-    assert_eq!(engine.version(), 21);
+    assert_eq!(engine.current().version, 21);
 }
 
 #[test]
@@ -158,6 +157,6 @@ fn long_running_mixed_workload_stays_consistent() {
         }
     }
     // Final state is well-defined.
-    assert!(engine.version() >= 5);
+    assert!(engine.current().version >= 5);
     assert_eq!(engine.current().rule_count, 1);
 }

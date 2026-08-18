@@ -51,6 +51,15 @@ fn spatial_predicate_holds(
     }
 }
 
+/// A candidate verdict before the `Matched` ids are attached (ADR-0004).
+/// `query` and `query_mask` share the same evaluation but differ in whether
+/// they collect the matching rule ids.
+enum Verdict {
+    Matched,
+    NotMatched,
+    Invalid { reason: String },
+}
+
 impl Ruleset {
     /// Parse a GeoJSON FeatureCollection and build a ruleset from it.
     pub fn from_geojson(input: &str) -> Result<Self, SpatialError> {
@@ -155,9 +164,16 @@ impl Ruleset {
         self.spatial_index.query_envelope(envelope)
     }
 
-    /// The compile-time property equality/`$in` index.
-    pub fn property_index(&self) -> &PropertyIndex {
-        &self.property_index
+    /// All rule ids in ruleset order.
+    pub fn rule_ids(&self) -> Vec<RuleId> {
+        (0..self.rules.len())
+            .map(|index| RuleId(index as u32))
+            .collect()
+    }
+
+    /// Rule geometries in ruleset order (benchmark ladder, ADR-0002).
+    pub fn rule_geometries(&self) -> Vec<&Geometry<f64>> {
+        self.rules.iter().map(|rule| &rule.geometry).collect()
     }
 
     /// Evaluate a batch of candidates against `query`, returning one outcome
@@ -165,6 +181,60 @@ impl Ruleset {
     /// [`CandidateOutcome::Invalid`] outcome without failing the batch
     /// (ADR-0005).
     pub fn query(&self, candidates: &[Candidate], query: &Query) -> Vec<CandidateOutcome> {
+        let (excluded, prepared, where_filter) = self.prepare_query(query);
+        candidates
+            .iter()
+            .map(|candidate| {
+                let (verdict, matched) = self.evaluate_candidate(
+                    candidate,
+                    query,
+                    &excluded,
+                    &prepared,
+                    &where_filter,
+                    true,
+                );
+                match verdict {
+                    Verdict::Matched => CandidateOutcome::Matched { rule_ids: matched },
+                    Verdict::NotMatched => CandidateOutcome::NotMatched,
+                    Verdict::Invalid { reason } => CandidateOutcome::Invalid { reason },
+                }
+            })
+            .collect()
+    }
+
+    /// Evaluate a batch and return the compact mask (`0` no match, `1`
+    /// matched, `2` invalid), without materialising per-match rule ids
+    /// (ADR-0004).
+    pub fn query_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
+        let (excluded, prepared, where_filter) = self.prepare_query(query);
+        candidates
+            .iter()
+            .map(|candidate| {
+                let (verdict, _) = self.evaluate_candidate(
+                    candidate,
+                    query,
+                    &excluded,
+                    &prepared,
+                    &where_filter,
+                    false,
+                );
+                match verdict {
+                    Verdict::Matched => 1,
+                    Verdict::NotMatched => 0,
+                    Verdict::Invalid { .. } => 2,
+                }
+            })
+            .collect()
+    }
+
+    fn prepare_query<'a>(
+        &'a self,
+        query: &Query,
+    ) -> (
+        HashSet<RuleId>,
+        Vec<PreparedGeometry<'a, &'a Geometry<f64>>>,
+        Option<HashSet<RuleId>>,
+    ) {
         let excluded: HashSet<RuleId> = query
             .exclude_rule_ids
             .iter()
@@ -178,10 +248,11 @@ impl Ruleset {
             .iter()
             .map(|rule| PreparedGeometry::from(&rule.geometry))
             .collect();
-        candidates
-            .iter()
-            .map(|candidate| self.evaluate_candidate(candidate, query, &excluded, &prepared))
-            .collect()
+        let where_filter = query
+            .where_clause
+            .as_ref()
+            .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
+        (excluded, prepared, where_filter)
     }
 
     fn evaluate_candidate<'a>(
@@ -190,46 +261,71 @@ impl Ruleset {
         query: &Query,
         excluded: &HashSet<RuleId>,
         prepared: &[PreparedGeometry<'a, &'a Geometry<f64>>],
-    ) -> CandidateOutcome {
+        where_filter: &Option<HashSet<RuleId>>,
+        collect_ids: bool,
+    ) -> (Verdict, Vec<RuleId>) {
         // Candidate-level gate: unsupported type or invalid geometry yields an
         // `Invalid` outcome (never a batch failure, ADR-0005).
         if let Err(e) = ensure_supported_geometry(&candidate.geometry) {
-            return CandidateOutcome::Invalid { reason: e.message };
+            return (Verdict::Invalid { reason: e.message }, Vec::new());
         }
         if !candidate.geometry.is_valid() {
-            return CandidateOutcome::Invalid {
-                reason: format!("invalid geometry: {:?}", candidate.geometry.validation_errors()),
-            };
+            return (
+                Verdict::Invalid {
+                    reason: format!(
+                        "invalid geometry: {:?}",
+                        candidate.geometry.validation_errors()
+                    ),
+                },
+                Vec::new(),
+            );
         }
         let Some(bbox) = candidate.geometry.bounding_rect() else {
-            return CandidateOutcome::Invalid {
-                reason: "geometry has no bounding rectangle".to_string(),
-            };
+            return (
+                Verdict::Invalid {
+                    reason: "geometry has no bounding rectangle".to_string(),
+                },
+                Vec::new(),
+            );
         };
 
         // Fixed pipeline: spatial bbox filter -> property predicate -> exact
         // DE-9IM relate against prepared rule geometries (§15, research 03).
+        // A compile-time equality/`$in` index answers the property step when
+        // the clause is indexable (ADR-0003); otherwise fall back to eval.
         let mut matched: Vec<RuleId> = Vec::new();
+        let mut any_match = false;
         for rule_id in self.query_envelope(&bbox) {
             if excluded.contains(&rule_id) {
                 continue;
             }
-            let rule = &self.rules[rule_id.0 as usize];
-            if let Some(where_clause) = &query.where_clause {
-                if !where_clause.eval(&rule.properties) {
-                    continue;
+            match where_filter {
+                Some(filter) => {
+                    if !filter.contains(&rule_id) {
+                        continue;
+                    }
+                }
+                None => {
+                    if let Some(where_clause) = &query.where_clause {
+                        if !where_clause.eval(&self.rules[rule_id.0 as usize].properties) {
+                            continue;
+                        }
+                    }
                 }
             }
             let matrix = candidate.geometry.relate(&prepared[rule_id.0 as usize]);
             if spatial_predicate_holds(query.spatial, matrix) {
-                matched.push(rule_id);
+                any_match = true;
+                if collect_ids {
+                    matched.push(rule_id);
+                }
             }
         }
 
-        if matched.is_empty() {
-            CandidateOutcome::NotMatched
+        if any_match {
+            (Verdict::Matched, matched)
         } else {
-            CandidateOutcome::Matched { rule_ids: matched }
+            (Verdict::NotMatched, matched)
         }
     }
 }
