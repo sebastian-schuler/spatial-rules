@@ -6,26 +6,26 @@ ADR-0008, ADR-0009).
 
 ## Summary
 
-**One number to remember: ~20 ms per request.** Evaluating 1,000 candidate
-footprints against 30 rules returns its match mask in about 20 ms — roughly
-**52× faster** than the same check written in JavaScript with turf.js
-(≈1.1 s per batch).
+**One number to remember: ~15 ms per request.** Evaluating 1,000 candidate
+footprints against 30 rules returns its match mask in about 15 ms (18.5 ms
+through the native addon) — roughly **60× faster** than the same check written
+in JavaScript with turf.js (≈1.1 s per batch).
 
 **Why it got fast.** The cost was dominated by the exact geometry check ("does
 this footprint touch this zone?"). The fix that mattered was **preparing** each
 rule's geometry once per ruleset, per thread (~5 ms for all 30), then reusing
-that work across every footprint and every request — a ~23× speedup on its own.
+that work across every footprint and every request — a ~34× speedup on its own.
 The bounding-box index, by contrast, barely helped: with 30 large zones, almost
 every footprint overlaps some zone's box anyway.
 
-**Practical impact.** 20 ms is well under the 50 ms ceiling for blocking the
+**Practical impact.** ~15 ms is well under the 50 ms ceiling for blocking the
 event loop, so v1 ships a simple synchronous API and needs no async path.
 
 | Workload (1,000 candidates × 30 rules) | Time per batch |
 |---|---|
 | turf.js (JavaScript baseline) | ~1 090 ms |
 | Rust — before prepared geometries | ~470 ms |
-| Rust — after prepared geometries | **~13–20 ms** |
+| Rust — after prepared geometries | **~14–15 ms** |
 
 ## Dataset
 
@@ -76,29 +76,32 @@ are still verified).
 
 | Bench | Time/batch | Throughput |
 |---|---|---|
-| B naive (unprepared) | 471.9 ms | 2.1 Kelem/s |
-| C linear-scan bbox | 19.6 ms | 51 Kelem/s |
-| D rstar bbox | 20.1 ms | 50 Kelem/s |
-| E prepared (naive) | 14.0 ms | 71 Kelem/s |
-| F prepared + rstar | 13.1 ms | 76 Kelem/s |
-| ruleset build (30 rules) | 22.2 ms | — |
-| prepare 30 rules | 4.6 ms | — |
+| B naive (unprepared) | 502.2 ms | 2.0 Kelem/s |
+| C linear-scan bbox | 14.6 ms | 68 Kelem/s |
+| D rstar bbox | 15.5 ms | 65 Kelem/s |
+| E prepared (naive) | 14.1 ms | 71 Kelem/s |
+| F prepared + rstar | 13.8 ms | 72 Kelem/s |
+| ruleset build (30 rules) | 24.0 ms | — |
+| prepare 30 rules | 5.3 ms | — |
 
-vs turf.js (`perf.mjs`): turf 1 087 ms vs addon **21 ms = 51.6×** (both report
+vs turf.js (`perf.mjs`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (both report
 481 matched candidates). The addon figure includes the Buffer→parse→mask
 round-trip.
 
 ## Findings
 
-- **Prepared geometry is the lever.** It cuts the core query ~23× (B → C/D);
+- **Prepared geometry is the lever.** It cuts the core query ~34× (B → C/D);
   the bbox index alone gives ≈0 help at 30 large rules (B ≈ C ≈ D when
   unprepared).
-- **Prepare cost is ~4.6 ms for 30 rules**, now paid once per thread per
+- **Prepare cost is ~5.3 ms for 30 rules**, now paid once per thread per
   ruleset: `PreparedGeometry` is `!Send` in geo 0.33, so owned prepared
   geometries are cached in a `thread_local!` keyed by ruleset identity
   (ADR-0010) rather than rebuilt per query or stored in the shared
   `Arc<Ruleset>`.
-- **ADR-0009 gate met**: sync p50 ≈ 20 ms ≪ 50 ms, so `queryAsync()` is not
+- **The cache closes the indexed/prepared gap.** Once preparation is no longer
+  per-call, the index-backed benches fall to the hand-rolled prepared level:
+  C 19.6 → 14.6 ms and D 20.1 → 15.5 ms (this table's earlier run).
+- **ADR-0009 gate met**: sync p50 ≈ 18.5 ms ≪ 50 ms, so `queryAsync()` is not
   needed for v1.
 - **Correctness**: the turf cross-check is green; Rust and turf agree on all
   10 predicate pairs (and on the full 1,000 × 30 matched count).
