@@ -1,7 +1,7 @@
 # Bun + Express + Docker integration test
 
 Type: task
-Status: claimed
+Status: resolved
 Blocked by: 16
 
 ## Question
@@ -24,4 +24,13 @@ The Docker image runs the app with the addon working.
 - **Remaining**: `docker build -f integration/Dockerfile -t spatial-rules .` then `docker run --rm -p 3000:3000 spatial-rules`. Blocked here because the Docker daemon isn't running in this environment — run it once Docker Desktop is up (or in CI).
 
 Status stays `claimed` until the image builds and runs.
+
+## Answer
+
+Built and **verified** the Docker integration, committed to `main`.
+
+- **App** (`integration/server.mjs`): Bun + Express server embedding the addon; `GET /health`, `POST /query` (candidates → mask), `POST /replace` (observability). Loads the 30-rule dataset.
+- **Dockerfile** (`integration/Dockerfile` + `.dockerignore`): multi-stage — `rust:1.96-slim-bookworm` builds the `linux-x64-gnu` addon; `oven/bun:1.3` runs it.
+- **Smoke** (`integration/smoke.mjs`): posts the production workload, asserts the mask shape.
+- **Verified**: `docker build -f integration/Dockerfile -t spatial-rules .` (built clean), `docker run --rm -p 3000:3000 spatial-rules`, then `/health` (`ruleCount: 30, version: 1`) and `/query` (1,000 candidates → 481 matched). The addon loads and runs inside the container.
 
