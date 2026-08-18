@@ -216,6 +216,15 @@ node complex.mjs` runs the same measurements on any real boundary file.
 - `core/tests/complex.rs` asserts correctness at scale (2,000-vertex rule,
   40 properties, holes, indexed `where`); larger sizes stay in this benchmark,
   where the release addon avoids debug-mode validation cost.
+- To stress with a real boundary — e.g. Natural Earth's 10 m countries (public
+  domain; every country becomes one complex MultiPolygon rule):
+
+  ```bash
+  curl -L -o countries.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson
+  # optionally keep just one country (jq):
+  jq '{type:"FeatureCollection",features:[.features[]|select(.properties.ADMIN=="Germany")]}' countries.geojson > deu.geojson
+  RULES_FILE=deu.geojson node benchmarks/js/complex.mjs
+  ```
 
 ## Commands
 
