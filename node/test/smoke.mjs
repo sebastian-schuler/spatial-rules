@@ -62,6 +62,16 @@ assert.deepEqual(Array.from(mask), [1, 0, 2]);
 const active = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: true } }));
 assert.deepEqual(Array.from(active), [1, 0, 2]);
 
+// Richer where operators (ADR-0011): $exists / $nin / $not pass through.
+const exists = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: { $exists: true } } }));
+assert.deepEqual(Array.from(exists), [1, 0, 2]);
+
+const nin = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: { $nin: [true] } } }));
+assert.deepEqual(Array.from(nin), [0, 0, 2]);
+
+const not = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: { $not: { $eq: false } } } }));
+assert.deepEqual(Array.from(not), [1, 0, 2]);
+
 // excludeRuleIds removes named rules: excluding both matching zones leaves none.
 const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, excludeRuleIds: ['zone-a', 'zone-c'] }));
 assert.deepEqual(Array.from(excluding), [0, 0, 2]);

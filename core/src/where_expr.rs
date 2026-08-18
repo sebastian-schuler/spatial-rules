@@ -1,9 +1,9 @@
-//! Mongo-style `where` AST: parsing and evaluation (ADR-0003).
+//! Mongo-style `where` AST: parsing and evaluation (ADR-0003, ADR-0011).
 //!
-//! Subset: implicit top-level `AND`, plain-value equality, `$ne`,
-//! `$gt/$gte/$lt/$lte`, `$in`, and `$and`/`$or`. A missing property or a type
-//! mismatch evaluates as non-match (even for `$ne`); only malformed predicates
-//! error.
+//! Subset: implicit top-level `AND`, plain-value equality, `$eq`, `$ne`,
+//! `$gt/$gte/$lt/$lte`, `$in`, `$nin`, `$exists`, field-level `$not`, and
+//! `$and`/`$or`. A missing property or a type mismatch evaluates as non-match
+//! (even for `$ne`); only malformed predicates error.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -36,6 +36,12 @@ pub enum FieldOp {
     Lt(PropertyValue),
     Lte(PropertyValue),
     In(Vec<PropertyValue>),
+    /// Field-level `$not`: negates exactly one inner field predicate (ADR-0011).
+    Not(Box<FieldPredicate>),
+    /// `$nin`: present, same-typed, and not equal to any listed value (ADR-0011).
+    Nin(Vec<PropertyValue>),
+    /// `$exists`: key presence check (ADR-0011).
+    Exists(bool),
 }
 
 /// The form of a predicate an index can answer directly (ADR-0003). `where_expr`
@@ -111,6 +117,20 @@ impl FieldPredicate {
                 Some(actual) => values.iter().any(|value| actual == value),
                 None => false,
             },
+            FieldOp::Not(inner) => !inner.eval(properties),
+            FieldOp::Nin(values) => match properties.get(&self.field) {
+                // A missing field or a type mismatch (no same-variant list
+                // element) is a non-match — a documented divergence from Mongo
+                // (ADR-0011).
+                Some(actual) => {
+                    values.iter().any(|value| same_variant(actual, value))
+                        && !values.iter().any(|value| actual == value)
+                }
+                None => false,
+            },
+            FieldOp::Exists(expected) => {
+                properties.contains_key(&self.field) == *expected
+            }
         }
     }
 
@@ -201,24 +221,7 @@ fn parse_field_predicate(
                 )));
             }
             let (operator, operand) = operators.iter().next().unwrap();
-            let op = match operator.as_str() {
-                "$ne" => FieldOp::Ne(parse_scalar(operand)?),
-                "$gt" => FieldOp::Gt(parse_scalar(operand)?),
-                "$gte" => FieldOp::Gte(parse_scalar(operand)?),
-                "$lt" => FieldOp::Lt(parse_scalar(operand)?),
-                "$lte" => FieldOp::Lte(parse_scalar(operand)?),
-                "$in" => FieldOp::In(parse_array(operand)?),
-                other if other.starts_with('$') => {
-                    return Err(SpatialError::unsupported_property_operator(format!(
-                        "unsupported operator: {other}"
-                    )));
-                }
-                _ => {
-                    return Err(invalid_predicate(format!(
-                        "predicate for '{field}' must use an operator like $gt or a plain value"
-                    )));
-                }
-            };
+            let op = parse_field_op(field, operator, operand)?;
             Ok(WhereExpr::Predicate(FieldPredicate {
                 field: field.to_string(),
                 op,
@@ -242,8 +245,62 @@ fn parse_scalar(value: &serde_json::Value) -> Result<PropertyValue, SpatialError
 fn parse_array(value: &serde_json::Value) -> Result<Vec<PropertyValue>, SpatialError> {
     let array = value
         .as_array()
-        .ok_or_else(|| invalid_predicate("$in requires an array"))?;
+        .ok_or_else(|| invalid_predicate("$in/$nin requires an array"))?;
     array.iter().map(parse_scalar).collect()
+}
+
+fn parse_bool(value: &serde_json::Value) -> Result<bool, SpatialError> {
+    value
+        .as_bool()
+        .ok_or_else(|| invalid_predicate("$exists requires a boolean"))
+}
+
+/// Parse a single `$operator: operand` pair for `field` into a [`FieldOp`].
+/// The single dispatch point for every field operator, including the `$not`
+/// wrapper and its recursive inner operator.
+fn parse_field_op(
+    field: &str,
+    operator: &str,
+    operand: &serde_json::Value,
+) -> Result<FieldOp, SpatialError> {
+    match operator {
+        "$eq" => Ok(FieldOp::Eq(parse_scalar(operand)?)),
+        "$ne" => Ok(FieldOp::Ne(parse_scalar(operand)?)),
+        "$gt" => Ok(FieldOp::Gt(parse_scalar(operand)?)),
+        "$gte" => Ok(FieldOp::Gte(parse_scalar(operand)?)),
+        "$lt" => Ok(FieldOp::Lt(parse_scalar(operand)?)),
+        "$lte" => Ok(FieldOp::Lte(parse_scalar(operand)?)),
+        "$in" => Ok(FieldOp::In(parse_array(operand)?)),
+        "$nin" => Ok(FieldOp::Nin(parse_array(operand)?)),
+        "$exists" => Ok(FieldOp::Exists(parse_bool(operand)?)),
+        "$not" => Ok(FieldOp::Not(Box::new(parse_not_inner(field, operand)?))),
+        other if other.starts_with('$') => Err(SpatialError::unsupported_property_operator(
+            format!("unsupported operator: {other}"),
+        )),
+        _ => Err(invalid_predicate(format!(
+            "predicate for '{field}' must use an operator like $gt or a plain value"
+        ))),
+    }
+}
+
+/// Parse the inner predicate of a `$not`: exactly one field operator, which may
+/// itself be another `$not` (nesting), on the same `field` (ADR-0011).
+fn parse_not_inner(
+    field: &str,
+    operand: &serde_json::Value,
+) -> Result<FieldPredicate, SpatialError> {
+    let object = operand
+        .as_object()
+        .ok_or_else(|| invalid_predicate("$not requires an object with exactly one inner operator"))?;
+    if object.len() != 1 {
+        return Err(invalid_predicate("$not requires exactly one inner operator"));
+    }
+    let (operator, operand) = object.iter().next().unwrap();
+    let op = parse_field_op(field, operator, operand)?;
+    Ok(FieldPredicate {
+        field: field.to_string(),
+        op,
+    })
 }
 
 fn invalid_predicate(message: impl Into<String>) -> SpatialError {
@@ -301,5 +358,41 @@ mod tests {
         assert!(predicate("priority", serde_json::json!({ "$lte": 5 }))
             .index_query()
             .is_none());
+    }
+
+    #[test]
+    fn eq_operator_parses_as_plain_equality() {
+        let eq = predicate("country", serde_json::json!({ "$eq": "HR" }));
+        assert_eq!(eq.op, FieldOp::Eq(PropertyValue::Str("HR".into())));
+        assert!(eq.index_query().is_some());
+    }
+
+    #[test]
+    fn new_operators_are_not_indexable() {
+        // No index extension (ADR-0011): the new operators answer per-rule.
+        assert!(predicate("priority", serde_json::json!({ "$nin": [5] }))
+            .index_query()
+            .is_none());
+        assert!(predicate("priority", serde_json::json!({ "$exists": true }))
+            .index_query()
+            .is_none());
+        assert!(predicate("priority", serde_json::json!({ "$not": { "$eq": 5 } }))
+            .index_query()
+            .is_none());
+    }
+
+    #[test]
+    fn not_requires_a_single_inner_operator() {
+        let err = predicate_err("active", serde_json::json!({ "$not": true }));
+        assert_eq!(err.code, crate::error::ErrorCode::InvalidPropertyPredicate);
+
+        let err = predicate_err("active", serde_json::json!({ "$not": { "$eq": 1, "$ne": 2 } }));
+        assert_eq!(err.code, crate::error::ErrorCode::InvalidPropertyPredicate);
+    }
+
+    fn predicate_err(field: &str, value: serde_json::Value) -> crate::error::SpatialError {
+        let mut object = serde_json::Map::new();
+        object.insert(field.to_string(), value);
+        WhereExpr::parse(&serde_json::Value::Object(object)).unwrap_err()
     }
 }

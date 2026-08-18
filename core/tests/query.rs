@@ -9,7 +9,7 @@ use geo::{LineString, Point, Polygon};
 use serde_json::json;
 use spatial_rules_core::{
     Candidate, CandidateOutcome, ErrorCode, PropertyValue, Query, Rule, RuleId, Ruleset,
-    SpatialPredicate,
+    SpatialError, SpatialPredicate,
 };
 
 fn square(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Polygon<f64> {
@@ -558,4 +558,185 @@ fn typed_query_builder_produces_expected_struct() {
         ruleset.query(&[bare], &intersects()),
         vec![CandidateOutcome::Matched { rule_ids: vec![ruleset.rule_id("bare").unwrap()] }]
     );
+}
+
+// --- Ticket 01: richer where operators $not / $nin / $exists (ADR-0011) ---
+
+fn where_query(where_clause: serde_json::Value) -> Query {
+    Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "where": where_clause
+    }))
+    .unwrap()
+}
+
+#[test]
+fn nin_excludes_listed_values() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+
+    // square.country = "HR": not in ["SI", "DE"] -> match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "country": { "$nin": ["SI", "DE"] } }))),
+        matched
+    );
+    // square.country = "HR": in ["HR"] -> non-match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "country": { "$nin": ["HR"] } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn nin_missing_field_is_non_match() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // "name" is absent everywhere: documented divergence from Mongo -> non-match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "name": { "$nin": ["x"] } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn nin_type_mismatch_is_non_match() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // square.country is Str but the list holds Ints: type mismatch -> non-match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "country": { "$nin": [10] } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn exists_checks_presence() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+
+    // square has "active" and "country"; "name" is absent.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "active": { "$exists": true } }))),
+        matched
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "active": { "$exists": false } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "name": { "$exists": true } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "name": { "$exists": false } }))),
+        matched
+    );
+}
+
+#[test]
+fn not_negates_inner_predicate() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+
+    // square.active = true: $eq true -> match, so $not -> non-match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "active": { "$not": { "$eq": true } } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+    // square.active != false, so $not { $eq: false } -> match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "active": { "$not": { "$eq": false } } }))),
+        matched
+    );
+}
+
+#[test]
+fn not_negates_inner_on_missing_field() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // "name" is missing, so the inner $eq is a non-match; $not negates it to a match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "name": { "$not": { "$eq": "x" } } }))),
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+    );
+}
+
+#[test]
+fn nested_not_double_negates() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // $not($not($eq true)) collapses to $eq true: square.active = true -> match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "active": { "$not": { "$not": { "$eq": true } } } }))),
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+    );
+}
+
+#[test]
+fn not_parity_with_ne() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+
+    // $not { $ne: "HR" } behaves like equality for a present, same-typed field.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "country": { "$not": { "$ne": "HR" } } }))),
+        matched
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "country": { "$not": { "$ne": "SI" } } }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn new_operators_compose_inside_and_or() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+
+    let and_query = where_query(json!({
+        "$and": [
+            { "country": { "$nin": ["SI", "DE"] } },
+            { "active": { "$exists": true } }
+        ]
+    }));
+    assert_eq!(ruleset.query(std::slice::from_ref(&inside), &and_query), matched);
+
+    let or_query = where_query(json!({
+        "$or": [
+            { "country": { "$nin": ["HR"] } },
+            { "active": { "$not": { "$eq": true } } }
+        ]
+    }));
+    assert_eq!(ruleset.query(std::slice::from_ref(&inside), &or_query), vec![CandidateOutcome::NotMatched]);
+}
+
+#[test]
+fn malformed_new_operators_are_rejected() {
+    // $exists requires a boolean operand.
+    let err = where_query_err(json!({ "active": { "$exists": "yes" } }));
+    assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
+
+    // $nin requires an array.
+    let err = where_query_err(json!({ "country": { "$nin": "HR" } }));
+    assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
+
+    // $not requires an object holding exactly one inner operator.
+    let err = where_query_err(json!({ "active": { "$not": true } }));
+    assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
+
+    let err = where_query_err(json!({ "active": { "$not": {} } }));
+    assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
+}
+
+fn where_query_err(where_clause: serde_json::Value) -> SpatialError {
+    Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "where": where_clause
+    }))
+    .unwrap_err()
 }
