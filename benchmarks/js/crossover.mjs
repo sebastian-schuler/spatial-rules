@@ -3,9 +3,10 @@
 // (GeoJSON parse + napi + index + prepared relate) against turf's linear scan
 // + bbox fast-reject, and reports the break-even candidate count.
 //
-//   bun crossover.mjs                                  # RULES_FILE (or synthetic fallback)
-//   RULES_FILE=countries.geojson bun crossover.mjs     # real boundary rules
-//   SIZES=20,200,1000,5000 REPS=5 bun crossover.mjs    # sweep config
+//   bun crossover.mjs                                  # candidate sweep (default)
+//   RULES_FILE=countries.geojson bun crossover.mjs     # ... on real boundary rules
+//   SIZES=20,200,1000,5000 REPS=5 bun crossover.mjs    # candidate sizes
+//   MODE=rules bun crossover.mjs                       # rule-count sweep (synthetic grid)
 
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
@@ -20,8 +21,11 @@ import {
 
 const { SpatialRuleset } = loadNative();
 
+const MODE = process.env.MODE ?? 'candidates';
 const RULES = Number(process.env.RULES ?? 500);
 const SIZES = (process.env.SIZES ?? '20,200,1000,5000').split(',').map(Number);
+const RULES_RANGE = (process.env.RULES_RANGE ?? '500,1000,2000,5000').split(',').map(Number);
+const FIXED_CANDIDATES = Number(process.env.CANDIDATES ?? 1000);
 const REPS = Number(process.env.REPS ?? 3);
 
 // --- rules ---------------------------------------------------------------
@@ -98,7 +102,7 @@ function square(x, y, w, id) {
 // a tiny square sized from the rules' bbox — every candidate overlaps at least
 // its source rule, so the relate work is real. Synthetic mode: grid cells
 // centred on blob rules (from common.mjs), one overlap per candidate.
-function makeCandidates(count) {
+function makeCandidates(count, ruleGeo) {
   if (process.env.RULES_FILE) {
     const pts = ringPoints(ruleGeo);
     const [minX, minY, maxX, maxY] = bbox(toCollection(ruleGeo));
@@ -125,7 +129,7 @@ function countMask(mask) {
   return n;
 }
 
-function turfScan(candidateFeatures, candidateBboxes) {
+function turfScan(candidateFeatures, candidateBboxes, ruleFeatures, ruleBboxes) {
   let matched = 0;
   for (let c = 0; c < candidateFeatures.length; c += 1) {
     const cb = candidateBboxes[c];
@@ -153,58 +157,109 @@ function minOf(fn, reps) {
 
 // --- main ----------------------------------------------------------------
 
-const { features: ruleGeo, dropped = [] } = loadRules();
-const ruleFeatures = ruleGeo.map((f) => feature(f.geometry));
-const ruleBboxes = ruleGeo.map((f) => bbox(f));
-const rulesBuffer = Buffer.from(JSON.stringify(toCollection(ruleGeo)));
 const querySpatial = JSON.stringify({ spatial: { predicate: 'intersects' } });
 
-const ruleset = new SpatialRuleset(rulesBuffer);
-// Warm the per-thread prepared-geometry cache (ADR-0010) — one-time, not timed.
-ruleset.query(Buffer.from(JSON.stringify(toCollection(makeCandidates(8)))), querySpatial);
-
-console.log('crossover — native full query vs turf scan + bbox reject');
-console.log(
-  `mode=${process.env.RULES_FILE ? 'real-data' : 'synthetic'} rules=${ruleGeo.length}` +
-    `${dropped.length ? ` (${dropped.length} invalid dropped)` : ''} sizes=${SIZES.join(',')} reps=${REPS}`,
-);
-console.log('');
-console.log(' candidates  addon (ms)   turf (ms)   speedup   matched');
-
-let firstWin = null;
-for (const n of SIZES) {
-  const cand = makeCandidates(n);
-  const candFeatures = cand.map((f) => feature(f.geometry));
-  const candBboxes = candFeatures.map((f) => bbox(f));
-  const candBuffer = Buffer.from(JSON.stringify(toCollection(cand)));
-
+function timeRow(ruleset, candBuffer, candFeatures, candBboxes, ruleFeatures, ruleBboxes) {
   const nativeMatched = countMask(ruleset.query(candBuffer, querySpatial));
-  const turfMatched = turfScan(candFeatures, candBboxes);
+  const turfMatched = turfScan(candFeatures, candBboxes, ruleFeatures, ruleBboxes);
   if (nativeMatched !== turfMatched) {
-    console.error(`mismatch at ${n} candidates: native=${nativeMatched} turf=${turfMatched}`);
+    console.error(`mismatch: native=${nativeMatched} turf=${turfMatched}`);
     process.exit(1);
   }
-
   const nativeMs = minOf(() => ruleset.query(candBuffer, querySpatial), REPS);
-  const turfMs = minOf(() => turfScan(candFeatures, candBboxes), REPS);
-  const speedup = turfMs / nativeMs;
-  if (firstWin === null && speedup > 1) firstWin = n;
+  const turfMs = minOf(() => turfScan(candFeatures, candBboxes, ruleFeatures, ruleBboxes), REPS);
+  return { nativeMs, turfMs, matched: nativeMatched };
+}
 
-  const speed = speedup >= 100 ? `${speedup.toFixed(0)}x` : `${speedup.toFixed(1)}x`;
+function speedLabel(speedup) {
+  return speedup >= 100 ? `${speedup.toFixed(0)}x` : `${speedup.toFixed(1)}x`;
+}
+
+function warmup(ruleset, candBuffer) {
+  // Warm the per-thread prepared-geometry cache (ADR-0010) — one-time, not timed.
+  ruleset.query(candBuffer, querySpatial);
+}
+
+// MODE=candidates (default): fixed ruleset, sweep candidate count — real data
+// via RULES_FILE, synthetic grid fallback.
+function runCandidateSweep() {
+  const { features: ruleGeo, dropped = [] } = loadRules();
+  const ruleFeatures = ruleGeo.map((f) => feature(f.geometry));
+  const ruleBboxes = ruleGeo.map((f) => bbox(f));
+  const ruleset = new SpatialRuleset(Buffer.from(JSON.stringify(toCollection(ruleGeo))));
+  warmup(ruleset, Buffer.from(JSON.stringify(toCollection(makeCandidates(8, ruleGeo)))));
+
+  console.log('crossover (candidates) — native full query vs turf scan + bbox reject');
   console.log(
-    String(n).padStart(10) +
-      nativeMs.toFixed(2).padStart(12) +
-      turfMs.toFixed(2).padStart(11) +
-      speed.padStart(9) +
-      String(nativeMatched).padStart(9),
+    `mode=${process.env.RULES_FILE ? 'real-data' : 'synthetic'} rules=${ruleGeo.length}` +
+      `${dropped.length ? ` (${dropped.length} invalid dropped)` : ''} sizes=${SIZES.join(',')} reps=${REPS}`,
   );
+  console.log('');
+  console.log(' candidates  addon (ms)   turf (ms)   speedup   matched');
+
+  let firstWin = null;
+  for (const n of SIZES) {
+    const cand = makeCandidates(n, ruleGeo);
+    const candFeatures = cand.map((f) => feature(f.geometry));
+    const candBboxes = candFeatures.map((f) => bbox(f));
+    const candBuffer = Buffer.from(JSON.stringify(toCollection(cand)));
+
+    const { nativeMs, turfMs, matched } = timeRow(ruleset, candBuffer, candFeatures, candBboxes, ruleFeatures, ruleBboxes);
+    const speedup = turfMs / nativeMs;
+    if (firstWin === null && speedup > 1) firstWin = n;
+    console.log(
+      String(n).padStart(10) +
+        nativeMs.toFixed(2).padStart(12) +
+        turfMs.toFixed(2).padStart(11) +
+        speedLabel(speedup).padStart(9) +
+        String(matched).padStart(9),
+    );
+  }
+
+  console.log('');
+  if (firstWin === null) {
+    console.log('break-even: turf is faster at every size tested (addon floor not yet amortized)');
+  } else if (firstWin === SIZES[0]) {
+    console.log(`break-even: the addon wins from the smallest size tested (${firstWin}); its per-query floor only matters below that`);
+  } else {
+    console.log(`break-even: the addon wins from ~${firstWin} candidates; below that its per-query floor dominates`);
+  }
 }
 
-console.log('');
-if (firstWin === null) {
-  console.log('break-even: turf is faster at every size tested (addon floor not yet amortized)');
-} else if (firstWin === SIZES[0]) {
-  console.log(`break-even: the addon wins from the smallest size tested (${firstWin}); its per-query floor only matters below that`);
-} else {
-  console.log(`break-even: the addon wins from ~${firstWin} candidates; below that its per-query floor dominates`);
+// MODE=rules: fixed candidate count, sweep rule count on a synthetic grid —
+// isolates the R*-tree index (turf's scan + bbox reject is O(candidates ×
+// rules); the addon's index lookup is ~log(rules)).
+function runRulesSweep() {
+  console.log('crossover (rules) — native full query vs turf scan + bbox reject');
+  console.log(`candidates=${FIXED_CANDIDATES} rules=${RULES_RANGE.join(',')} reps=${REPS}`);
+  console.log('');
+  console.log('    rules  addon (ms)   turf (ms)   speedup   matched');
+
+  for (const n of RULES_RANGE) {
+    const features = makeRules(n);
+    const ruleFeatures = features.map((f) => feature(f.geometry));
+    const ruleBboxes = features.map((f) => bbox(f));
+    const ruleset = new SpatialRuleset(Buffer.from(JSON.stringify(toCollection(features))));
+    warmup(ruleset, Buffer.from(JSON.stringify(toCollection(makeGridCandidates(8, n, makeRng(1))))));
+
+    const cand = makeGridCandidates(FIXED_CANDIDATES, n, makeRng(0x51a7_0001));
+    const candFeatures = cand.map((f) => feature(f.geometry));
+    const candBboxes = candFeatures.map((f) => bbox(f));
+    const candBuffer = Buffer.from(JSON.stringify(toCollection(cand)));
+
+    const { nativeMs, turfMs, matched } = timeRow(ruleset, candBuffer, candFeatures, candBboxes, ruleFeatures, ruleBboxes);
+    const speedup = turfMs / nativeMs;
+    console.log(
+      String(n).padStart(9) +
+        nativeMs.toFixed(2).padStart(12) +
+        turfMs.toFixed(2).padStart(11) +
+        speedLabel(speedup).padStart(9) +
+        String(matched).padStart(9),
+    );
+  }
+  console.log('');
+  console.log('the addon stays ~flat as rules grow (index lookup); turf grows linearly (scan)');
 }
+
+if (MODE === 'rules') runRulesSweep();
+else runCandidateSweep();

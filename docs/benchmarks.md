@@ -295,13 +295,30 @@ scan + bbox fast-reject, matched counts asserted each step.
 - With candidates spread over the map both sides do roughly the same relates;
   the ~5–8× and growing gap is dominated by prepared geometry (ADR-0010)
   beating turf's JSTS relate per call. The R*-tree contributes little here (only
-  257 rules) — its payoff shows at 10k+ rules in `scale.mjs`.
+  257 rules) — its payoff shows in the rule-count axis below.
 - The addon wins from the smallest size tested (20); its ~5 ms per-query floor
   only matters below ~20 candidates. §4's 0.4 ms turf figure is the opposite
   corner — 20 candidates clustered on one country, where turf has almost no
   relate work and the addon's floor dominates.
 - Falls back to a synthetic 500-rule grid when no `RULES_FILE` is set;
   `RULES=… SIZES=… REPS=…` tune it.
+
+**Second axis — rule count** (`MODE=rules bun crossover.mjs`, synthetic grid,
+fixed 1,000 candidates):
+
+| rules | addon (ms) | turf (ms) | speedup |
+|---|---|---|---|
+| 500 | 3.5 | 11.8 | 3.4× |
+| 1,000 | 4.0 | 13.6 | 3.4× |
+| 2,000 | 4.7 | 17.5 | 3.8× |
+| 5,000 | 4.9 | 21.9 | 4.5× |
+
+- The R*-tree keeps the addon ~flat (3.5 → 4.9 ms over 10× rules) while turf's
+  scan + bbox reject grows with the scan (11.8 → 21.9 ms) — the index payoff at
+  moderate rule counts; the naive-scan version at 30 → 300 rules is §1 (up to
+  941×).
+- Grid candidates land on ~35% of rules' centre holes, so matched ≈ 650 here —
+  both sides still agree, and the relate work is unchanged.
 
 ## Commands
 
