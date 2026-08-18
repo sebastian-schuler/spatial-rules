@@ -149,6 +149,28 @@ Five harnesses demonstrate turf.js's limits and why the engine exists
 under `bun`, which also auto-loads `benchmarks/js/.env`). All workloads assert
 turf and the addon agree on the matched count before timing.
 
+#### How the measurements are taken (and why it's fair to turf)
+
+- **The addon is timed for the full call a user makes**: `ruleset.query(buffer,
+  queryJson)` — GeoJSON parse + napi + index + relate + mask, every query.
+- **The turf side is timed only for the relate loop**, and is given the benefit
+  of every cheap optimization: geometries pre-parsed into JS objects, per-rule
+  and per-candidate bboxes precomputed *outside* the timed region, and a warmup
+  call so JIT is hot. It never re-serializes or re-parses.
+- Both sides are measured **min-of-N reps** (N = 3) to damp scheduler/GC noise,
+  and the matched count is asserted equal *before* timing — so the numbers are
+  never comparing a wrong answer.
+- Because the addon still carries its parse + FFI cost while turf is handed
+  pre-parsed data, **a turf win would be real, and an addon win is conservative**
+  — the handicap runs against the addon, not against turf.
+- The turf baseline escalates across harnesses: naive scan (no index) in
+  `scale.mjs` → scan + bbox fast-reject in `complex.mjs`/`crossover.mjs` →
+  `rbush` + turf in `fair.mjs`. `crossover.mjs` uses the middle one; `fair.mjs`
+  uses the strongest hand-rolled JS answer.
+- Known turf property, not an artifact: `booleanIntersects` flattens a
+  MultiPolygon and relates each part without a per-part bbox short-circuit, so
+  island countries (many parts) genuinely cost turf more.
+
 ### 1. Scaling sweep (`scale.mjs`)
 
 Complex blob rules (120–300 vertices, ~35% with holes) laid out on a grid, so a
