@@ -2,13 +2,51 @@
 //
 // Defines `SpatialRulesError extends Error` with a `.code` property, and
 // re-throws native errors (which carry `SR_*` codes) as that class.
+//
+// The native binary resolves from the per-platform optionalDependency package
+// (`spatial-rules-<triple>`) when installed from npm, and falls back to a
+// locally built `spatial_rules.node` during development.
 
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const native = require(join(dirname(fileURLToPath(import.meta.url)), 'spatial_rules.node'));
+const here = dirname(fileURLToPath(import.meta.url));
+
+// Map this process to a published per-platform package (ADR-0006: win32 +
+// linux x64/arm64, gnu/musl).
+function platformPackage() {
+  const { platform, arch } = process;
+  if (platform === 'win32') {
+    return arch === 'arm64' ? 'spatial-rules-win32-arm64-msvc' : 'spatial-rules-win32-x64-msvc';
+  }
+  if (platform === 'linux') {
+    const cpu = arch === 'arm64' ? 'arm64' : 'x64';
+    let isMusl = false;
+    try {
+      const report = process.report?.getReport?.();
+      isMusl = !report?.header?.glibcVersionRuntime;
+    } catch {
+      isMusl = false;
+    }
+    return `spatial-rules-linux-${cpu}-${isMusl ? 'musl' : 'gnu'}`;
+  }
+  return null;
+}
+
+let native = null;
+const pkg = platformPackage();
+if (pkg) {
+  try {
+    native = require(pkg);
+  } catch {
+    native = null;
+  }
+}
+if (!native) {
+  native = require(join(here, 'spatial_rules.node'));
+}
 
 export class SpatialRulesError extends Error {
   constructor(message, code) {

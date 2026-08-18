@@ -1,11 +1,44 @@
 {
+  "name": "spatial-rules",
+  "version": "0.1.0",
+  "description": "High-performance spatial rules/query engine (Rust core, Node/Bun binding)",
+  "license": "MIT OR Apache-2.0",
+  "main": "index.js",
+  "type": "module",
+  "napi": {
     "name": "spatial-rules",
-    "private": true,
-    "version": "0.1.0",
-    "type": "module",
-    "main": "index.js",
-    "exports": "./index.js",
-    "scripts": {
-        "test": "node test/smoke.mjs"
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ]
     }
+  },
+  "files": [
+    "index.js",
+    "npm/"
+  ],
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "artifacts": "napi artifacts",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "optionalDependencies": {
+    "spatial-rules-win32-x64-msvc": "0.1.0",
+    "spatial-rules-win32-arm64-msvc": "0.1.0",
+    "spatial-rules-linux-x64-gnu": "0.1.0",
+    "spatial-rules-linux-x64-musl": "0.1.0",
+    "spatial-rules-linux-arm64-gnu": "0.1.0",
+    "spatial-rules-linux-arm64-musl": "0.1.0"
+  }
 }

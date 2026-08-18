@@ -1,0 +1,10 @@
+{
+  "name": "spatial-rules-linux-x64-musl",
+  "version": "0.1.0",
+  "main": "spatial-rules.linux-x64-musl.node",
+  "files": ["spatial-rules.linux-x64-musl.node"],
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["musl"],
+  "license": "MIT OR Apache-2.0"
+}

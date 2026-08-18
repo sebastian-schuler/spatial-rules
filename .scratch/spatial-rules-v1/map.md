@@ -36,6 +36,7 @@ Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md
 - [Node binding implementation](issues/16-node-binding-implementation.md) — napi-rs (napi 3/napi8) `SpatialRuleset`; `query(Buffer, query) -> Uint8Array` mask + `queryRich` JSON; `SpatialRulesError` with `SR_*` code; smoke test green under Node 24 and Bun 1.3.14. `replace()`/`queryAsync()`/prebuilds deferred to 19/18.
 - [Dynamic replacement + memory/concurrency testing](issues/19-dynamic-replacement-concurrency.md) — core `Engine` with atomic `Arc` swap + `ReplaceReport` observability; binding `replace()`/`stats()`; concurrency + repeated-replacement tests green; ADR-0009 gate met (sync p50 ≈ 20 ms ⇒ no `queryAsync()`). Peak memory still to measure in Docker (ticket 17).
 - [Bun + Express + Docker integration test](issues/17-bun-express-docker-integration.md) — `integration/` Bun+Express app (`/health`, `/query`, `/replace`) + multi-stage Dockerfile; image built and run, addon loads inside the container (30 rules, 1,000 candidates → 481 matched).
+- [Prebuilt binary distribution pipeline](issues/18-prebuilt-binary-distribution.md) — napi-rs packaging: root `spatial-rules` + six per-platform optionalDependency packages, platform-resolving loader, CI matrix (cargo/cross) + publish on tags; win32-x64 verified locally through the package path. Registry publish + non-host clean installs run in CI.
 
 ## Not yet specified
 
