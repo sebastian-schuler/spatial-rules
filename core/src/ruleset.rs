@@ -6,13 +6,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use geo::{BoundingRect, Geometry, PreparedGeometry, Rect, Relate};
+use geo::{BooleanOps, BoundingRect, GeodesicArea, Geometry, PreparedGeometry, Rect, Relate};
 
 use crate::candidate::Candidate;
 use crate::error::{ErrorCode, SpatialError};
 use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
-use crate::query::{CandidateOutcome, Query, SpatialPredicate};
+use crate::query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
 use crate::rule::{Rule, RuleId};
 use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
 use crate::validation::{classify_candidate, validate_rule_geometry};
@@ -112,6 +112,40 @@ enum Verdict {
     Matched,
     NotMatched,
     Invalid { reason: String },
+}
+
+/// Geodesic overlap metrics for a matched candidate→rule pair (ADR-0012).
+///
+/// The intersection is computed with [`BooleanOps`] and measured with
+/// [`GeodesicArea`] (spherical), so lon/lat is never treated as planar
+/// (Initial-plan §14). Both geometries are guaranteed Polygon/MultiPolygon by
+/// the upstream validity gates (`classify_candidate`/`validate_rule_geometry`).
+///
+/// `geodesic_area_signed().abs()` is used (not `geodesic_area_unsigned`) so the
+/// measure is robust to exterior-ring winding: `_unsigned` assumes a
+/// counter-clockwise exterior per the Simple Features convention and reports
+/// the Earth-complement area for a clockwise exterior, while the signed
+/// magnitude is correct for any winding of a polygon smaller than half the
+/// Earth (always true for rules/candidates).
+fn overlap_metric(candidate: &Geometry<f64>, rule: &Geometry<f64>) -> OverlapMetric {
+    let intersection = match (candidate, rule) {
+        (Geometry::Polygon(c), Geometry::Polygon(r)) => c.intersection(r),
+        (Geometry::Polygon(c), Geometry::MultiPolygon(r)) => c.intersection(r),
+        (Geometry::MultiPolygon(c), Geometry::Polygon(r)) => c.intersection(r),
+        (Geometry::MultiPolygon(c), Geometry::MultiPolygon(r)) => c.intersection(r),
+        _ => unreachable!("overlap metrics require Polygon/MultiPolygon candidates and rules"),
+    };
+    let overlap_area = intersection.geodesic_area_signed().abs();
+    let candidate_area = candidate.geodesic_area_signed().abs();
+    let overlap_ratio = if candidate_area > 0.0 {
+        overlap_area / candidate_area
+    } else {
+        0.0
+    };
+    OverlapMetric {
+        overlap_area,
+        overlap_ratio,
+    }
 }
 
 impl Ruleset {
@@ -277,6 +311,7 @@ impl Ruleset {
             excluded,
             prepared,
             where_filter,
+            include_overlap: query.include_overlap,
         }
     }
 
@@ -339,20 +374,25 @@ pub struct PreparedQuery<'a> {
     excluded: HashSet<RuleId>,
     prepared: PreparedGeometries,
     where_filter: Option<HashSet<RuleId>>,
+    include_overlap: bool,
 }
 
 impl<'a> PreparedQuery<'a> {
-    /// Evaluate one candidate, collecting matching rule ids (ADR-0004).
+    /// Evaluate one candidate, collecting matching rule ids (ADR-0004) and,
+    /// when the query requested it, per-rule overlap metrics (ADR-0012).
     pub fn evaluate(&self, candidate: &Candidate) -> CandidateOutcome {
         match self.evaluate_verdict(candidate, true) {
-            (Verdict::Matched, matched) => CandidateOutcome::Matched { rule_ids: matched },
-            (Verdict::NotMatched, _) => CandidateOutcome::NotMatched,
-            (Verdict::Invalid { reason }, _) => CandidateOutcome::Invalid { reason },
+            (Verdict::Matched, matched, overlaps) => CandidateOutcome::Matched {
+                rule_ids: matched,
+                overlaps,
+            },
+            (Verdict::NotMatched, _, _) => CandidateOutcome::NotMatched,
+            (Verdict::Invalid { reason }, _, _) => CandidateOutcome::Invalid { reason },
         }
     }
 
     /// Evaluate one candidate to the compact `0/1/2` mask (ADR-0004), without
-    /// materialising matching rule ids.
+    /// materialising matching rule ids or overlap metrics.
     pub fn evaluate_mask(&self, candidate: &Candidate) -> u8 {
         match self.evaluate_verdict(candidate, false).0 {
             Verdict::Matched => 1,
@@ -361,19 +401,25 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
-    fn evaluate_verdict(&self, candidate: &Candidate, collect_ids: bool) -> (Verdict, Vec<RuleId>) {
+    fn evaluate_verdict(
+        &self,
+        candidate: &Candidate,
+        collect_ids: bool,
+    ) -> (Verdict, Vec<RuleId>, Option<Vec<OverlapMetric>>) {
         // Candidate-level gate (ADR-0005): unsupported type, invalid geometry,
         // or missing bbox yields an `Invalid` outcome, never a batch failure.
         let bbox = match classify_candidate(&candidate.geometry) {
             Ok(bbox) => bbox,
-            Err(reason) => return (Verdict::Invalid { reason }, Vec::new()),
+            Err(reason) => return (Verdict::Invalid { reason }, Vec::new(), None),
         };
 
         // Fixed pipeline: spatial bbox filter -> property predicate -> exact
         // DE-9IM relate against prepared rule geometries (§15, research 03).
         // A compile-time equality/`$in` index answers the property step when
         // the clause is indexable (ADR-0003); otherwise fall back to eval.
+        let compute_overlaps = collect_ids && self.include_overlap;
         let mut matched: Vec<RuleId> = Vec::new();
+        let mut overlaps: Vec<OverlapMetric> = Vec::new();
         let mut any_match = false;
         for rule_id in self.ruleset.query_envelope(&bbox) {
             if self.excluded.contains(&rule_id) {
@@ -398,14 +444,25 @@ impl<'a> PreparedQuery<'a> {
                 any_match = true;
                 if collect_ids {
                     matched.push(rule_id);
+                    if compute_overlaps {
+                        overlaps.push(overlap_metric(
+                            &candidate.geometry,
+                            self.ruleset.geometry(rule_id),
+                        ));
+                    }
                 }
             }
         }
 
-        if any_match {
-            (Verdict::Matched, matched)
+        let overlaps = if compute_overlaps {
+            Some(overlaps)
         } else {
-            (Verdict::NotMatched, matched)
+            None
+        };
+        if any_match {
+            (Verdict::Matched, matched, overlaps)
+        } else {
+            (Verdict::NotMatched, matched, overlaps)
         }
     }
 }

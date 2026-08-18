@@ -202,7 +202,7 @@ fn where_equality_index_filters_by_property() {
     .unwrap();
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside_a), &restricted),
-        vec![CandidateOutcome::Matched { rule_ids: vec![zone_a] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![zone_a], overlaps: None }]
     );
 
     // A value absent from every spatially-matching rule is a non-match.
@@ -242,7 +242,7 @@ fn where_in_index_unions_overlapping_rules() {
     }))
     .unwrap();
     let outcomes = ruleset.query(&[inside], &query);
-    let CandidateOutcome::Matched { rule_ids: matched } = &outcomes[0] else {
+    let CandidateOutcome::Matched { rule_ids: matched, .. } = &outcomes[0] else {
         panic!("expected a match");
     };
     assert_eq!(

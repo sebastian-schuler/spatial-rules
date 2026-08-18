@@ -84,6 +84,22 @@ assert.equal(rich[0].outcome, 'matched');
 assert.deepEqual(rich[0].ruleIds, ['zone-a', 'zone-c']);
 assert.equal(rich[1].outcome, 'notMatched');
 assert.equal(rich[2].outcome, 'invalid');
+// No overlap payload unless requested.
+assert.ok(!('overlaps' in rich[0]));
+
+// queryRich honors includeOverlap (ADR-0012): matched outcomes carry per-rule
+// geodesic overlapArea/overlapRatio.
+const richOverlap = JSON.parse(ruleset.queryRich(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, includeOverlap: true })));
+assert.equal(richOverlap[0].outcome, 'matched');
+assert.deepEqual(richOverlap[0].ruleIds, ['zone-a', 'zone-c']);
+assert.equal(richOverlap[0].overlaps.length, 2);
+for (const o of richOverlap[0].overlaps) {
+  assert.equal(typeof o.overlapArea, 'number');
+  assert.equal(typeof o.overlapRatio, 'number');
+  assert.ok(o.overlapArea > 0);
+  assert.ok(o.overlapRatio > 0 && o.overlapRatio <= 1);
+}
+assert.ok(!('overlaps' in richOverlap[1]));
 
 // Structured errors: SpatialRulesError with stable SR_* codes (ADR-0005).
 assert.throws(

@@ -27,7 +27,7 @@ pub use ingestion::{
     rule_from_feature, rules_from_geojson,
 };
 pub use properties::{properties_from_json, PropertyValue};
-pub use query::{CandidateOutcome, Query, SpatialPredicate};
+pub use query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
 pub use rule::{Rule, RuleId};
 pub use ruleset::{PreparedQuery, RuleSource, Ruleset};
 pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};

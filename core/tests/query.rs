@@ -94,6 +94,14 @@ fn square_id(ruleset: &Ruleset) -> RuleId {
     ruleset.rule_id("square").unwrap()
 }
 
+/// A `Matched` outcome for the single "square" rule with no overlap payload.
+fn matched_outcome(ruleset: &Ruleset) -> CandidateOutcome {
+    CandidateOutcome::Matched {
+        rule_ids: vec![square_id(ruleset)],
+        overlaps: None,
+    }
+}
+
 #[test]
 fn query_returns_outcomes_aligned_to_input() {
     let ruleset = default_ruleset();
@@ -104,7 +112,7 @@ fn query_returns_outcomes_aligned_to_input() {
     ];
     let outcomes = ruleset.query(&candidates, &intersects());
     assert_eq!(outcomes.len(), 3);
-    assert_eq!(outcomes[0], CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] });
+    assert_eq!(outcomes[0], matched_outcome(&ruleset));
     assert_eq!(outcomes[1], CandidateOutcome::NotMatched);
     assert_eq!(outcomes[2], CandidateOutcome::NotMatched);
 }
@@ -125,7 +133,7 @@ fn contains_predicate_is_directional() {
     let query = Query::new(SpatialPredicate::Contains);
     assert_eq!(
         ruleset.query(std::slice::from_ref(&containing), &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
     assert_eq!(ruleset.query(&[inside], &query), vec![CandidateOutcome::NotMatched]);
 }
@@ -139,7 +147,7 @@ fn within_predicate_is_directional() {
     let query = Query::new(SpatialPredicate::Within);
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
     assert_eq!(ruleset.query(&[containing], &query), vec![CandidateOutcome::NotMatched]);
 }
@@ -152,7 +160,7 @@ fn touching_boundary_intersects_but_does_not_contain() {
 
     assert_eq!(
         ruleset.query(std::slice::from_ref(&adjacent), &intersects()),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
     assert_eq!(
         ruleset.query(std::slice::from_ref(&adjacent), &Query::new(SpatialPredicate::Contains)),
@@ -178,7 +186,7 @@ fn identical_geometry_matches_all_predicates() {
     ] {
         assert_eq!(
             ruleset.query(std::slice::from_ref(&identical), &Query::new(predicate)),
-            vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }],
+            vec![matched_outcome(&ruleset)],
             "predicate {:?}",
             predicate
         );
@@ -195,7 +203,7 @@ fn covers_predicate_is_directional() {
     // big covers the square rule.
     assert_eq!(
         ruleset.query(std::slice::from_ref(&big), &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
     // small does not cover the rule.
     assert_eq!(ruleset.query(&[inside], &query), vec![CandidateOutcome::NotMatched]);
@@ -211,7 +219,7 @@ fn covered_by_predicate_is_directional() {
     // small is covered by the square rule.
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside), &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
     // big is not covered by the rule.
     assert_eq!(ruleset.query(&[big], &query), vec![CandidateOutcome::NotMatched]);
@@ -227,7 +235,7 @@ fn touches_true_on_shared_boundary() {
     let adjacent = candidate("adjacent", square(10.0, 0.0, 20.0, 10.0));
     assert_eq!(
         ruleset.query(std::slice::from_ref(&adjacent), &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
     // Fully inside does not touch.
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
@@ -246,7 +254,7 @@ fn overlaps_only_for_same_dimension_interior_overlap() {
     let partial = candidate("partial", square(5.0, 5.0, 15.0, 15.0));
     assert_eq!(
         ruleset.query(std::slice::from_ref(&partial), &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 
     // Full containment does not overlap.
@@ -295,7 +303,7 @@ fn where_equality_filters() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -311,7 +319,7 @@ fn missing_property_is_non_match() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -342,7 +350,7 @@ fn ne_requires_same_type_and_presence() {
 fn numeric_range_operators() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+    let matched = vec![matched_outcome(&ruleset)];
 
     let run = |operator: &str, value: i64| {
         let mut op = serde_json::Map::new();
@@ -376,7 +384,7 @@ fn in_operator() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -392,7 +400,7 @@ fn and_or_combinators() {
     .unwrap();
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside), &and_query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 
     let or_query = Query::from_json(&json!({
@@ -402,7 +410,7 @@ fn and_or_combinators() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &or_query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -429,7 +437,7 @@ fn exclude_unknown_rule_id_is_ignored() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -453,7 +461,7 @@ fn invalid_candidate_stays_in_result() {
     let outcomes = ruleset.query(&[bowtie, inside], &intersects());
     assert_eq!(outcomes.len(), 2);
     assert!(matches!(&outcomes[0], CandidateOutcome::Invalid { .. }));
-    assert_eq!(outcomes[1], CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] });
+    assert_eq!(outcomes[1], matched_outcome(&ruleset));
 }
 
 #[test]
@@ -504,7 +512,7 @@ fn candidate_matching_multiple_rules_reports_all_ids() {
     .unwrap();
     let both = candidate("both", square(6.0, 6.0, 8.0, 8.0));
     let outcomes = ruleset.query(&[both], &intersects());
-    let CandidateOutcome::Matched { rule_ids } = &outcomes[0] else {
+    let CandidateOutcome::Matched { rule_ids, .. } = &outcomes[0] else {
         panic!("expected a match");
     };
     assert_eq!(
@@ -542,7 +550,7 @@ fn prepared_query_evaluates_and_collects_ids() {
 
     assert_eq!(
         prepared.evaluate(&inside),
-        CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }
+        matched_outcome(&ruleset)
     );
     assert_eq!(prepared.evaluate(&far), CandidateOutcome::NotMatched);
     assert_eq!(prepared.evaluate_mask(&inside), 1);
@@ -626,7 +634,7 @@ fn empty_where_matches_all() {
     .unwrap();
     assert_eq!(
         ruleset.query(&[inside], &query),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -649,7 +657,7 @@ fn typed_query_builder_produces_expected_struct() {
     let bare = candidate("bare", square(1.0, 1.0, 2.0, 2.0));
     assert_eq!(
         ruleset.query(&[bare], &intersects()),
-        vec![CandidateOutcome::Matched { rule_ids: vec![ruleset.rule_id("bare").unwrap()] }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![ruleset.rule_id("bare").unwrap()], overlaps: None }]
     );
 }
 
@@ -667,7 +675,7 @@ fn where_query(where_clause: serde_json::Value) -> Query {
 fn nin_excludes_listed_values() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+    let matched = vec![matched_outcome(&ruleset)];
 
     // square.country = "HR": not in ["SI", "DE"] -> match.
     assert_eq!(
@@ -707,7 +715,7 @@ fn nin_type_mismatch_is_non_match() {
 fn exists_checks_presence() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+    let matched = vec![matched_outcome(&ruleset)];
 
     // square has "active" and "country"; "name" is absent.
     assert_eq!(
@@ -732,7 +740,7 @@ fn exists_checks_presence() {
 fn not_negates_inner_predicate() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+    let matched = vec![matched_outcome(&ruleset)];
 
     // square.active = true: $eq true -> match, so $not -> non-match.
     assert_eq!(
@@ -753,7 +761,7 @@ fn not_negates_inner_on_missing_field() {
     // "name" is missing, so the inner $eq is a non-match; $not negates it to a match.
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "name": { "$not": { "$eq": "x" } } }))),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -764,7 +772,7 @@ fn nested_not_double_negates() {
     // $not($not($eq true)) collapses to $eq true: square.active = true -> match.
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "active": { "$not": { "$not": { "$eq": true } } } }))),
-        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+        vec![matched_outcome(&ruleset)]
     );
 }
 
@@ -772,7 +780,7 @@ fn nested_not_double_negates() {
 fn not_parity_with_ne() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+    let matched = vec![matched_outcome(&ruleset)];
 
     // $not { $ne: "HR" } behaves like equality for a present, same-typed field.
     assert_eq!(
@@ -789,7 +797,7 @@ fn not_parity_with_ne() {
 fn new_operators_compose_inside_and_or() {
     let ruleset = default_ruleset();
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
-    let matched = vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }];
+    let matched = vec![matched_outcome(&ruleset)];
 
     let and_query = where_query(json!({
         "$and": [
@@ -832,4 +840,147 @@ fn where_query_err(where_clause: serde_json::Value) -> SpatialError {
         "where": where_clause
     }))
     .unwrap_err()
+}
+
+// --- Ticket 03: quantitative overlap area/ratio (rich path, ADR-0012) ---
+
+#[test]
+fn overlap_is_opt_in_on_the_rich_path() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+
+    // Without the flag: `Matched` carries no overlap payload.
+    let plain = ruleset.query(std::slice::from_ref(&inside), &intersects());
+    let CandidateOutcome::Matched { overlaps, .. } = &plain[0] else {
+        panic!("expected a match");
+    };
+    assert!(overlaps.is_none());
+
+    // With the flag: a per-rule metric is present; full containment means the
+    // whole candidate is covered, so the ratio is exactly 1.
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+    let rich = ruleset.query(std::slice::from_ref(&inside), &query);
+    let CandidateOutcome::Matched { rule_ids, overlaps } = &rich[0] else {
+        panic!("expected a match");
+    };
+    assert_eq!(rule_ids, &vec![square_id(&ruleset)]);
+    let overlaps = overlaps.as_ref().unwrap();
+    assert_eq!(overlaps.len(), 1);
+    assert!((overlaps[0].overlap_ratio - 1.0).abs() < 1e-9);
+    assert!(overlaps[0].overlap_area > 0.0);
+}
+
+#[test]
+fn overlap_area_matches_full_candidate_for_containment() {
+    use geo::GeodesicArea;
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+    let rich = ruleset.query(std::slice::from_ref(&inside), &query);
+    let CandidateOutcome::Matched { overlaps, .. } = &rich[0] else {
+        panic!("expected a match");
+    };
+    let metric = &overlaps.as_ref().unwrap()[0];
+    // Full containment: candidate ∩ rule == candidate, so the overlap area
+    // equals the candidate's own geodesic area (computed independently, with
+    // winding-robust `signed().abs()`).
+    let expected_area = inside.geometry.geodesic_area_signed().abs();
+    assert!((metric.overlap_area - expected_area).abs() / expected_area < 1e-9);
+}
+
+#[test]
+fn overlap_ratio_is_bounded_between_zero_and_one() {
+    let ruleset = default_ruleset();
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+
+    let partial = candidate("partial", square(5.0, 5.0, 15.0, 15.0));
+    let rich = ruleset.query(std::slice::from_ref(&partial), &query);
+    let CandidateOutcome::Matched { overlaps, .. } = &rich[0] else {
+        panic!("expected a match");
+    };
+    let metric = &overlaps.as_ref().unwrap()[0];
+    assert!(metric.overlap_ratio > 0.0 && metric.overlap_ratio < 1.0);
+    assert!(metric.overlap_area > 0.0);
+}
+
+#[test]
+fn overlap_mask_is_unchanged_by_the_flag() {
+    let ruleset = default_ruleset();
+    let candidates = vec![
+        candidate("inside", square(2.0, 2.0, 4.0, 4.0)),
+        candidate("partial", square(5.0, 5.0, 15.0, 15.0)),
+        candidate("far", square(50.0, 50.0, 60.0, 60.0)),
+    ];
+    let plain = Query::from_json(&json!({ "spatial": { "predicate": "intersects" } })).unwrap();
+    let with_overlap = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+    assert_eq!(
+        ruleset.query_mask(&candidates, &plain),
+        ruleset.query_mask(&candidates, &with_overlap)
+    );
+    assert_eq!(ruleset.query_mask(&candidates, &plain), vec![1, 1, 0]);
+}
+
+#[test]
+fn overlap_metrics_align_to_matched_rule_ids() {
+    let ruleset = Ruleset::build(vec![
+        rule("a", square(0.0, 0.0, 10.0, 10.0), &[]),
+        rule("b", square(5.0, 5.0, 15.0, 15.0), &[]),
+    ])
+    .unwrap();
+    // Partially overlaps rule "a" (0,0)-(10,10) and is fully inside rule "b".
+    let both = candidate("both", square(8.0, 8.0, 12.0, 12.0));
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+    let rich = ruleset.query(std::slice::from_ref(&both), &query);
+    let CandidateOutcome::Matched { rule_ids, overlaps } = &rich[0] else {
+        panic!("expected a match");
+    };
+    let overlaps = overlaps.as_ref().unwrap();
+    assert_eq!(rule_ids.len(), overlaps.len());
+    assert_eq!(
+        rule_ids,
+        &vec![ruleset.rule_id("a").unwrap(), ruleset.rule_id("b").unwrap()]
+    );
+    // Partial coverage of "a", full coverage of "b".
+    assert!(overlaps[0].overlap_ratio > 0.0 && overlaps[0].overlap_ratio < 1.0);
+    assert!((overlaps[1].overlap_ratio - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn include_overlap_flag_parses_and_validates() {
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+    assert!(query.include_overlap);
+
+    let query = Query::from_json(&json!({ "spatial": { "predicate": "intersects" } })).unwrap();
+    assert!(!query.include_overlap);
+
+    let err = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": "yes"
+    }))
+    .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidQuery);
 }

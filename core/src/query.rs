@@ -54,12 +54,16 @@ impl std::str::FromStr for SpatialPredicate {
 }
 
 /// One batch evaluation: a spatial predicate, an optional property `where`
-/// clause, and optional excluded rule ids (CONTEXT.md §5).
+/// clause, optional excluded rule ids (CONTEXT.md §5), and an opt-in overlap
+/// computation (ADR-0012).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub spatial: SpatialPredicate,
     pub where_clause: Option<WhereExpr>,
     pub exclude_rule_ids: Vec<String>,
+    /// When true, the rich path computes per-matched-rule geodesic overlap
+    /// area/ratio (ADR-0012). The hot-path mask ignores this flag.
+    pub include_overlap: bool,
 }
 
 impl Query {
@@ -68,6 +72,7 @@ impl Query {
             spatial,
             where_clause: None,
             exclude_rule_ids: Vec::new(),
+            include_overlap: false,
         }
     }
 
@@ -81,8 +86,13 @@ impl Query {
         self
     }
 
+    pub fn with_overlap(mut self) -> Self {
+        self.include_overlap = true;
+        self
+    }
+
     /// Parse the JSON query shape (Initial-plan §22):
-    /// `{ "spatial": { "predicate": "..." }, "where": {...}, "excludeRuleIds": [...] }`.
+    /// `{ "spatial": { "predicate": "..." }, "where": {...}, "excludeRuleIds": [...], "includeOverlap": true }`.
     pub fn from_json(value: &serde_json::Value) -> Result<Self, SpatialError> {
         let object = value
             .as_object()
@@ -122,18 +132,41 @@ impl Query {
             }
         };
 
+        let include_overlap = match object.get("includeOverlap") {
+            None => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| SpatialError::invalid_query("'includeOverlap' must be a boolean"))?,
+        };
+
         Ok(Query {
             spatial,
             where_clause,
             exclude_rule_ids,
+            include_overlap,
         })
     }
 }
 
+/// Geodesic overlap between a matched candidate and one rule (ADR-0012).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverlapMetric {
+    /// Area of `candidate ∩ rule` in m² (geo's native geodesic unit).
+    pub overlap_area: f64,
+    /// `geodesic_area(candidate ∩ rule) / geodesic_area(candidate)`, in [0, 1].
+    pub overlap_ratio: f64,
+}
+
 /// The outcome for one candidate, aligned to input order (ADR-0004).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Matched.overlaps` is `Some(per-rule metrics, aligned to `rule_ids`)` only
+/// when the query requested `includeOverlap`; otherwise `None` (ADR-0012).
+#[derive(Debug, Clone, PartialEq)]
 pub enum CandidateOutcome {
-    Matched { rule_ids: Vec<RuleId> },
+    Matched {
+        rule_ids: Vec<RuleId>,
+        overlaps: Option<Vec<OverlapMetric>>,
+    },
     NotMatched,
     Invalid { reason: String },
 }

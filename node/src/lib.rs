@@ -83,7 +83,9 @@ impl SpatialRuleset {
     }
 
     /// Rich per-candidate outcomes as a JSON string (string rule ids, invalid
-    /// reasons), aligned to input order (ADR-0004).
+    /// reasons), aligned to input order (ADR-0004). Honors `includeOverlap`
+    /// (ADR-0012): when set, each matched candidate also carries per-rule
+    /// `overlapArea`/`overlapRatio` geodesic metrics.
     #[napi]
     pub fn query_rich(&self, candidates: Buffer, query: String) -> napi::Result<String, &'static str> {
         let (candidates, query) = parse_inputs(candidates, query)?;
@@ -95,12 +97,29 @@ impl SpatialRuleset {
             .iter()
             .map(|outcome| match outcome {
                 CandidateOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
-                CandidateOutcome::Matched { rule_ids } => {
+                CandidateOutcome::Matched { rule_ids, overlaps } => {
                     let ids: Vec<&str> = rule_ids
                         .iter()
                         .map(|id| ruleset.string_id(*id))
                         .collect();
-                    serde_json::json!({ "outcome": "matched", "ruleIds": ids })
+                    let mut object = serde_json::Map::new();
+                    object.insert("outcome".to_string(), serde_json::json!("matched"));
+                    object.insert("ruleIds".to_string(), serde_json::json!(ids));
+                    if let Some(overlaps) = overlaps {
+                        let per_rule: Vec<serde_json::Value> = rule_ids
+                            .iter()
+                            .zip(overlaps)
+                            .map(|(id, metric)| {
+                                serde_json::json!({
+                                    "ruleId": ruleset.string_id(*id),
+                                    "overlapArea": metric.overlap_area,
+                                    "overlapRatio": metric.overlap_ratio,
+                                })
+                            })
+                            .collect();
+                        object.insert("overlaps".to_string(), serde_json::Value::Array(per_rule));
+                    }
+                    serde_json::Value::Object(object)
                 }
                 CandidateOutcome::Invalid { reason } => {
                     serde_json::json!({ "outcome": "invalid", "reason": reason })
