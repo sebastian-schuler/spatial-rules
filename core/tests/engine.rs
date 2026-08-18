@@ -160,3 +160,34 @@ fn long_running_mixed_workload_stays_consistent() {
     assert!(engine.current().version >= 5);
     assert_eq!(engine.current().rule_count, 1);
 }
+
+#[test]
+fn cached_preparation_survives_repeated_queries_and_invalidates_on_replace() {
+    let engine = Engine::from_geojson(RULE_A).unwrap();
+    let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+
+    // The first query warms the per-thread prepared-geometry cache; the
+    // repeats hit it. Results must agree every time.
+    for _ in 0..3 {
+        let outcomes = engine.query(&candidates, &intersects());
+        assert_eq!(matched_count(&outcomes), 1);
+        assert!(matches!(
+            outcomes[0],
+            spatial_rules_core::CandidateOutcome::Matched { .. }
+        ));
+    }
+
+    // Replacement must invalidate the cache: the same thread now prepares
+    // RULE_B's geometry, not a stale RULE_A.
+    engine.replace_from_geojson(RULE_B).unwrap();
+    let outcomes = engine.query(&candidates, &intersects());
+    assert_eq!(matched_count(&outcomes), 1);
+    assert!(matches!(
+        outcomes[0],
+        spatial_rules_core::CandidateOutcome::NotMatched
+    ));
+    assert!(matches!(
+        outcomes[1],
+        spatial_rules_core::CandidateOutcome::Matched { .. }
+    ));
+}

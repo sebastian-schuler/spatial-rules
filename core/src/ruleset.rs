@@ -1,7 +1,10 @@
 //! Immutable `Ruleset` compilation and the batch query engine
 //! (ADR-0001/0002/0003/0004/0005).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use geo::{BoundingRect, Geometry, PreparedGeometry, Rect, Relate};
 
@@ -15,11 +18,28 @@ use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
 use crate::validation::{classify_candidate, validate_rule_geometry};
 use crate::where_expr::WhereExpr;
 
+/// Owned prepared geometries for one ruleset, shared per thread via `Rc`
+/// (`PreparedGeometry` is `!Send`; see ADR-0010).
+type PreparedGeometries = Rc<Vec<PreparedGeometry<'static, Geometry<f64>>>>;
+
+/// Assigns each [`Ruleset`] a unique identity, used as the per-thread
+/// prepared-geometry cache key (ADR-0010).
+static NEXT_RULESET_ID: AtomicU64 = AtomicU64::new(1);
+
+// Per-thread cache of owned prepared geometries for the most recent ruleset.
+// `PreparedGeometry` is `!Send` in geo 0.33, so it is cached per thread (as
+// owned clones, prepared once per ruleset) rather than in the shared
+// `Arc<Ruleset>`.
+thread_local! {
+    static PREPARED_CACHE: RefCell<Option<(u64, PreparedGeometries)>> = const { RefCell::new(None) };
+}
+
 /// An immutable, query-optimized collection of rules (CONTEXT.md §6).
 ///
 /// Fully built before publication and never mutated afterwards; shared across
 /// requests behind an `Arc`.
 pub struct Ruleset {
+    id: u64,
     rules: Vec<Rule>,
     ids: HashMap<String, RuleId>,
     envelopes: Vec<Rect<f64>>,
@@ -114,6 +134,7 @@ impl Ruleset {
         let property_index: Box<dyn PropertyIndex> = Box::new(EqualityIndex::build(&rules));
 
         Ok(Ruleset {
+            id: NEXT_RULESET_ID.fetch_add(1, Ordering::Relaxed),
             rules,
             ids,
             envelopes,
@@ -199,27 +220,19 @@ impl Ruleset {
             .collect()
     }
 
-    /// Compile a query into a reusable [`PreparedQuery`] that owns the per-call
-    /// preparation: excluded ids, prepared rule geometries, and the indexable
-    /// `where` set. [`PreparedQuery::evaluate`] and [`PreparedQuery::evaluate_mask`]
-    /// share this one preparation across the whole candidate batch. This is the
-    /// planner hook ADR-0003 reserves — a cost-based planner would return a
-    /// differently-shaped query here.
+    /// Compile a query into a reusable [`PreparedQuery`] holding the preparation:
+    /// excluded ids, prepared rule geometries (cached per thread, ADR-0010), and
+    /// the indexable `where` set. [`PreparedQuery::evaluate`] and
+    /// [`PreparedQuery::evaluate_mask`] share this one preparation across the
+    /// whole candidate batch. This is the planner hook ADR-0003 reserves — a
+    /// cost-based planner would return a differently-shaped query here.
     pub fn prepare<'a>(&'a self, query: &Query) -> PreparedQuery<'a> {
         let excluded: HashSet<RuleId> = query
             .exclude_rule_ids
             .iter()
             .filter_map(|id| self.rule_id(id))
             .collect();
-        // Per-call (per-worker) preparation (research 03): ~5 ms for 30 rules,
-        // amortized over the batch. `PreparedGeometry` is not Send/Sync in geo
-        // 0.33, so it stays local to this prepared query — a cross-request cache
-        // waits on a `Send` fix (geo >= 0.34) and plugs in right here.
-        let prepared: Vec<_> = self
-            .rules
-            .iter()
-            .map(|rule| PreparedGeometry::from(&rule.geometry))
-            .collect();
+        let prepared = self.cached_prepared();
         let where_filter = query
             .where_clause
             .as_ref()
@@ -232,6 +245,33 @@ impl Ruleset {
             prepared,
             where_filter,
         }
+    }
+
+    /// The rule geometries prepared for DE-9IM, cached per thread per ruleset
+    /// (ADR-0010). `PreparedGeometry` is `!Send` in geo 0.33, so the owned form
+    /// (cloned once per ruleset) lives in a thread-local keyed by ruleset
+    /// identity rather than in the shared `Arc<Ruleset>`.
+    fn cached_prepared(&self) -> PreparedGeometries {
+        PREPARED_CACHE.with(|cache| {
+            {
+                let cached = cache.borrow();
+                if let Some((id, prepared)) = cached.as_ref() {
+                    if *id == self.id {
+                        return prepared.clone();
+                    }
+                }
+            }
+            // Cache miss or stale entry: clone the rule geometries once per
+            // ruleset, prepare them (owned), and cache for reuse.
+            let prepared: PreparedGeometries = Rc::new(
+                self.rules
+                    .iter()
+                    .map(|rule| PreparedGeometry::from(rule.geometry.clone()))
+                    .collect(),
+            );
+            *cache.borrow_mut() = Some((self.id, prepared.clone()));
+            prepared
+        })
     }
 }
 
@@ -254,16 +294,17 @@ impl<'a> RuleSource<'a> {
     }
 }
 
-/// A query compiled against a ruleset: the per-call preparation that both
-/// `query` and `query_mask` share (ADR-0003/0004). Owns the excluded ids, the
-/// prepared rule geometries, and the indexable `where` set; evaluates each
-/// candidate through the fixed pipeline (bbox → property → DE-9IM).
+/// A query compiled against a ruleset: the preparation that both `query` and
+/// `query_mask` share (ADR-0003/0004). Owns the excluded ids, the prepared
+/// rule geometries (cached per thread, ADR-0010), and the indexable `where`
+/// set; evaluates each candidate through the fixed pipeline
+/// (bbox → property → DE-9IM).
 pub struct PreparedQuery<'a> {
     ruleset: &'a Ruleset,
     spatial: SpatialPredicate,
     where_clause: Option<WhereExpr>,
     excluded: HashSet<RuleId>,
-    prepared: Vec<PreparedGeometry<'a, &'a Geometry<f64>>>,
+    prepared: PreparedGeometries,
     where_filter: Option<HashSet<RuleId>>,
 }
 

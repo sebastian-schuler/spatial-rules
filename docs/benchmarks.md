@@ -13,10 +13,10 @@ footprints against 30 rules returns its match mask in about 20 ms — roughly
 
 **Why it got fast.** The cost was dominated by the exact geometry check ("does
 this footprint touch this zone?"). The fix that mattered was **preparing** each
-rule's geometry once per request (~5 ms for all 30), then reusing that work
-across every footprint — a ~23× speedup on its own. The bounding-box index, by
-contrast, barely helped: with 30 large zones, almost every footprint overlaps
-some zone's box anyway.
+rule's geometry once per ruleset, per thread (~5 ms for all 30), then reusing
+that work across every footprint and every request — a ~23× speedup on its own.
+The bounding-box index, by contrast, barely helped: with 30 large zones, almost
+every footprint overlaps some zone's box anyway.
 
 **Practical impact.** 20 ms is well under the 50 ms ceiling for blocking the
 event loop, so v1 ships a simple synchronous API and needs no async path.
@@ -93,10 +93,11 @@ round-trip.
 - **Prepared geometry is the lever.** It cuts the core query ~23× (B → C/D);
   the bbox index alone gives ≈0 help at 30 large rules (B ≈ C ≈ D when
   unprepared).
-- **Prepare cost is negligible** (~4.6 ms for 30 rules), so per-call
-  preparation is the production path. `PreparedGeometry` is `!Send` in geo
-  0.33, so it is built once per `query()` call rather than stored in the
-  shared `Arc<Ruleset>`.
+- **Prepare cost is ~4.6 ms for 30 rules**, now paid once per thread per
+  ruleset: `PreparedGeometry` is `!Send` in geo 0.33, so owned prepared
+  geometries are cached in a `thread_local!` keyed by ruleset identity
+  (ADR-0010) rather than rebuilt per query or stored in the shared
+  `Arc<Ruleset>`.
 - **ADR-0009 gate met**: sync p50 ≈ 20 ms ≪ 50 ms, so `queryAsync()` is not
   needed for v1.
 - **Correctness**: the turf cross-check is green; Rust and turf agree on all
