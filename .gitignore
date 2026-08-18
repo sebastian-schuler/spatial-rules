@@ -4,3 +4,9 @@ node_modules/
 
 # Internal-only docs (application concepts that must not go public).
 docs/internal/
+
+# Downloaded data files for benchmarks (not part of the source code).
+benchmarks/js/*.geojson
+
+# Local benchmark config (bun auto-loads .env); see docs/benchmarks.md §4.
+benchmarks/js/.env

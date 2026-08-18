@@ -145,8 +145,9 @@ Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
 
 Four harnesses demonstrate turf.js's limits and why the engine exists
 (`cd benchmarks/js && npm install`, then `npm run scale` / `npm run fair` /
-`npm run http` / `npm run complex`). All workloads assert turf and the addon
-agree on the matched count before timing.
+`npm run http` / `npm run complex` — the scripts run under `bun`, which also
+auto-loads `benchmarks/js/.env`). All workloads assert turf and the addon agree
+on the matched count before timing.
 
 ### 1. Scaling sweep (`scale.mjs`)
 
@@ -199,7 +200,9 @@ equivalent hand-rolled turf in-process (a lower bound: turf has no
 Synthetic "coastline" rules with tens of thousands of vertices, multiple parts,
 holes, and dozens of typed properties (defaults: 3 rules × 3 parts × 5,000
 vertices/ring + 40 fields ≈ 1.8 MB, 47k vertices). `RULES_FILE=deu.geojson
-node complex.mjs` runs the same measurements on any real boundary file.
+bun complex.mjs` runs the same measurements on any real boundary file — in
+real-data mode candidates are derived from the file's own geometry and the
+`where` clause is picked from the data (see below).
 
 | phase | time |
 |---|---|
@@ -220,11 +223,22 @@ node complex.mjs` runs the same measurements on any real boundary file.
   domain; every country becomes one complex MultiPolygon rule):
 
   ```bash
+  cd benchmarks/js
   curl -L -o countries.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson
-  # optionally keep just one country (jq):
-  jq '{type:"FeatureCollection",features:[.features[]|select(.properties.ADMIN=="Germany")]}' countries.geojson > deu.geojson
-  RULES_FILE=deu.geojson node benchmarks/js/complex.mjs
+  # keep just one country (bun, no jq needed):
+  bun -e "const fs=require('fs');const g=JSON.parse(fs.readFileSync('countries.geojson','utf8'));fs.writeFileSync('deu.geojson',JSON.stringify({type:'FeatureCollection',features:g.features.filter(x=>x.properties.ADMIN==='Germany')}))"
+  # bun auto-loads .env, so set the file there for a persistent default:
+  printf 'RULES_FILE="deu.geojson"\n' > .env   # PowerShell: Set-Content -Value 'RULES_FILE="deu.geojson"' -Path .env
+  bun complex.mjs
   ```
+
+  Real-data mode samples the first feature's boundary for candidate squares
+  (sized from its bbox) and derives the `where` clause from a shared string
+  property on that feature (e.g. `CONTINENT=Asia`); the synthetic
+  `classification` filter is only used when no `RULES_FILE` is set. Filter to
+  a single country for this harness — the full `countries.geojson` (258
+  features) makes the naive turf baseline scan take minutes; that many-rules
+  case is what `scale.mjs` covers.
 
 ## Commands
 

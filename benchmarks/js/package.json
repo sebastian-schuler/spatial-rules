@@ -3,12 +3,12 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "cross-check": "node cross_check.mjs",
-        "perf": "node perf.mjs",
-        "scale": "node scale.mjs",
-        "fair": "node fair.mjs",
-        "http": "node http-bench.mjs",
-        "complex": "node complex.mjs"
+        "cross-check": "bun cross_check.mjs",
+        "perf": "bun perf.mjs",
+        "scale": "bun scale.mjs",
+        "fair": "bun fair.mjs",
+        "http": "bun http-bench.mjs",
+        "complex": "bun complex.mjs"
     },
     "devDependencies": {
         "@turf/turf": "6.5.0",
