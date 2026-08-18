@@ -44,9 +44,10 @@ Built the benchmark dataset, harness, and turf.js cross-check; committed to `mai
 - **Harness** (`benchmarks/benches/ladder.rs`, criterion): `cargo bench -p spatial-rules-benchmarks --bench ladder` — batch latency/throughput for B/C/D plus ruleset build time.
 - **Initial numbers** (release, 1,000 × 30): B naive **436.8 ms**, C linear-scan bbox **465.9 ms**, D rstar bbox **458.5 ms**, build **23.6 ms**. Exact DE-9IM `Relate` dominates; the bbox index gives ≈0 help at 30 large rules (research 02/03). ADR-0009 trigger fired: sync p50 ≈ 458 ms ≫ 50 ms.
 - **turf.js cross-check** (`benchmarks/js/` + `benchmarks/src/bin/cross_check.rs`): a 10-pair DE-9IM matrix (disjoint, overlap, touching edge/corner, identical, containment, holes, MultiPolygon) diffed against pinned `@turf/turf@6.5.0` (JSTS-based). **Green.** Known quirk: turf v6 `booleanContains` rejects a MultiPolygon *contained* geometry, so `contains` is skipped for those pairs (`intersects`/`within` still verified; the skipped value is hand-checked per DE-9IM). Run: `cargo build --release -p spatial-rules-benchmarks --bin cross_check`, then `cd benchmarks/js && npm install && npm run cross-check`.
+- **Perf comparison vs JS** (`benchmarks/js/perf.mjs`, `npm run perf`): turf.js (naive baseline A, early-exit) **1103 ms**/batch vs native addon **484 ms**/batch = **2.3×**; both report the same 481 matched candidates. Caveat: turf is a naive proxy, not the production app's JS, and the bbox index gives ≈0 help at 30 large rules, so both sides are dominated by exact `Relate` — prepared geometry (E/F) is the remaining lever.
 
 **Explicit deferrals** (documented, not blockers):
-- Ladder **A** (existing JS implementation) is out-of-repo — compare the production app separately.
+- Ladder **A** (the production JS) is out-of-repo; a turf.js proxy is now measured (`benchmarks/js/perf.mjs`, 1103 ms/batch vs 484 ms = 2.3×).
 - Ladder **E/F** (prepared geometries) needs a per-worker prepare path in core first (research 03); the numbers show it is the dominant lever.
 - **Memory** (steady-state/peak) is best measured in the Docker container (tickets 17/19).
  This ticket unblocks Sync vs async query and replacement API.
