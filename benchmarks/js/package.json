@@ -4,9 +4,13 @@
     "type": "module",
     "scripts": {
         "cross-check": "node cross_check.mjs",
-        "perf": "node perf.mjs"
+        "perf": "node perf.mjs",
+        "scale": "node scale.mjs",
+        "fair": "node fair.mjs",
+        "http": "node http-bench.mjs"
     },
     "devDependencies": {
-        "@turf/turf": "6.5.0"
+        "@turf/turf": "6.5.0",
+        "rbush": "3.0.1"
     }
 }
