@@ -8,7 +8,8 @@
         "scale": "bun scale.mjs",
         "fair": "bun fair.mjs",
         "http": "bun http-bench.mjs",
-        "complex": "bun complex.mjs"
+        "complex": "bun complex.mjs",
+        "crossover": "bun crossover.mjs"
     },
     "devDependencies": {
         "@turf/turf": "6.5.0",

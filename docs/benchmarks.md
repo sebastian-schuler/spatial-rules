@@ -143,11 +143,11 @@ Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
 
 ## Limitations suite — why turf doesn't scale
 
-Four harnesses demonstrate turf.js's limits and why the engine exists
+Five harnesses demonstrate turf.js's limits and why the engine exists
 (`cd benchmarks/js && npm install`, then `npm run scale` / `npm run fair` /
-`npm run http` / `npm run complex` — the scripts run under `bun`, which also
-auto-loads `benchmarks/js/.env`). All workloads assert turf and the addon agree
-on the matched count before timing.
+`npm run http` / `npm run complex` / `npm run crossover` — the scripts run
+under `bun`, which also auto-loads `benchmarks/js/.env`). All workloads assert
+turf and the addon agree on the matched count before timing.
 
 ### 1. Scaling sweep (`scale.mjs`)
 
@@ -230,10 +230,12 @@ feature; invalid rules are dropped so both sides agree (see below).
 - The one-time build (0.9 s synthetic, **17.6 s** real) is dominated by strict
   geometry validation; the 168-property index adds no measurable query cost.
 - The addon's ~5 ms real-data query is its per-call floor (GeoJSON re-parse +
-  napi + index) — at 20 candidates the single overlapping country means turf's
-  bbox fast-reject is near-free. A true naive turf scan (relate every candidate
-  × every country, ~5,100 relates) takes minutes; the bbox fast-reject is the
-  hand-rolled baseline an `rbush` index would replace (see `fair.mjs`).
+  napi + index) — at 20 candidates clustered on one country, turf's bbox
+  fast-reject has almost no relate work, so it lands below that floor. A true
+  naive turf scan (relate every candidate × every country, ~5,100 relates)
+  takes minutes; the bbox fast-reject is the hand-rolled baseline an `rbush`
+  index would replace. The opposite corner — candidates spread across the
+  whole map, so every one does a real relate — is the crossover sweep in §5.
 - Natural Earth has one country with a self-intersecting exterior; the engine's
   strict validation (ADR-0005) rejects it and the harness drops it (257 rules
   loaded, "1 invalid dropped" in the output).
@@ -253,6 +255,32 @@ feature; invalid rules are dropped so both sides agree (see below).
   RULES_FILE=deu.geojson bun complex.mjs
   ```
 
+### 5. Crossover sweep (`crossover.mjs`)
+
+At how many candidates does the native binding beat a hand-rolled turf scan?
+Sweeps candidates 20 → 5,000 (min-of-3) on the real `countries.geojson`
+ruleset, with candidates scattered across the whole map (sampled from every
+country's boundary, so each one does a real relate). Full addon query vs turf
+scan + bbox fast-reject, matched counts asserted each step.
+
+| candidates | addon (ms) | turf (ms) | speedup |
+|---|---|---|---|
+| 20 | 8.8 | 42.7 | 4.9× |
+| 200 | 80.6 | 553.0 | 6.9× |
+| 1,000 | 392.9 | 2,868.6 | 7.3× |
+| 5,000 | 1,903.3 | 14,392.0 | 7.6× |
+
+- With candidates spread over the map both sides do roughly the same relates;
+  the ~5–8× and growing gap is dominated by prepared geometry (ADR-0010)
+  beating turf's JSTS relate per call. The R*-tree contributes little here (only
+  257 rules) — its payoff shows at 10k+ rules in `scale.mjs`.
+- The addon wins from the smallest size tested (20); its ~5 ms per-query floor
+  only matters below ~20 candidates. §4's 0.4 ms turf figure is the opposite
+  corner — 20 candidates clustered on one country, where turf has almost no
+  relate work and the addon's floor dominates.
+- Falls back to a synthetic 500-rule grid when no `RULES_FILE` is set;
+  `RULES=… SIZES=… REPS=…` tune it.
+
 ## Commands
 
 ```bash
@@ -265,6 +293,7 @@ cd benchmarks/js && npm run scale                             # scaling sweep (�
 cd benchmarks/js && npm run fair                              # rbush+turf fair competitor
 cd benchmarks/js && npm run http                              # full query over HTTP
 cd benchmarks/js && npm run complex                           # complexity & metadata stress
+cd benchmarks/js && npm run crossover                         # candidate-count crossover sweep
 
 cd integration && bun memory.mjs                              # container memory (§24/§25)
 REPLACEMENTS_ONLY=1 bun memory.mjs                            # isolate replacement peak
