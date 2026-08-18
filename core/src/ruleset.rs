@@ -253,6 +253,28 @@ impl Ruleset {
         self.spatial_index.query_envelope(envelope)
     }
 
+    /// Serialize the canonical **rules** (not the compiled indexes) to JSON
+    /// bytes (ADR-0013). Deterministic: properties are a sorted `BTreeMap` and
+    /// geometry is the validated/canonicalized `geo` geometry.
+    pub fn to_canonical(&self) -> Result<Vec<u8>, SpatialError> {
+        serde_json::to_vec(&self.rules).map_err(|e| {
+            SpatialError::new(
+                ErrorCode::Native,
+                format!("serialize canonical ruleset: {e}"),
+            )
+        })
+    }
+
+    /// Load a ruleset from canonical JSON bytes, re-running the full build
+    /// (validation, envelopes, rstar index, property index) and assigning a
+    /// **fresh `Ruleset.id`** — the id is never persisted (ADR-0010, ADR-0013).
+    pub fn from_canonical(input: &[u8]) -> Result<Self, SpatialError> {
+        let rules: Vec<Rule> = serde_json::from_slice(input).map_err(|e| {
+            SpatialError::invalid_geojson(format!("failed to parse canonical ruleset: {e}"))
+        })?;
+        Self::build(rules)
+    }
+
     /// Rules in ruleset order, via a [`RuleSource`] — the seam the benchmark
     /// ladder consumes (ADR-0002). It replaces the two ladder-only positional
     /// accessors (`rule_ids`/`rule_geometries`); the per-id accessors
@@ -464,5 +486,35 @@ impl<'a> PreparedQuery<'a> {
         } else {
             (Verdict::NotMatched, matched, overlaps)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use geo::LineString;
+
+    fn sample_rules() -> Vec<Rule> {
+        vec![Rule {
+            id: "zone".to_string(),
+            properties: BTreeMap::new(),
+            geometry: Geometry::Polygon(geo::Polygon::new(
+                LineString::from(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]),
+                vec![],
+            )),
+        }]
+    }
+
+    #[test]
+    fn from_canonical_assigns_a_fresh_id() {
+        let original = Ruleset::build(sample_rules()).unwrap();
+        let bytes = original.to_canonical().unwrap();
+
+        let loaded = Ruleset::from_canonical(&bytes).unwrap();
+        assert_ne!(original.id, loaded.id);
+
+        // Two loads from the same bytes are also distinct instances.
+        let loaded_again = Ruleset::from_canonical(&bytes).unwrap();
+        assert_ne!(loaded.id, loaded_again.id);
     }
 }

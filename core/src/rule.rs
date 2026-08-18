@@ -15,7 +15,7 @@ use crate::properties::PropertyValue;
 pub struct RuleId(pub(crate) u32);
 
 /// A geometry-bearing rule with queryable properties (CONTEXT.md §4.1).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rule {
     /// Application-supplied identifier; internally mapped to a [`RuleId`].
     pub id: String,

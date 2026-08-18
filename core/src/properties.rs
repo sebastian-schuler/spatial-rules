@@ -8,7 +8,12 @@ use std::fmt;
 /// JSON numbers become [`PropertyValue::Int`] when integral and
 /// [`PropertyValue::Float`] otherwise. Nested objects and arrays are out of
 /// scope for v1 and are not stored.
-#[derive(Debug, Clone)]
+///
+/// Serializes to the plain JSON scalar it wraps (ADR-0013: canonical ruleset
+/// persistence), so a ruleset's properties round-trip as `null`/`true`/`10`/
+/// `1.5`/`"x"` rather than an externally-tagged enum shape.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
 pub enum PropertyValue {
     Null,
     Bool(bool),

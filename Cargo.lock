@@ -401,6 +401,7 @@ dependencies = [
  "rand_pcg",
  "robust",
  "rstar 0.12.2",
+ "serde",
  "sif-itree",
  "spade",
 ]
@@ -1091,6 +1092,7 @@ dependencies = [
  "geo",
  "geojson",
  "rstar 0.13.0",
+ "serde",
  "serde_json",
 ]
 

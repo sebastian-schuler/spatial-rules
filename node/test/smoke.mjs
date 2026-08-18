@@ -155,4 +155,22 @@ assert.equal(report.ruleCount, 1);
 // After replacement the new ruleset is active: no candidate matches spatially.
 assert.deepEqual(Array.from(ruleset.query(candidates, intersects)), [0, 0, 2]);
 
+// Canonical ruleset persistence (ADR-0013): toJSON / fromCanonical round-trip.
+const canonical = ruleset.toJSON();
+const parsedCanonical = JSON.parse(canonical);
+assert.ok(Array.isArray(parsedCanonical));
+assert.equal(parsedCanonical.length, 1);
+assert.equal(parsedCanonical[0].id, 'zone-d');
+
+const canonicalReport = JSON.parse(ruleset.fromCanonical(Buffer.from(canonical)));
+assert.equal(canonicalReport.version, 3);
+assert.equal(canonicalReport.ruleCount, 1);
+
+// Invalid canonical input rejects and leaves the ruleset untouched.
+assert.throws(
+  () => ruleset.fromCanonical(Buffer.from('not json')),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_GEOJSON',
+);
+assert.equal(JSON.parse(ruleset.stats()).version, 3);
+
 console.log('smoke test passed');

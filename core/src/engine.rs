@@ -98,6 +98,14 @@ impl Engine {
         Ok(self.swap(new_ruleset, started.elapsed().as_millis() as u64))
     }
 
+    /// Replace from canonical ruleset JSON (ADR-0013): load off the hot path,
+    /// then publish atomically so a failed load keeps the old ruleset.
+    pub fn replace_from_canonical(&self, input: &[u8]) -> Result<ReplaceReport, SpatialError> {
+        let started = Instant::now();
+        let new_ruleset = Ruleset::from_canonical(input)?;
+        Ok(self.swap(new_ruleset, started.elapsed().as_millis() as u64))
+    }
+
     /// Publish a compiled ruleset and update observability in one critical
     /// section, so a `current()` read never observes the new ruleset with
     /// stale counters. No other path holds both locks, so the ordering is

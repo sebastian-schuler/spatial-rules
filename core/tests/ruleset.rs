@@ -288,3 +288,51 @@ fn rule_source_iterates_in_ruleset_order() {
     assert_eq!(collected[1].0, zone_b);
     assert_eq!(*collected[1].2, Rect::new((100.0, 100.0), (110.0, 110.0)));
 }
+
+#[test]
+fn canonical_round_trip_preserves_rules() {
+    let original = Ruleset::from_geojson(GEOJSON).unwrap();
+    let bytes = original.to_canonical().unwrap();
+    let loaded = Ruleset::from_canonical(&bytes).unwrap();
+
+    assert_eq!(loaded.len(), original.len());
+    for (source_id, source_geometry, source_envelope) in original.rules().iter() {
+        let id = original.string_id(source_id);
+        let target_id = loaded.rule_id(id).expect("rule id survives the round trip");
+        assert_eq!(loaded.geometry(target_id), source_geometry);
+        assert_eq!(*loaded.envelope(target_id), *source_envelope);
+        assert_eq!(
+            loaded.properties(target_id),
+            original.properties(source_id)
+        );
+    }
+}
+
+#[test]
+fn from_canonical_rejects_malformed_input() {
+    let err = Ruleset::from_canonical(b"not json").unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidGeoJson);
+}
+
+#[test]
+fn from_canonical_rejects_invalid_geometry() {
+    // A canonical ruleset holding a self-intersecting bowtie must fail the
+    // same validation as any other load path (ADR-0013).
+    let bowtie = Rule {
+        id: "bad".to_string(),
+        properties: BTreeMap::new(),
+        geometry: geo::Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    };
+    let bytes = serde_json::to_vec(&vec![bowtie]).unwrap();
+    let err = Ruleset::from_canonical(&bytes).unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidGeometry);
+}

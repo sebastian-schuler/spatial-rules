@@ -191,3 +191,23 @@ fn cached_preparation_survives_repeated_queries_and_invalidates_on_replace() {
         spatial_rules_core::CandidateOutcome::Matched { .. }
     ));
 }
+
+#[test]
+fn replace_from_canonical_swaps_and_rejects_invalid_input() {
+    let engine = Engine::from_geojson(RULE_A).unwrap();
+    let canonical = engine.snapshot().to_canonical().unwrap();
+
+    // Loading the canonical form re-compiles and publishes a fresh ruleset.
+    let report = engine.replace_from_canonical(&canonical).unwrap();
+    assert_eq!(report.version, 2);
+    assert_eq!(report.rule_count, 1);
+
+    // A failed load leaves the old ruleset untouched (ADR-0013).
+    let err = engine.replace_from_canonical(b"not json").unwrap_err();
+    assert_eq!(err.code, spatial_rules_core::ErrorCode::InvalidGeoJson);
+    assert_eq!(engine.current().version, 2);
+
+    let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+    let outcomes = engine.query(&candidates, &intersects());
+    assert_eq!(matched_count(&outcomes), 1);
+}

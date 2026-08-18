@@ -152,4 +152,30 @@ impl SpatialRuleset {
     pub fn stats(&self) -> napi::Result<String, &'static str> {
         report_to_string(self.engine.current())
     }
+
+    /// Serialize the current ruleset to its canonical JSON form (ADR-0013):
+    /// the validated rules, not the compiled indexes.
+    #[napi(js_name = "toJSON")]
+    pub fn to_json(&self) -> napi::Result<String, &'static str> {
+        let ruleset = self.engine.snapshot();
+        let bytes = ruleset.to_canonical().map_err(spatial_error_to_napi)?;
+        String::from_utf8(bytes).map_err(|e| {
+            spatial_error_to_napi(SpatialError::new(
+                ErrorCode::Native,
+                format!("canonical ruleset is not valid UTF-8: {e}"),
+            ))
+        })
+    }
+
+    /// Replace the active ruleset from canonical JSON `Buffer`, built off the
+    /// hot path and published atomically (ADR-0013). A failed load keeps the
+    /// old ruleset. Returns ADR-0007 observability as a JSON string.
+    #[napi]
+    pub fn from_canonical(&self, rules: Buffer) -> napi::Result<String, &'static str> {
+        let report = self
+            .engine
+            .replace_from_canonical(rules.as_ref())
+            .map_err(spatial_error_to_napi)?;
+        report_to_string(report)
+    }
 }

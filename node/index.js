@@ -96,6 +96,22 @@ export class SpatialRuleset {
     }
   }
 
+  toJSON() {
+    try {
+      return this._native.toJSON();
+    } catch (err) {
+      rethrow(err);
+    }
+  }
+
+  fromCanonical(rules) {
+    try {
+      return this._native.fromCanonical(rules);
+    } catch (err) {
+      rethrow(err);
+    }
+  }
+
   stats() {
     try {
       return this._native.stats();
