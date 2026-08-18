@@ -78,4 +78,29 @@ assert.throws(
   (e) => e instanceof SpatialRulesError && e.code === 'SR_UNSUPPORTED_SPATIAL_PREDICATE',
 );
 
+// Dynamic replacement (ADR-0007): atomic swap + observability.
+const stats = JSON.parse(ruleset.stats());
+assert.equal(stats.version, 1);
+assert.equal(stats.ruleCount, 2);
+
+const replacement = Buffer.from(
+  JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        id: 'zone-d',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [[[100, 100], [100, 110], [110, 110], [110, 100], [100, 100]]] },
+      },
+    ],
+  }),
+);
+const report = JSON.parse(ruleset.replace(replacement));
+assert.equal(report.version, 2);
+assert.equal(report.ruleCount, 1);
+
+// After replacement the new ruleset is active: no candidate matches spatially.
+assert.deepEqual(Array.from(ruleset.query(candidates, intersects)), [0, 0, 2]);
+
 console.log('smoke test passed');

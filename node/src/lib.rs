@@ -2,13 +2,17 @@
 //!
 //! Hot path is byte-oriented: `query(buffer, query) -> Uint8Array` mask
 //! (`0` = no match, `1` = matched, `2` = invalid). A richer API returns
-//! per-candidate objects with original string rule ids. Construction/query
-//! errors are thrown as JS errors carrying a stable `SR_*` code (ADR-0005).
+//! per-candidate objects with original string rule ids. `replace(buffer)`
+//! swaps the active ruleset atomically and returns ADR-0007 observability.
+//! Construction/query errors are thrown as JS errors carrying a stable `SR_*`
+//! code (ADR-0005).
 
 use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
-use spatial_rules_core::{candidates_from_geojson, CandidateOutcome, Query, Ruleset, SpatialError};
+use spatial_rules_core::{
+    candidates_from_geojson, CandidateOutcome, Engine, Query, ReplaceReport, SpatialError,
+};
 
 fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
     Error::new(error.code.as_str(), error.message)
@@ -29,19 +33,33 @@ fn parse_query(query_json: &str) -> napi::Result<Query, &'static str> {
     Query::from_json(&value).map_err(spatial_error_to_napi)
 }
 
+fn report_to_json(report: ReplaceReport) -> serde_json::Value {
+    serde_json::json!({
+        "version": report.version,
+        "ruleCount": report.rule_count,
+        "buildDurationMs": report.build_duration_ms,
+        "lastSwapTime": report.last_swap_time_unix_ms,
+    })
+}
+
+fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str> {
+    serde_json::to_string(&report_to_json(report))
+        .map_err(|e| Error::new("SR_NATIVE", format!("serialize report: {e}")))
+}
+
 #[napi]
 pub struct SpatialRuleset {
-    ruleset: Ruleset,
+    engine: Engine,
 }
 
 #[napi]
 impl SpatialRuleset {
-    /// Construct an immutable ruleset from a GeoJSON FeatureCollection `Buffer`.
+    /// Construct an engine from a GeoJSON FeatureCollection `Buffer`.
     #[napi(constructor)]
     pub fn new(rules: Buffer) -> napi::Result<Self, &'static str> {
         let text = bytes_to_str(&rules, "rules")?;
-        let ruleset = Ruleset::from_geojson(text).map_err(spatial_error_to_napi)?;
-        Ok(SpatialRuleset { ruleset })
+        let engine = Engine::from_geojson(text).map_err(spatial_error_to_napi)?;
+        Ok(SpatialRuleset { engine })
     }
 
     /// Evaluate candidates (GeoJSON `Buffer`) against `query` (JSON string) and
@@ -51,7 +69,7 @@ impl SpatialRuleset {
         let text = bytes_to_str(&candidates, "candidates")?;
         let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
         let query = parse_query(&query)?;
-        let outcomes = self.ruleset.query(&candidates, &query);
+        let outcomes = self.engine.query(&candidates, &query);
         let mut mask = vec![0u8; outcomes.len()];
         for (index, outcome) in outcomes.iter().enumerate() {
             mask[index] = match outcome {
@@ -70,7 +88,10 @@ impl SpatialRuleset {
         let text = bytes_to_str(&candidates, "candidates")?;
         let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
         let query = parse_query(&query)?;
-        let outcomes = self.ruleset.query(&candidates, &query);
+        // Snapshot once so outcomes and their string ids come from the same
+        // ruleset (a concurrent replace can't tear them apart, ADR-0007).
+        let ruleset = self.engine.snapshot();
+        let outcomes = ruleset.query(&candidates, &query);
         let rich: Vec<serde_json::Value> = outcomes
             .iter()
             .map(|outcome| match outcome {
@@ -78,7 +99,7 @@ impl SpatialRuleset {
                 CandidateOutcome::Matched { rule_ids } => {
                     let ids: Vec<&str> = rule_ids
                         .iter()
-                        .map(|id| self.ruleset.string_id(*id))
+                        .map(|id| ruleset.string_id(*id))
                         .collect();
                     serde_json::json!({ "outcome": "matched", "ruleIds": ids })
                 }
@@ -89,5 +110,24 @@ impl SpatialRuleset {
             .collect();
         serde_json::to_string(&rich)
             .map_err(|e| Error::new("SR_NATIVE", format!("serialize result: {e}")))
+    }
+
+    /// Replace the active ruleset from a GeoJSON FeatureCollection `Buffer`,
+    /// fully built off the hot path and published atomically. Returns ADR-0007
+    /// observability as a JSON string.
+    #[napi]
+    pub fn replace(&self, rules: Buffer) -> napi::Result<String, &'static str> {
+        let text = bytes_to_str(&rules, "rules")?;
+        let report = self
+            .engine
+            .replace_from_geojson(text)
+            .map_err(spatial_error_to_napi)?;
+        report_to_string(report)
+    }
+
+    /// Observability for the current ruleset as a JSON string.
+    #[napi]
+    pub fn stats(&self) -> napi::Result<String, &'static str> {
+        report_to_string(self.engine.current())
     }
 }

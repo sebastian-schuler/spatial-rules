@@ -7,6 +7,7 @@
 //! the requirements source of truth.
 
 mod candidate;
+mod engine;
 mod error;
 mod ingestion;
 mod properties;
@@ -19,6 +20,7 @@ mod validation;
 mod where_expr;
 
 pub use candidate::Candidate;
+pub use engine::{Engine, ReplaceReport};
 pub use error::{ErrorCode, SpatialError};
 pub use ingestion::{
     candidate_from_feature, candidates_from_geojson, feature_geometry, parse_geojson,

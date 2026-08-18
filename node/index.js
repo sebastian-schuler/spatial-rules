@@ -49,4 +49,20 @@ export class SpatialRuleset {
       rethrow(err);
     }
   }
+
+  replace(rules) {
+    try {
+      return this._native.replace(rules);
+    } catch (err) {
+      rethrow(err);
+    }
+  }
+
+  stats() {
+    try {
+      return this._native.stats();
+    } catch (err) {
+      rethrow(err);
+    }
+  }
 }
