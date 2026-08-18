@@ -39,6 +39,8 @@ thread_local! {
 /// Fully built before publication and never mutated afterwards; shared across
 /// requests behind an `Arc`.
 pub struct Ruleset {
+    /// Unique identity of this compiled ruleset instance (distinct from
+    /// `Engine`'s replacement `version`) — the prepared-geometry cache key.
     id: u64,
     rules: Vec<Rule>,
     ids: HashMap<String, RuleId>,
@@ -262,7 +264,7 @@ impl Ruleset {
                 }
             }
             // Cache miss or stale entry: clone the rule geometries once per
-            // ruleset, prepare them (owned), and cache for reuse.
+            // thread per ruleset, prepare them (owned), and cache for reuse.
             let prepared: PreparedGeometries = Rc::new(
                 self.rules
                     .iter()
