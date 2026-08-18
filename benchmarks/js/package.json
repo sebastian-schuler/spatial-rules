@@ -7,7 +7,8 @@
         "perf": "node perf.mjs",
         "scale": "node scale.mjs",
         "fair": "node fair.mjs",
-        "http": "node http-bench.mjs"
+        "http": "node http-bench.mjs",
+        "complex": "node complex.mjs"
     },
     "devDependencies": {
         "@turf/turf": "6.5.0",

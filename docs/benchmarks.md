@@ -143,10 +143,10 @@ Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
 
 ## Limitations suite — why turf doesn't scale
 
-Three harnesses demonstrate turf.js's limits and why the engine exists
+Four harnesses demonstrate turf.js's limits and why the engine exists
 (`cd benchmarks/js && npm install`, then `npm run scale` / `npm run fair` /
-`npm run http`). All workloads assert turf and the addon agree on the matched
-count before timing.
+`npm run http` / `npm run complex`). All workloads assert turf and the addon
+agree on the matched count before timing.
 
 ### 1. Scaling sweep (`scale.mjs`)
 
@@ -194,6 +194,29 @@ equivalent hand-rolled turf in-process (a lower bound: turf has no
 - **8×**, and the addon serves the complete query (parse + `where` + exclusions
   + mask) where turf needs application code around it.
 
+### 4. Complexity & metadata stress (`complex.mjs`)
+
+Synthetic "coastline" rules with tens of thousands of vertices, multiple parts,
+holes, and dozens of typed properties (defaults: 3 rules × 3 parts × 5,000
+vertices/ring + 40 fields ≈ 1.8 MB, 47k vertices). `RULES_FILE=deu.geojson
+node complex.mjs` runs the same measurements on any real boundary file.
+
+| phase | time |
+|---|---|
+| build (parse + validate + index) | ~920 ms |
+| first query (prepared-geometry build) | ~57 ms |
+| query, steady state (20 candidates) | **0.86 ms** |
+| turf, same query | 3.0 ms |
+
+- The addon's steady-state query is **independent of rule complexity**:
+  prepared geometries (ADR-0010) mean a 47k-vertex ruleset queries as fast as a
+  small one; turf's per-relate cost grows with vertex count (JSTS noding).
+- The one-time build (~920 ms) is dominated by strict geometry validation; the
+  property index over 41 fields adds no measurable query cost.
+- `core/tests/complex.rs` asserts correctness at scale (2,000-vertex rule,
+  40 properties, holes, indexed `where`); larger sizes stay in this benchmark,
+  where the release addon avoids debug-mode validation cost.
+
 ## Commands
 
 ```bash
@@ -205,6 +228,7 @@ cd benchmarks/js && npm run perf                              # JS baseline vs a
 cd benchmarks/js && npm run scale                             # scaling sweep (§limitations)
 cd benchmarks/js && npm run fair                              # rbush+turf fair competitor
 cd benchmarks/js && npm run http                              # full query over HTTP
+cd benchmarks/js && npm run complex                           # complexity & metadata stress
 
 cd integration && bun memory.mjs                              # container memory (§24/§25)
 REPLACEMENTS_ONLY=1 bun memory.mjs                            # isolate replacement peak
