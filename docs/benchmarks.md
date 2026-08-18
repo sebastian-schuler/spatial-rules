@@ -151,12 +151,15 @@ turf and the addon agree on the matched count before timing.
 
 #### How the measurements are taken (and why it's fair to turf)
 
-- **The addon is timed for the full call a user makes**: `ruleset.query(buffer,
-  queryJson)` — GeoJSON parse + napi + index + relate + mask, every query.
+- **The addon is timed for the full steady-state call a user makes**:
+  `ruleset.query(buffer, queryJson)` — GeoJSON parse + napi + index + relate +
+  mask, every query; the one-time prepared-geometry build is warmed first
+  (ADR-0010) and excluded.
 - **The turf side is timed only for the relate loop**, and is given the benefit
   of every cheap optimization: geometries pre-parsed into JS objects, per-rule
-  and per-candidate bboxes precomputed *outside* the timed region, and a warmup
-  call so JIT is hot. It never re-serializes or re-parses.
+  and per-candidate bboxes precomputed *outside* the timed region, and the
+  correctness assertion runs the scan once first so JIT is hot before timing.
+  It never re-serializes or re-parses.
 - Both sides are measured **min-of-N reps** (N = 3) to damp scheduler/GC noise,
   and the matched count is asserted equal *before* timing — so the numbers are
   never comparing a wrong answer.
@@ -306,19 +309,20 @@ scan + bbox fast-reject, matched counts asserted each step.
 **Second axis — rule count** (`MODE=rules bun crossover.mjs`, synthetic grid,
 fixed 1,000 candidates):
 
-| rules | addon (ms) | turf (ms) | speedup |
-|---|---|---|---|
-| 500 | 3.5 | 11.8 | 3.4× |
-| 1,000 | 4.0 | 13.6 | 3.4× |
-| 2,000 | 4.7 | 17.5 | 3.8× |
-| 5,000 | 4.9 | 21.9 | 4.5× |
+| rules | addon (ms) | turf (ms) | speedup | matched |
+|---|---|---|---|---|
+| 500 | 3.45 | 11.83 | 3.4× | 612 |
+| 1,000 | 3.97 | 13.59 | 3.4× | 637 |
+| 2,000 | 4.65 | 17.54 | 3.8× | 641 |
+| 5,000 | 4.86 | 21.85 | 4.5× | 655 |
 
 - The R*-tree keeps the addon ~flat (3.5 → 4.9 ms over 10× rules) while turf's
   scan + bbox reject grows with the scan (11.8 → 21.9 ms) — the index payoff at
   moderate rule counts; the naive-scan version at 30 → 300 rules is §1 (up to
   941×).
-- Grid candidates land on ~35% of rules' centre holes, so matched ≈ 650 here —
-  both sides still agree, and the relate work is unchanged.
+- Grid candidates land on ~35% of rules' centre holes, so matched is ~65% of
+  the 1,000 candidates (see the `matched` column) — both sides still agree, and
+  the relate work is unchanged.
 
 ## Commands
 

@@ -16,6 +16,7 @@ import {
   makeRng,
   makeRules,
   makeCandidates as makeGridCandidates,
+  matchedCount,
   toCollection,
 } from './common.mjs';
 
@@ -123,19 +124,20 @@ function bboxOverlap(a, b) {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
 
-function countMask(mask) {
-  let n = 0;
-  for (const v of mask) if (v === 1) n += 1;
-  return n;
+// turf `feature()` objects + precomputed bboxes for a set of GeoJSON features,
+// computed once outside the timed region.
+function toTurf(features) {
+  const turfFeatures = features.map((f) => feature(f.geometry));
+  return { features: turfFeatures, bboxes: turfFeatures.map((f) => bbox(f)) };
 }
 
-function turfScan(candidateFeatures, candidateBboxes, ruleFeatures, ruleBboxes) {
+function turfScan(candTurf, ruleTurf) {
   let matched = 0;
-  for (let c = 0; c < candidateFeatures.length; c += 1) {
-    const cb = candidateBboxes[c];
-    for (let i = 0; i < ruleFeatures.length; i += 1) {
-      if (!bboxOverlap(cb, ruleBboxes[i])) continue;
-      if (booleanIntersects(candidateFeatures[c], ruleFeatures[i])) {
+  for (let c = 0; c < candTurf.features.length; c += 1) {
+    const cb = candTurf.bboxes[c];
+    for (let i = 0; i < ruleTurf.features.length; i += 1) {
+      if (!bboxOverlap(cb, ruleTurf.bboxes[i])) continue;
+      if (booleanIntersects(candTurf.features[c], ruleTurf.features[i])) {
         matched += 1;
         break;
       }
@@ -159,15 +161,15 @@ function minOf(fn, reps) {
 
 const querySpatial = JSON.stringify({ spatial: { predicate: 'intersects' } });
 
-function timeRow(ruleset, candBuffer, candFeatures, candBboxes, ruleFeatures, ruleBboxes) {
-  const nativeMatched = countMask(ruleset.query(candBuffer, querySpatial));
-  const turfMatched = turfScan(candFeatures, candBboxes, ruleFeatures, ruleBboxes);
+function timeRow(ruleset, candBuffer, candTurf, ruleTurf) {
+  const nativeMatched = matchedCount(ruleset.query(candBuffer, querySpatial));
+  const turfMatched = turfScan(candTurf, ruleTurf);
   if (nativeMatched !== turfMatched) {
     console.error(`mismatch: native=${nativeMatched} turf=${turfMatched}`);
     process.exit(1);
   }
   const nativeMs = minOf(() => ruleset.query(candBuffer, querySpatial), REPS);
-  const turfMs = minOf(() => turfScan(candFeatures, candBboxes, ruleFeatures, ruleBboxes), REPS);
+  const turfMs = minOf(() => turfScan(candTurf, ruleTurf), REPS);
   return { nativeMs, turfMs, matched: nativeMatched };
 }
 
@@ -184,8 +186,7 @@ function warmup(ruleset, candBuffer) {
 // via RULES_FILE, synthetic grid fallback.
 function runCandidateSweep() {
   const { features: ruleGeo, dropped = [] } = loadRules();
-  const ruleFeatures = ruleGeo.map((f) => feature(f.geometry));
-  const ruleBboxes = ruleGeo.map((f) => bbox(f));
+  const ruleTurf = toTurf(ruleGeo);
   const ruleset = new SpatialRuleset(Buffer.from(JSON.stringify(toCollection(ruleGeo))));
   warmup(ruleset, Buffer.from(JSON.stringify(toCollection(makeCandidates(8, ruleGeo)))));
 
@@ -200,11 +201,10 @@ function runCandidateSweep() {
   let firstWin = null;
   for (const n of SIZES) {
     const cand = makeCandidates(n, ruleGeo);
-    const candFeatures = cand.map((f) => feature(f.geometry));
-    const candBboxes = candFeatures.map((f) => bbox(f));
+    const candTurf = toTurf(cand);
     const candBuffer = Buffer.from(JSON.stringify(toCollection(cand)));
 
-    const { nativeMs, turfMs, matched } = timeRow(ruleset, candBuffer, candFeatures, candBboxes, ruleFeatures, ruleBboxes);
+    const { nativeMs, turfMs, matched } = timeRow(ruleset, candBuffer, candTurf, ruleTurf);
     const speedup = turfMs / nativeMs;
     if (firstWin === null && speedup > 1) firstWin = n;
     console.log(
@@ -237,17 +237,15 @@ function runRulesSweep() {
 
   for (const n of RULES_RANGE) {
     const features = makeRules(n);
-    const ruleFeatures = features.map((f) => feature(f.geometry));
-    const ruleBboxes = features.map((f) => bbox(f));
+    const ruleTurf = toTurf(features);
     const ruleset = new SpatialRuleset(Buffer.from(JSON.stringify(toCollection(features))));
     warmup(ruleset, Buffer.from(JSON.stringify(toCollection(makeGridCandidates(8, n, makeRng(1))))));
 
     const cand = makeGridCandidates(FIXED_CANDIDATES, n, makeRng(0x51a7_0001));
-    const candFeatures = cand.map((f) => feature(f.geometry));
-    const candBboxes = candFeatures.map((f) => bbox(f));
+    const candTurf = toTurf(cand);
     const candBuffer = Buffer.from(JSON.stringify(toCollection(cand)));
 
-    const { nativeMs, turfMs, matched } = timeRow(ruleset, candBuffer, candFeatures, candBboxes, ruleFeatures, ruleBboxes);
+    const { nativeMs, turfMs, matched } = timeRow(ruleset, candBuffer, candTurf, ruleTurf);
     const speedup = turfMs / nativeMs;
     console.log(
       String(n).padStart(9) +
