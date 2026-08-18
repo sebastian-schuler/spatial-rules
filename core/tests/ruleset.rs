@@ -281,17 +281,10 @@ fn rule_source_iterates_in_ruleset_order() {
     let zone_a = ruleset.rule_id("zone-a").unwrap();
     let zone_b = ruleset.rule_id("zone-b").unwrap();
 
-    let source = ruleset.rules();
-    assert_eq!(source.len(), 2);
-    assert!(!source.is_empty());
-
-    let collected: Vec<_> = source.iter().collect();
+    let collected: Vec<_> = ruleset.rules().iter().collect();
     assert_eq!(collected.len(), 2);
     assert_eq!(collected[0].0, zone_a);
     assert_eq!(*collected[0].2, Rect::new((0.0, 0.0), (10.0, 10.0)));
     assert_eq!(collected[1].0, zone_b);
     assert_eq!(*collected[1].2, Rect::new((100.0, 100.0), (110.0, 110.0)));
-
-    assert_eq!(source.get(1).map(|(id, _, _)| id), Some(zone_b));
-    assert_eq!(source.get(2), None);
 }

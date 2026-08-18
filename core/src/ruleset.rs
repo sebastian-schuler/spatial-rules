@@ -165,9 +165,10 @@ impl Ruleset {
         self.spatial_index.query_envelope(envelope)
     }
 
-    /// Rules in ruleset order — the seam the benchmark ladder consumes instead
-    /// of raw positional accessors (ADR-0002). Yields each rule's id, geometry,
-    /// and precomputed envelope.
+    /// Rules in ruleset order, via a [`RuleSource`] — the seam the benchmark
+    /// ladder consumes (ADR-0002). It replaces the two ladder-only positional
+    /// accessors (`rule_ids`/`rule_geometries`); the per-id accessors
+    /// (`geometry`, `envelope`, `properties`) remain for the binding.
     pub fn rules(&self) -> RuleSource<'_> {
         RuleSource {
             rules: &self.rules,
@@ -244,27 +245,6 @@ pub struct RuleSource<'a> {
 }
 
 impl<'a> RuleSource<'a> {
-    /// Number of rules in ruleset order.
-    pub fn len(&self) -> usize {
-        self.rules.len()
-    }
-
-    /// Whether there are no rules.
-    pub fn is_empty(&self) -> bool {
-        self.rules.is_empty()
-    }
-
-    /// The rule at `index` in ruleset order, as `(id, geometry, envelope)`.
-    pub fn get(&self, index: usize) -> Option<(RuleId, &'a Geometry<f64>, &'a Rect<f64>)> {
-        self.rules.get(index).map(|rule| {
-            (
-                RuleId(index as u32),
-                &rule.geometry,
-                &self.envelopes[index],
-            )
-        })
-    }
-
     /// Iterate over `(id, geometry, envelope)` in ruleset order.
     pub fn iter(&self) -> impl Iterator<Item = (RuleId, &'a Geometry<f64>, &'a Rect<f64>)> {
         self.rules
@@ -333,7 +313,7 @@ impl<'a> PreparedQuery<'a> {
                 }
                 None => {
                     if let Some(where_clause) = &self.where_clause {
-                        if !where_clause.eval(&self.ruleset.rules[rule_id.0 as usize].properties) {
+                        if !where_clause.eval(self.ruleset.properties(rule_id)) {
                             continue;
                         }
                     }

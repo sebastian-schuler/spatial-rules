@@ -11,7 +11,7 @@ use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
 use spatial_rules_core::{
-    candidates_from_geojson, Candidate, CandidateOutcome, Engine, Query, ReplaceReport,
+    candidates_from_geojson, Candidate, CandidateOutcome, Engine, ErrorCode, Query, ReplaceReport,
     SpatialError,
 };
 
@@ -51,8 +51,12 @@ fn report_to_json(report: ReplaceReport) -> serde_json::Value {
 }
 
 fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str> {
-    serde_json::to_string(&report_to_json(report))
-        .map_err(|e| Error::new("SR_NATIVE", format!("serialize report: {e}")))
+    serde_json::to_string(&report_to_json(report)).map_err(|e| {
+        spatial_error_to_napi(SpatialError::new(
+            ErrorCode::Native,
+            format!("serialize report: {e}"),
+        ))
+    })
 }
 
 #[napi]
@@ -103,8 +107,12 @@ impl SpatialRuleset {
                 }
             })
             .collect();
-        serde_json::to_string(&rich)
-            .map_err(|e| Error::new("SR_NATIVE", format!("serialize result: {e}")))
+        serde_json::to_string(&rich).map_err(|e| {
+            spatial_error_to_napi(SpatialError::new(
+                ErrorCode::Native,
+                format!("serialize result: {e}"),
+            ))
+        })
     }
 
     /// Replace the active ruleset from a GeoJSON FeatureCollection `Buffer`,
