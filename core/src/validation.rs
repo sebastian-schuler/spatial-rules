@@ -4,7 +4,7 @@
 //! are checked at query time and reported as `invalid` per candidate rather
 //! than failing the batch.
 
-use geo::Geometry;
+use geo::{BoundingRect, Geometry, Rect};
 use geo::Validation;
 
 use crate::error::SpatialError;
@@ -32,6 +32,23 @@ pub fn validate_rule_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialErr
     Ok(())
 }
 
+/// Classify a candidate geometry for the query pipeline (ADR-0005): it must use
+/// a supported type AND be OGC-valid AND have a bounding rectangle. Success
+/// returns the precomputed envelope the spatial step needs; failure returns the
+/// human-readable `Invalid` reason.
+pub fn classify_candidate(geometry: &Geometry<f64>) -> Result<Rect<f64>, String> {
+    ensure_supported_geometry(geometry).map_err(|error| error.message)?;
+    if !geometry.is_valid() {
+        return Err(format!(
+            "invalid geometry: {:?}",
+            geometry.validation_errors()
+        ));
+    }
+    geometry
+        .bounding_rect()
+        .ok_or_else(|| "geometry has no bounding rectangle".to_string())
+}
+
 fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
     match geometry {
         Geometry::Point(_) => "Point",
@@ -44,5 +61,52 @@ fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
         Geometry::GeometryCollection(_) => "GeometryCollection",
         Geometry::Rect(_) => "Rect",
         Geometry::Triangle(_) => "Triangle",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use geo::{LineString, Point, Polygon};
+
+    fn square() -> Polygon<f64> {
+        Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )
+    }
+
+    #[test]
+    fn valid_polygon_returns_its_envelope() {
+        let rect = classify_candidate(&Geometry::Polygon(square())).unwrap();
+        assert_eq!(rect, Rect::new((0.0, 0.0), (10.0, 10.0)));
+    }
+
+    #[test]
+    fn unsupported_type_is_rejected() {
+        let reason = classify_candidate(&Geometry::Point(Point::new(1.0, 1.0))).unwrap_err();
+        assert_eq!(reason, "unsupported geometry type: Point");
+    }
+
+    #[test]
+    fn invalid_geometry_is_rejected() {
+        let bowtie = Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        );
+        let reason = classify_candidate(&Geometry::Polygon(bowtie)).unwrap_err();
+        assert!(reason.starts_with("invalid geometry:"));
     }
 }

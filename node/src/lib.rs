@@ -19,19 +19,15 @@ fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
     Error::new(error.code.as_str(), error.message)
 }
 
-fn bytes_to_str<'a>(buffer: &'a Buffer, kind: &str) -> napi::Result<&'a str, &'static str> {
-    std::str::from_utf8(buffer.as_ref()).map_err(|e| {
-        Error::new(
-            "SR_INVALID_GEOJSON",
-            format!("{kind} are not valid UTF-8: {e}"),
-        )
-    })
+fn bytes_to_str<'a>(buffer: &'a Buffer, kind: &str) -> Result<&'a str, SpatialError> {
+    std::str::from_utf8(buffer.as_ref())
+        .map_err(|e| SpatialError::invalid_geojson(format!("{kind} are not valid UTF-8: {e}")))
 }
 
-fn parse_query(query_json: &str) -> napi::Result<Query, &'static str> {
+fn parse_query(query_json: &str) -> Result<Query, SpatialError> {
     let value: serde_json::Value = serde_json::from_str(query_json)
-        .map_err(|e| Error::new("SR_INVALID_QUERY", format!("query is not valid JSON: {e}")))?;
-    Query::from_json(&value).map_err(spatial_error_to_napi)
+        .map_err(|e| SpatialError::invalid_query(format!("query is not valid JSON: {e}")))?;
+    Query::from_json(&value)
 }
 
 /// Parse a candidates buffer and query string into the types the engine needs.
@@ -39,9 +35,9 @@ fn parse_inputs(
     candidates: Buffer,
     query: String,
 ) -> napi::Result<(Vec<Candidate>, Query), &'static str> {
-    let text = bytes_to_str(&candidates, "candidates")?;
+    let text = bytes_to_str(&candidates, "candidates").map_err(spatial_error_to_napi)?;
     let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
-    let query = parse_query(&query)?;
+    let query = parse_query(&query).map_err(spatial_error_to_napi)?;
     Ok((candidates, query))
 }
 
@@ -69,7 +65,7 @@ impl SpatialRuleset {
     /// Construct an engine from a GeoJSON FeatureCollection `Buffer`.
     #[napi(constructor)]
     pub fn new(rules: Buffer) -> napi::Result<Self, &'static str> {
-        let text = bytes_to_str(&rules, "rules")?;
+        let text = bytes_to_str(&rules, "rules").map_err(spatial_error_to_napi)?;
         let engine = Engine::from_geojson(text).map_err(spatial_error_to_napi)?;
         Ok(SpatialRuleset { engine })
     }
@@ -116,7 +112,7 @@ impl SpatialRuleset {
     /// observability as a JSON string.
     #[napi]
     pub fn replace(&self, rules: Buffer) -> napi::Result<String, &'static str> {
-        let text = bytes_to_str(&rules, "rules")?;
+        let text = bytes_to_str(&rules, "rules").map_err(spatial_error_to_napi)?;
         let report = self
             .engine
             .replace_from_geojson(text)

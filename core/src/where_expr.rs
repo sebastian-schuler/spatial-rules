@@ -38,6 +38,23 @@ pub enum FieldOp {
     In(Vec<PropertyValue>),
 }
 
+/// The form of a predicate an index can answer directly (ADR-0003). `where_expr`
+/// owns the operator semantics; indexes consume this instead of re-enumerating
+/// [`FieldOp`] variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IndexQuery<'a> {
+    /// `field = value` — an equality lookup.
+    Eq {
+        field: &'a str,
+        value: &'a PropertyValue,
+    },
+    /// `field IN values` — repeated equality lookups.
+    In {
+        field: &'a str,
+        values: &'a [PropertyValue],
+    },
+}
+
 impl WhereExpr {
     /// Parse a Mongo-style `where` object into an AST.
     pub fn parse(value: &serde_json::Value) -> Result<Self, SpatialError> {
@@ -94,6 +111,23 @@ impl FieldPredicate {
                 Some(actual) => values.iter().any(|value| actual == value),
                 None => false,
             },
+        }
+    }
+
+    /// The index-answerable form of this predicate, or `None` when no equality
+    /// index can answer it (`$ne`, ranges). The single owner of "what is
+    /// indexable" — indexes consume this instead of matching on [`FieldOp`].
+    pub(crate) fn index_query(&self) -> Option<IndexQuery<'_>> {
+        match &self.op {
+            FieldOp::Eq(value) => Some(IndexQuery::Eq {
+                field: &self.field,
+                value,
+            }),
+            FieldOp::In(values) => Some(IndexQuery::In {
+                field: &self.field,
+                values,
+            }),
+            _ => None,
         }
     }
 }
@@ -214,4 +248,58 @@ fn parse_array(value: &serde_json::Value) -> Result<Vec<PropertyValue>, SpatialE
 
 fn invalid_predicate(message: impl Into<String>) -> SpatialError {
     SpatialError::invalid_property_predicate(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn predicate(field: &str, value: serde_json::Value) -> FieldPredicate {
+        let mut object = serde_json::Map::new();
+        object.insert(field.to_string(), value);
+        match WhereExpr::parse(&serde_json::Value::Object(object)).unwrap() {
+            WhereExpr::Predicate(predicate) => predicate,
+            _ => panic!("expected a single predicate"),
+        }
+    }
+
+    #[test]
+    fn equality_and_in_are_indexable() {
+        let eq = predicate("country", serde_json::json!("HR"));
+        assert!(matches!(
+            eq.index_query(),
+            Some(IndexQuery::Eq {
+                field: "country",
+                value: PropertyValue::Str(_)
+            })
+        ));
+
+        let in_pred = predicate("country", serde_json::json!({ "$in": ["HR", "SI"] }));
+        assert!(matches!(
+            in_pred.index_query(),
+            Some(IndexQuery::In {
+                field: "country",
+                values
+            }) if values.len() == 2
+        ));
+    }
+
+    #[test]
+    fn ne_and_ranges_are_not_indexable() {
+        assert!(predicate("priority", serde_json::json!({ "$ne": 10 }))
+            .index_query()
+            .is_none());
+        assert!(predicate("priority", serde_json::json!({ "$gt": 5 }))
+            .index_query()
+            .is_none());
+        assert!(predicate("priority", serde_json::json!({ "$gte": 5 }))
+            .index_query()
+            .is_none());
+        assert!(predicate("priority", serde_json::json!({ "$lt": 5 }))
+            .index_query()
+            .is_none());
+        assert!(predicate("priority", serde_json::json!({ "$lte": 5 }))
+            .index_query()
+            .is_none());
+    }
 }

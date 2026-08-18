@@ -80,6 +80,11 @@ assert.throws(
   () => new SpatialRuleset(Buffer.from('not json')),
   (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_GEOJSON',
 );
+// Invalid UTF-8 buffers hit the same unified SR_* path.
+assert.throws(
+  () => ruleset.query(Buffer.from([0xff, 0xfe, 0x00]), intersects),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_GEOJSON',
+);
 assert.throws(
   () => ruleset.query(candidates, 'not json'),
   (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',

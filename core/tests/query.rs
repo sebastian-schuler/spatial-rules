@@ -440,6 +440,73 @@ fn unsupported_property_operator_is_rejected() {
 }
 
 #[test]
+fn prepared_query_evaluates_and_collects_ids() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let far = candidate("far", square(50.0, 50.0, 60.0, 60.0));
+
+    let prepared = ruleset.prepare(&intersects());
+
+    assert_eq!(
+        prepared.evaluate(&inside),
+        CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }
+    );
+    assert_eq!(prepared.evaluate(&far), CandidateOutcome::NotMatched);
+    assert_eq!(prepared.evaluate_mask(&inside), 1);
+    assert_eq!(prepared.evaluate_mask(&far), 0);
+}
+
+#[test]
+fn prepared_query_reports_invalid_candidate() {
+    let ruleset = default_ruleset();
+    let bowtie = Candidate {
+        id: "bowtie".to_string(),
+        geometry: geo::Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    };
+    let prepared = ruleset.prepare(&intersects());
+    assert!(matches!(
+        prepared.evaluate(&bowtie),
+        CandidateOutcome::Invalid { .. }
+    ));
+    assert_eq!(prepared.evaluate_mask(&bowtie), 2);
+}
+
+#[test]
+fn prepared_query_applies_where_and_exclusions() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "where": { "active": false }
+    }))
+    .unwrap();
+    assert_eq!(
+        ruleset.prepare(&query).evaluate(&inside),
+        CandidateOutcome::NotMatched
+    );
+
+    let excluded = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "excludeRuleIds": ["square"]
+    }))
+    .unwrap();
+    assert_eq!(
+        ruleset.prepare(&excluded).evaluate(&inside),
+        CandidateOutcome::NotMatched
+    );
+}
+
+#[test]
 fn malformed_predicate_is_rejected() {
     let err = Query::from_json(&json!({
         "spatial": { "predicate": "intersects" },

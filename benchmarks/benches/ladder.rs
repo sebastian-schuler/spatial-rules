@@ -24,20 +24,23 @@ fn bench_ladder(criterion: &mut Criterion) {
     let query = Query::new(SpatialPredicate::Intersects);
     let candidate_count = candidates.len() as u64;
 
-    // Rule geometries in ruleset order, prepared once outside the timed loop.
-    // `prepared_by_id` maps an opaque RuleId to its position so the
-    // bbox-filtered prepared stage (F) reuses the same prepared slice without
-    // reconstructing a rule's position.
-    let geometries = rstar.rule_geometries();
+    // Rule geometries in ruleset order via the `RuleSource` seam, prepared once
+    // outside the timed loop. `prepared_by_id` maps an opaque RuleId to its
+    // position so the bbox-filtered prepared stage (F) reuses the same prepared
+    // slice without reconstructing a rule's position.
+    let rule_source = rstar.rules();
+    let geometries: Vec<&geo::Geometry<f64>> = rule_source
+        .iter()
+        .map(|(_, geometry, _)| geometry)
+        .collect();
     let prepared: Vec<PreparedGeometry<'_, &geo::Geometry<f64>>> = geometries
         .iter()
         .map(|geometry| PreparedGeometry::from(*geometry))
         .collect();
-    let prepared_by_id: std::collections::HashMap<RuleId, usize> = rstar
-        .rule_ids()
+    let prepared_by_id: std::collections::HashMap<RuleId, usize> = rule_source
         .iter()
         .enumerate()
-        .map(|(index, id)| (*id, index))
+        .map(|(index, (id, _, _))| (id, index))
         .collect();
 
     let mut group = criterion.benchmark_group("batch_query");

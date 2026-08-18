@@ -3,16 +3,17 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use geo::{BoundingRect, Geometry, PreparedGeometry, Rect, Relate, Validation};
+use geo::{BoundingRect, Geometry, PreparedGeometry, Rect, Relate};
 
 use crate::candidate::Candidate;
 use crate::error::{ErrorCode, SpatialError};
-use crate::property_index::PropertyIndex;
+use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
 use crate::query::{CandidateOutcome, Query, SpatialPredicate};
 use crate::rule::{Rule, RuleId};
 use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
-use crate::validation::{ensure_supported_geometry, validate_rule_geometry};
+use crate::validation::{classify_candidate, validate_rule_geometry};
+use crate::where_expr::WhereExpr;
 
 /// An immutable, query-optimized collection of rules (CONTEXT.md §6).
 ///
@@ -23,7 +24,7 @@ pub struct Ruleset {
     ids: HashMap<String, RuleId>,
     envelopes: Vec<Rect<f64>>,
     spatial_index: Box<dyn SpatialIndex>,
-    property_index: PropertyIndex,
+    property_index: Box<dyn PropertyIndex>,
 }
 
 impl std::fmt::Debug for Ruleset {
@@ -110,7 +111,7 @@ impl Ruleset {
             .collect();
 
         let spatial_index = build_spatial_index(index_kind, index_entries);
-        let property_index = PropertyIndex::build(&rules);
+        let property_index: Box<dyn PropertyIndex> = Box::new(EqualityIndex::build(&rules));
 
         Ok(Ruleset {
             rules,
@@ -164,16 +165,14 @@ impl Ruleset {
         self.spatial_index.query_envelope(envelope)
     }
 
-    /// All rule ids in ruleset order.
-    pub fn rule_ids(&self) -> Vec<RuleId> {
-        (0..self.rules.len())
-            .map(|index| RuleId(index as u32))
-            .collect()
-    }
-
-    /// Rule geometries in ruleset order (benchmark ladder, ADR-0002).
-    pub fn rule_geometries(&self) -> Vec<&Geometry<f64>> {
-        self.rules.iter().map(|rule| &rule.geometry).collect()
+    /// Rules in ruleset order — the seam the benchmark ladder consumes instead
+    /// of raw positional accessors (ADR-0002). Yields each rule's id, geometry,
+    /// and precomputed envelope.
+    pub fn rules(&self) -> RuleSource<'_> {
+        RuleSource {
+            rules: &self.rules,
+            envelopes: &self.envelopes,
+        }
     }
 
     /// Evaluate a batch of candidates against `query`, returning one outcome
@@ -181,24 +180,10 @@ impl Ruleset {
     /// [`CandidateOutcome::Invalid`] outcome without failing the batch
     /// (ADR-0005).
     pub fn query(&self, candidates: &[Candidate], query: &Query) -> Vec<CandidateOutcome> {
-        let (excluded, prepared, where_filter) = self.prepare_query(query);
+        let prepared = self.prepare(query);
         candidates
             .iter()
-            .map(|candidate| {
-                let (verdict, matched) = self.evaluate_candidate(
-                    candidate,
-                    query,
-                    &excluded,
-                    &prepared,
-                    &where_filter,
-                    true,
-                );
-                match verdict {
-                    Verdict::Matched => CandidateOutcome::Matched { rule_ids: matched },
-                    Verdict::NotMatched => CandidateOutcome::NotMatched,
-                    Verdict::Invalid { reason } => CandidateOutcome::Invalid { reason },
-                }
-            })
+            .map(|candidate| prepared.evaluate(candidate))
             .collect()
     }
 
@@ -206,35 +191,20 @@ impl Ruleset {
     /// matched, `2` invalid), without materialising per-match rule ids
     /// (ADR-0004).
     pub fn query_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
-        let (excluded, prepared, where_filter) = self.prepare_query(query);
+        let prepared = self.prepare(query);
         candidates
             .iter()
-            .map(|candidate| {
-                let (verdict, _) = self.evaluate_candidate(
-                    candidate,
-                    query,
-                    &excluded,
-                    &prepared,
-                    &where_filter,
-                    false,
-                );
-                match verdict {
-                    Verdict::Matched => 1,
-                    Verdict::NotMatched => 0,
-                    Verdict::Invalid { .. } => 2,
-                }
-            })
+            .map(|candidate| prepared.evaluate_mask(candidate))
             .collect()
     }
 
-    fn prepare_query<'a>(
-        &'a self,
-        query: &Query,
-    ) -> (
-        HashSet<RuleId>,
-        Vec<PreparedGeometry<'a, &'a Geometry<f64>>>,
-        Option<HashSet<RuleId>>,
-    ) {
+    /// Compile a query into a reusable [`PreparedQuery`] that owns the per-call
+    /// preparation: excluded ids, prepared rule geometries, and the indexable
+    /// `where` set. [`PreparedQuery::evaluate`] and [`PreparedQuery::evaluate_mask`]
+    /// share this one preparation across the whole candidate batch. This is the
+    /// planner hook ADR-0003 reserves — a cost-based planner would return a
+    /// differently-shaped query here.
+    pub fn prepare<'a>(&'a self, query: &Query) -> PreparedQuery<'a> {
         let excluded: HashSet<RuleId> = query
             .exclude_rule_ids
             .iter()
@@ -242,7 +212,8 @@ impl Ruleset {
             .collect();
         // Per-call (per-worker) preparation (research 03): ~5 ms for 30 rules,
         // amortized over the batch. `PreparedGeometry` is not Send/Sync in geo
-        // 0.33, so it stays local to this call.
+        // 0.33, so it stays local to this prepared query — a cross-request cache
+        // waits on a `Send` fix (geo >= 0.34) and plugs in right here.
         let prepared: Vec<_> = self
             .rules
             .iter()
@@ -252,41 +223,96 @@ impl Ruleset {
             .where_clause
             .as_ref()
             .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
-        (excluded, prepared, where_filter)
+        PreparedQuery {
+            ruleset: self,
+            spatial: query.spatial,
+            where_clause: query.where_clause.clone(),
+            excluded,
+            prepared,
+            where_filter,
+        }
+    }
+}
+
+/// Iteration over rules in ruleset order: id, geometry, and precomputed
+/// envelope per rule. The seam the benchmark ladder consumes (ADR-0002) — it
+/// replaces raw positional accessors, so the ruleset stops advertising its
+/// storage layout.
+pub struct RuleSource<'a> {
+    rules: &'a [Rule],
+    envelopes: &'a [Rect<f64>],
+}
+
+impl<'a> RuleSource<'a> {
+    /// Number of rules in ruleset order.
+    pub fn len(&self) -> usize {
+        self.rules.len()
     }
 
-    fn evaluate_candidate<'a>(
-        &self,
-        candidate: &Candidate,
-        query: &Query,
-        excluded: &HashSet<RuleId>,
-        prepared: &[PreparedGeometry<'a, &'a Geometry<f64>>],
-        where_filter: &Option<HashSet<RuleId>>,
-        collect_ids: bool,
-    ) -> (Verdict, Vec<RuleId>) {
-        // Candidate-level gate: unsupported type or invalid geometry yields an
-        // `Invalid` outcome (never a batch failure, ADR-0005).
-        if let Err(e) = ensure_supported_geometry(&candidate.geometry) {
-            return (Verdict::Invalid { reason: e.message }, Vec::new());
+    /// Whether there are no rules.
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
+    /// The rule at `index` in ruleset order, as `(id, geometry, envelope)`.
+    pub fn get(&self, index: usize) -> Option<(RuleId, &'a Geometry<f64>, &'a Rect<f64>)> {
+        self.rules.get(index).map(|rule| {
+            (
+                RuleId(index as u32),
+                &rule.geometry,
+                &self.envelopes[index],
+            )
+        })
+    }
+
+    /// Iterate over `(id, geometry, envelope)` in ruleset order.
+    pub fn iter(&self) -> impl Iterator<Item = (RuleId, &'a Geometry<f64>, &'a Rect<f64>)> {
+        self.rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| (RuleId(index as u32), &rule.geometry, &self.envelopes[index]))
+    }
+}
+
+/// A query compiled against a ruleset: the per-call preparation that both
+/// `query` and `query_mask` share (ADR-0003/0004). Owns the excluded ids, the
+/// prepared rule geometries, and the indexable `where` set; evaluates each
+/// candidate through the fixed pipeline (bbox → property → DE-9IM).
+pub struct PreparedQuery<'a> {
+    ruleset: &'a Ruleset,
+    spatial: SpatialPredicate,
+    where_clause: Option<WhereExpr>,
+    excluded: HashSet<RuleId>,
+    prepared: Vec<PreparedGeometry<'a, &'a Geometry<f64>>>,
+    where_filter: Option<HashSet<RuleId>>,
+}
+
+impl<'a> PreparedQuery<'a> {
+    /// Evaluate one candidate, collecting matching rule ids (ADR-0004).
+    pub fn evaluate(&self, candidate: &Candidate) -> CandidateOutcome {
+        match self.evaluate_verdict(candidate, true) {
+            (Verdict::Matched, matched) => CandidateOutcome::Matched { rule_ids: matched },
+            (Verdict::NotMatched, _) => CandidateOutcome::NotMatched,
+            (Verdict::Invalid { reason }, _) => CandidateOutcome::Invalid { reason },
         }
-        if !candidate.geometry.is_valid() {
-            return (
-                Verdict::Invalid {
-                    reason: format!(
-                        "invalid geometry: {:?}",
-                        candidate.geometry.validation_errors()
-                    ),
-                },
-                Vec::new(),
-            );
+    }
+
+    /// Evaluate one candidate to the compact `0/1/2` mask (ADR-0004), without
+    /// materialising matching rule ids.
+    pub fn evaluate_mask(&self, candidate: &Candidate) -> u8 {
+        match self.evaluate_verdict(candidate, false).0 {
+            Verdict::Matched => 1,
+            Verdict::NotMatched => 0,
+            Verdict::Invalid { .. } => 2,
         }
-        let Some(bbox) = candidate.geometry.bounding_rect() else {
-            return (
-                Verdict::Invalid {
-                    reason: "geometry has no bounding rectangle".to_string(),
-                },
-                Vec::new(),
-            );
+    }
+
+    fn evaluate_verdict(&self, candidate: &Candidate, collect_ids: bool) -> (Verdict, Vec<RuleId>) {
+        // Candidate-level gate (ADR-0005): unsupported type, invalid geometry,
+        // or missing bbox yields an `Invalid` outcome, never a batch failure.
+        let bbox = match classify_candidate(&candidate.geometry) {
+            Ok(bbox) => bbox,
+            Err(reason) => return (Verdict::Invalid { reason }, Vec::new()),
         };
 
         // Fixed pipeline: spatial bbox filter -> property predicate -> exact
@@ -295,26 +321,26 @@ impl Ruleset {
         // the clause is indexable (ADR-0003); otherwise fall back to eval.
         let mut matched: Vec<RuleId> = Vec::new();
         let mut any_match = false;
-        for rule_id in self.query_envelope(&bbox) {
-            if excluded.contains(&rule_id) {
+        for rule_id in self.ruleset.query_envelope(&bbox) {
+            if self.excluded.contains(&rule_id) {
                 continue;
             }
-            match where_filter {
+            match &self.where_filter {
                 Some(filter) => {
                     if !filter.contains(&rule_id) {
                         continue;
                     }
                 }
                 None => {
-                    if let Some(where_clause) = &query.where_clause {
-                        if !where_clause.eval(&self.rules[rule_id.0 as usize].properties) {
+                    if let Some(where_clause) = &self.where_clause {
+                        if !where_clause.eval(&self.ruleset.rules[rule_id.0 as usize].properties) {
                             continue;
                         }
                     }
                 }
             }
-            let matrix = candidate.geometry.relate(&prepared[rule_id.0 as usize]);
-            if spatial_predicate_holds(query.spatial, matrix) {
+            let matrix = candidate.geometry.relate(&self.prepared[rule_id.0 as usize]);
+            if spatial_predicate_holds(self.spatial, matrix) {
                 any_match = true;
                 if collect_ids {
                     matched.push(rule_id);

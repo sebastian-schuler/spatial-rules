@@ -201,7 +201,7 @@ fn where_equality_index_filters_by_property() {
     }))
     .unwrap();
     assert_eq!(
-        ruleset.query(&[inside_a.clone()], &restricted),
+        ruleset.query(std::slice::from_ref(&inside_a), &restricted),
         vec![CandidateOutcome::Matched { rule_ids: vec![zone_a] }]
     );
 
@@ -273,4 +273,25 @@ fn empty_ruleset_is_valid() {
 fn from_geojson_rejects_malformed_input() {
     let err = Ruleset::from_geojson("not json").unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidGeoJson);
+}
+
+#[test]
+fn rule_source_iterates_in_ruleset_order() {
+    let ruleset = Ruleset::from_geojson(GEOJSON).unwrap();
+    let zone_a = ruleset.rule_id("zone-a").unwrap();
+    let zone_b = ruleset.rule_id("zone-b").unwrap();
+
+    let source = ruleset.rules();
+    assert_eq!(source.len(), 2);
+    assert!(!source.is_empty());
+
+    let collected: Vec<_> = source.iter().collect();
+    assert_eq!(collected.len(), 2);
+    assert_eq!(collected[0].0, zone_a);
+    assert_eq!(*collected[0].2, Rect::new((0.0, 0.0), (10.0, 10.0)));
+    assert_eq!(collected[1].0, zone_b);
+    assert_eq!(*collected[1].2, Rect::new((100.0, 100.0), (110.0, 110.0)));
+
+    assert_eq!(source.get(1).map(|(id, _, _)| id), Some(zone_b));
+    assert_eq!(source.get(2), None);
 }
