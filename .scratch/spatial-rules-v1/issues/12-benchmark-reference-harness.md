@@ -47,7 +47,7 @@ Built the benchmark dataset, harness, and turf.js cross-check; committed to `mai
 - **Perf comparison vs JS** (`benchmarks/js/perf.mjs`, `npm run perf`): turf.js (naive baseline A, early-exit) **1103 ms**/batch vs native addon **484 ms**/batch = **2.3×**; both report the same 481 matched candidates. Caveat: turf is a naive proxy, not the production app's JS, and the bbox index gives ≈0 help at 30 large rules, so both sides are dominated by exact `Relate` — prepared geometry (E/F) is the remaining lever.
 
 **Explicit deferrals** (documented, not blockers):
-- Ladder **A** (the production JS) is out-of-repo; a turf.js proxy is now measured (`benchmarks/js/perf.mjs`, 1103 ms/batch vs 484 ms = 2.3×).
-- Ladder **E/F** (prepared geometries) needs a per-worker prepare path in core first (research 03); the numbers show it is the dominant lever.
+- Ladder **A** (the production JS) is out-of-repo; a turf.js proxy is now measured (`benchmarks/js/perf.mjs`, 1087 ms/batch vs addon 21 ms = 51.6×).
+- Ladder **E/F** (prepared geometries) is now measured and adopted: E naive 14.0 ms, F +rstar 13.1 ms, prepare 4.6 ms — the 23× lever, integrated into `Ruleset::query` (ticket 15).
 - **Memory** (steady-state/peak) is best measured in the Docker container (tickets 17/19).
  This ticket unblocks Sync vs async query and replacement API.

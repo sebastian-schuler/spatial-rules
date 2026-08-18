@@ -18,7 +18,9 @@ Query returns aligned outcomes; unit + turf cross-check tests green. Pairs with 
 
 Built the batch query engine in `spatial-rules-core`, committed to `main`.
 
-**`Ruleset::query`** (`core/src/ruleset.rs`): `query(&[Candidate], &Query) -> Vec<CandidateOutcome>`, one outcome per candidate in input order (ADR-0004). Fixed pipeline (§15): candidate geometry gate (unsupported type / invalid geometry → `Invalid`, never a batch failure, ADR-0005) → spatial bbox filter via the `SpatialIndex` → per-rule `exclude_rule_ids` skip (`HashSet`, unknown ids ignored) → property predicate → exact `Relate` DE-9IM. `spatial_predicate_holds` relates `candidate` to `rule` (directional for `contains`/`within`). Prepared geometries are deferred to the harness ladder (E/F, research 03) — plain `Relate` is used here for correctness.
+**`Ruleset::query`** (`core/src/ruleset.rs`): `query(&[Candidate], &Query) -> Vec<CandidateOutcome>`, one outcome per candidate in input order (ADR-0004). Fixed pipeline (§15): candidate geometry gate (unsupported type / invalid geometry → `Invalid`, never a batch failure, ADR-0005) → spatial bbox filter via the `SpatialIndex` → per-rule `exclude_rule_ids` skip (`HashSet`, unknown ids ignored) → property predicate → exact `Relate` DE-9IM. `spatial_predicate_holds` answers the predicate from the `candidate relates to rule` matrix (directional for `contains`/`within`).
+
+**Prepared geometry** (added after the harness ladder E/F proved it, research 03): `query()` prepares each rule's `PreparedGeometry` once per call (~4.6 ms for 30 rules, amortized over the batch — `PreparedGeometry` is `!Send` in geo 0.33 so it stays local) and relates `candidate.relate(&prepared_rule)` one-sided. This cut the sync batch query from ~458 ms to ~20 ms (23×) with identical results (62 tests green).
 
 **`SpatialPredicate` + `Query`** (`core/src/query.rs`): `intersects`/`contains`/`within` via `FromStr` (else `SR_UNSUPPORTED_SPATIAL_PREDICATE`); `Query { spatial, where_clause, exclude_rule_ids }` with `Query::from_json` parsing `{ spatial: { predicate }, where, excludeRuleIds }` (`SR_INVALID_QUERY` for malformed top-level shape).
 

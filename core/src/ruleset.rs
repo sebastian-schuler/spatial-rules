@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use geo::{BoundingRect, Geometry, Rect, Relate, Validation};
+use geo::{BoundingRect, Geometry, PreparedGeometry, Rect, Relate, Validation};
 
 use crate::candidate::Candidate;
 use crate::error::{ErrorCode, SpatialError};
@@ -37,15 +37,13 @@ impl std::fmt::Debug for Ruleset {
     }
 }
 
-/// Answer a spatial predicate between a candidate and a rule via DE-9IM
-/// (ADR-0008). `contains`/`within` are directional: `candidate` relates to
-/// `rule`.
+/// Answer a spatial predicate from a DE-9IM matrix between a candidate and a
+/// rule (ADR-0008). `contains`/`within` are directional: the matrix is
+/// `candidate` relates to `rule`.
 fn spatial_predicate_holds(
     predicate: SpatialPredicate,
-    candidate: &Geometry<f64>,
-    rule: &Geometry<f64>,
+    matrix: geo::algorithm::relate::IntersectionMatrix,
 ) -> bool {
-    let matrix = candidate.relate(rule);
     match predicate {
         SpatialPredicate::Intersects => matrix.is_intersects(),
         SpatialPredicate::Contains => matrix.is_contains(),
@@ -172,17 +170,26 @@ impl Ruleset {
             .iter()
             .filter_map(|id| self.rule_id(id))
             .collect();
+        // Per-call (per-worker) preparation (research 03): ~5 ms for 30 rules,
+        // amortized over the batch. `PreparedGeometry` is not Send/Sync in geo
+        // 0.33, so it stays local to this call.
+        let prepared: Vec<_> = self
+            .rules
+            .iter()
+            .map(|rule| PreparedGeometry::from(&rule.geometry))
+            .collect();
         candidates
             .iter()
-            .map(|candidate| self.evaluate_candidate(candidate, query, &excluded))
+            .map(|candidate| self.evaluate_candidate(candidate, query, &excluded, &prepared))
             .collect()
     }
 
-    fn evaluate_candidate(
+    fn evaluate_candidate<'a>(
         &self,
         candidate: &Candidate,
         query: &Query,
         excluded: &HashSet<RuleId>,
+        prepared: &[PreparedGeometry<'a, &'a Geometry<f64>>],
     ) -> CandidateOutcome {
         // Candidate-level gate: unsupported type or invalid geometry yields an
         // `Invalid` outcome (never a batch failure, ADR-0005).
@@ -201,8 +208,7 @@ impl Ruleset {
         };
 
         // Fixed pipeline: spatial bbox filter -> property predicate -> exact
-        // DE-9IM relate (§15). Prepared geometries are a later ladder decision
-        // (E/F, research 03); plain `Relate` is used here for correctness.
+        // DE-9IM relate against prepared rule geometries (§15, research 03).
         let mut matched: Vec<RuleId> = Vec::new();
         for rule_id in self.query_envelope(&bbox) {
             if excluded.contains(&rule_id) {
@@ -214,7 +220,8 @@ impl Ruleset {
                     continue;
                 }
             }
-            if spatial_predicate_holds(query.spatial, &candidate.geometry, &rule.geometry) {
+            let matrix = candidate.geometry.relate(&prepared[rule_id.0 as usize]);
+            if spatial_predicate_holds(query.spatial, matrix) {
                 matched.push(rule_id);
             }
         }
