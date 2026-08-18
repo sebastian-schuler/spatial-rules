@@ -6,12 +6,16 @@ use crate::error::SpatialError;
 use crate::rule::RuleId;
 use crate::where_expr::WhereExpr;
 
-/// A spatial predicate between a candidate and a rule (ADR-0008).
+/// A spatial predicate between a candidate and a rule (ADR-0008, ADR-0012).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpatialPredicate {
     Intersects,
     Contains,
     Within,
+    Covers,
+    CoveredBy,
+    Touches,
+    Overlaps,
 }
 
 impl SpatialPredicate {
@@ -20,6 +24,10 @@ impl SpatialPredicate {
             SpatialPredicate::Intersects => "intersects",
             SpatialPredicate::Contains => "contains",
             SpatialPredicate::Within => "within",
+            SpatialPredicate::Covers => "covers",
+            SpatialPredicate::CoveredBy => "covered_by",
+            SpatialPredicate::Touches => "touches",
+            SpatialPredicate::Overlaps => "overlaps",
         }
     }
 }
@@ -34,6 +42,10 @@ impl std::str::FromStr for SpatialPredicate {
             "intersects" => Ok(SpatialPredicate::Intersects),
             "contains" => Ok(SpatialPredicate::Contains),
             "within" => Ok(SpatialPredicate::Within),
+            "covers" => Ok(SpatialPredicate::Covers),
+            "covered_by" => Ok(SpatialPredicate::CoveredBy),
+            "touches" => Ok(SpatialPredicate::Touches),
+            "overlaps" => Ok(SpatialPredicate::Overlaps),
             other => Err(SpatialError::unsupported_spatial_predicate(format!(
                 "unsupported spatial predicate: {other}"
             ))),

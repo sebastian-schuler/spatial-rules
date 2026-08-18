@@ -100,9 +100,19 @@ assert.throws(
   (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',
 );
 assert.throws(
-  () => ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'overlaps' } })),
+  () => ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'crosses' } })),
   (e) => e instanceof SpatialRulesError && e.code === 'SR_UNSUPPORTED_SPATIAL_PREDICATE',
 );
+
+// Additional DE-9IM predicates (ADR-0012) pass through the same mask path.
+const coveredBy = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'covered_by' } }));
+assert.deepEqual(Array.from(coveredBy), [1, 0, 2]);
+const covers = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'covers' } }));
+assert.deepEqual(Array.from(covers), [0, 0, 2]);
+const touches = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'touches' } }));
+assert.deepEqual(Array.from(touches), [0, 0, 2]);
+const overlaps = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'overlaps' } }));
+assert.deepEqual(Array.from(overlaps), [0, 0, 2]);
 
 // Dynamic replacement (ADR-0007): atomic swap + observability.
 const stats = JSON.parse(ruleset.stats());

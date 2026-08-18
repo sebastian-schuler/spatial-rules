@@ -61,8 +61,8 @@ impl std::fmt::Debug for Ruleset {
 }
 
 /// Answer a spatial predicate from a DE-9IM matrix between a candidate and a
-/// rule (ADR-0008). `contains`/`within` are directional: the matrix is
-/// `candidate` relates to `rule`.
+/// rule (ADR-0008, ADR-0012). `contains`/`within`/`covers`/`covered_by` are
+/// directional: the matrix is `candidate` relates to `rule`.
 fn spatial_predicate_holds(
     predicate: SpatialPredicate,
     matrix: geo::algorithm::relate::IntersectionMatrix,
@@ -71,7 +71,38 @@ fn spatial_predicate_holds(
         SpatialPredicate::Intersects => matrix.is_intersects(),
         SpatialPredicate::Contains => matrix.is_contains(),
         SpatialPredicate::Within => matrix.is_within(),
+        SpatialPredicate::Covers => matrix.is_covers(),
+        SpatialPredicate::CoveredBy => covered_by_holds(&matrix),
+        SpatialPredicate::Touches => matrix.is_touches(),
+        SpatialPredicate::Overlaps => matrix.is_overlaps(),
     }
+}
+
+/// `covered_by` on the candidate→rule matrix (ADR-0012): geo has no
+/// `is_covered_by` helper, so match the four DE-9IM `coveredBy` patterns
+/// (`T*F**F*** | *TF**F*** | **FT*F*** | **F*TF***`) directly.
+fn covered_by_holds(matrix: &geo::algorithm::relate::IntersectionMatrix) -> bool {
+    use geo::coordinate_position::CoordPos::{Inside, OnBoundary, Outside};
+    use geo::dimensions::Dimensions;
+
+    let not_empty = |dim: Dimensions| dim != Dimensions::Empty;
+
+    // T*F**F***
+    (not_empty(matrix.get(Inside, Inside))
+        && matrix.get(Inside, Outside) == Dimensions::Empty
+        && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
+        // *TF**F***
+        || (not_empty(matrix.get(Inside, OnBoundary))
+            && matrix.get(Inside, Outside) == Dimensions::Empty
+            && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
+        // **FT*F***
+        || (matrix.get(Inside, Outside) == Dimensions::Empty
+            && not_empty(matrix.get(OnBoundary, Inside))
+            && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
+        // **F*TF***
+        || (matrix.get(Inside, Outside) == Dimensions::Empty
+            && not_empty(matrix.get(OnBoundary, OnBoundary))
+            && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
 }
 
 /// A candidate verdict before the `Matched` ids are attached (ADR-0004).

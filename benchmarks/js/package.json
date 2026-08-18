@@ -13,6 +13,7 @@
         "crossover": "bun crossover.mjs"
     },
     "devDependencies": {
+        "@turf/boolean-touches": "^6.5.0",
         "@turf/turf": "6.5.0",
         "rbush": "3.0.1"
     }

@@ -173,6 +173,8 @@ fn identical_geometry_matches_all_predicates() {
         SpatialPredicate::Intersects,
         SpatialPredicate::Contains,
         SpatialPredicate::Within,
+        SpatialPredicate::Covers,
+        SpatialPredicate::CoveredBy,
     ] {
         assert_eq!(
             ruleset.query(std::slice::from_ref(&identical), &Query::new(predicate)),
@@ -180,6 +182,97 @@ fn identical_geometry_matches_all_predicates() {
             "predicate {:?}",
             predicate
         );
+    }
+}
+
+#[test]
+fn covers_predicate_is_directional() {
+    let ruleset = default_ruleset();
+    let big = candidate("big", square(-10.0, -10.0, 20.0, 20.0));
+    let inside = candidate("small", square(2.0, 2.0, 4.0, 4.0));
+    let query = Query::new(SpatialPredicate::Covers);
+
+    // big covers the square rule.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&big), &query),
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+    );
+    // small does not cover the rule.
+    assert_eq!(ruleset.query(&[inside], &query), vec![CandidateOutcome::NotMatched]);
+}
+
+#[test]
+fn covered_by_predicate_is_directional() {
+    let ruleset = default_ruleset();
+    let big = candidate("big", square(-10.0, -10.0, 20.0, 20.0));
+    let inside = candidate("small", square(2.0, 2.0, 4.0, 4.0));
+    let query = Query::new(SpatialPredicate::CoveredBy);
+
+    // small is covered by the square rule.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &query),
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+    );
+    // big is not covered by the rule.
+    assert_eq!(ruleset.query(&[big], &query), vec![CandidateOutcome::NotMatched]);
+}
+
+#[test]
+fn touches_true_on_shared_boundary() {
+    let ruleset = default_ruleset();
+    let query = Query::new(SpatialPredicate::Touches);
+
+    // Shares the edge x=10 with the square rule (boundary touch, no interior
+    // overlap).
+    let adjacent = candidate("adjacent", square(10.0, 0.0, 20.0, 10.0));
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&adjacent), &query),
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+    );
+    // Fully inside does not touch.
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    assert_eq!(ruleset.query(&[inside], &query), vec![CandidateOutcome::NotMatched]);
+    // Disjoint does not touch.
+    let far = candidate("far", square(50.0, 50.0, 60.0, 60.0));
+    assert_eq!(ruleset.query(&[far], &query), vec![CandidateOutcome::NotMatched]);
+}
+
+#[test]
+fn overlaps_only_for_same_dimension_interior_overlap() {
+    let ruleset = default_ruleset();
+    let query = Query::new(SpatialPredicate::Overlaps);
+
+    // Partial interior overlap with the square rule (0,0)-(10,10).
+    let partial = candidate("partial", square(5.0, 5.0, 15.0, 15.0));
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&partial), &query),
+        vec![CandidateOutcome::Matched { rule_ids: vec![square_id(&ruleset)] }]
+    );
+
+    // Full containment does not overlap.
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    assert_eq!(ruleset.query(&[inside], &query), vec![CandidateOutcome::NotMatched]);
+
+    // Covering the whole rule does not overlap.
+    let big = candidate("big", square(-10.0, -10.0, 20.0, 20.0));
+    assert_eq!(ruleset.query(&[big], &query), vec![CandidateOutcome::NotMatched]);
+
+    // Boundary touch does not overlap.
+    let adjacent = candidate("adjacent", square(10.0, 0.0, 20.0, 10.0));
+    assert_eq!(ruleset.query(&[adjacent], &query), vec![CandidateOutcome::NotMatched]);
+}
+
+#[test]
+fn new_predicates_parse_from_string() {
+    use std::str::FromStr;
+    for (s, expected) in [
+        ("covers", SpatialPredicate::Covers),
+        ("covered_by", SpatialPredicate::CoveredBy),
+        ("touches", SpatialPredicate::Touches),
+        ("overlaps", SpatialPredicate::Overlaps),
+    ] {
+        assert_eq!(SpatialPredicate::from_str(s).unwrap(), expected);
+        assert_eq!(expected.as_str(), s);
     }
 }
 
@@ -423,7 +516,7 @@ fn candidate_matching_multiple_rules_reports_all_ids() {
 #[test]
 fn unsupported_spatial_predicate_is_rejected() {
     let err = Query::from_json(&json!({
-        "spatial": { "predicate": "overlaps" }
+        "spatial": { "predicate": "crosses" }
     }))
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::UnsupportedSpatialPredicate);

@@ -1,7 +1,7 @@
 //! Emits predicate results for the turf.js cross-check fixtures (ticket 12,
-//! ADR-0008). Reads `benchmarks/data/cross_check.json` and prints, for each
-//! named pair, the three DE-9IM predicates the core answers (via geo `Relate`),
-//! as JSON on stdout for the Node side to diff against turf.js.
+//! ADR-0008, ADR-0012). Reads `benchmarks/data/cross_check.json` and prints,
+//! for each named pair, the DE-9IM predicates the core answers (via geo
+//! `Relate`), as JSON on stdout for the Node side to diff against turf.js.
 
 use geo::Relate;
 
@@ -24,6 +24,10 @@ fn main() {
             "intersects": matrix.is_intersects(),
             "contains": matrix.is_contains(),
             "within": matrix.is_within(),
+            "covers": matrix.is_covers(),
+            "covered_by": matrix.is_coveredby(),
+            "touches": matrix.is_touches(),
+            "overlaps": matrix.is_overlaps(),
         }));
     }
 
