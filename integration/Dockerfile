@@ -16,6 +16,7 @@ COPY --from=build /app/target/release/libspatial_rules_node.so /app/node/spatial
 COPY node/index.js /app/node/index.js
 COPY node/package.json /app/node/package.json
 COPY integration/server.mjs /app/integration/server.mjs
+COPY integration/memory.mjs /app/integration/memory.mjs
 COPY integration/package.json /app/integration/package.json
 COPY benchmarks/data/rules.geojson /app/benchmarks/data/rules.geojson
 COPY benchmarks/data/candidates.geojson /app/benchmarks/data/candidates.geojson

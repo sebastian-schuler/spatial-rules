@@ -102,6 +102,37 @@ round-trip.
 - **Correctness**: the turf cross-check is green; Rust and turf agree on all
   10 predicate pairs (and on the full 1,000 × 30 matched count).
 
+## Memory (container footprint)
+
+Closes the deferred follow-up from tickets 17/19 — §24 "the exact memory layout
+must be benchmarked" and §25 "peak memory during replacement MUST be measured
+because the application runs in constrained containers". Harness:
+`integration/memory.mjs` (`cd integration && bun memory.mjs`, or
+`REPLACEMENTS_ONLY=1 bun memory.mjs` to isolate the replacement peak).
+
+Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
+1,000 candidates:
+
+| Phase | RSS | VmHWM (peak resident) |
+|---|---|---|
+| Baseline (Bun + addon + ruleset built) | ~50 MB | ~51 MB |
+| Query load (20 × 1,000 batches) | ~62 MB sampled | **~65 MB** |
+| Replacement, isolated (10 swaps, no queries) | ~51 MB | **~52 MB** (≈ +0.5 MB over baseline) |
+| Boundedness | spread across 10 replacements ≈ 0 (no leak) | — |
+
+- **Peak resident ≈ 65 MB** on the production workload; replacement adds only
+  ~0.5 MB of peak on top of baseline (the old ruleset is dropped by the atomic
+  swap, and both coexist for only the ~18 ms build).
+- **Bounded**: RSS does not climb across repeated replacements (first ≈ last),
+  so there is no per-replacement leak.
+- **Works under a hard cap**: `docker run --memory=128m --memory-swap=128m`
+  serves `/health`, `/query` (1,000 → 481 matched), and `/replace` (→ v2) at
+  ~29 MiB actual cgroup usage (22.7% of the cap); `integration/smoke.mjs` green.
+- `VmPeak` (~132 GB) is Bun/JSC's virtual-address-space reservation, **not**
+  resident memory — ignore it when sizing container limits. The number that
+  matters for a K8s `limits.memory` is VmHWM (~65 MB), so a 128 MB limit leaves
+  comfortable headroom.
+
 ## Commands
 
 ```bash
@@ -110,4 +141,12 @@ cargo run -p spatial-rules-benchmarks --bin generate_dataset  # regenerate datas
 
 cd benchmarks/js && npm install && npm run cross-check        # correctness vs turf
 cd benchmarks/js && npm run perf                              # JS baseline vs addon
+
+cd integration && bun memory.mjs                              # container memory (§24/§25)
+REPLACEMENTS_ONLY=1 bun memory.mjs                            # isolate replacement peak
+
+# verify under a hard cap (§26)
+docker build -f integration/Dockerfile -t spatial-rules .
+docker run --rm --memory=128m --memory-swap=128m -p 3000:3000 spatial-rules
+node integration/smoke.mjs
 ```

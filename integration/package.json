@@ -5,7 +5,9 @@
     "type": "module",
     "scripts": {
         "start": "bun server.mjs",
-        "smoke": "node smoke.mjs"
+        "smoke": "node smoke.mjs",
+        "memory": "bun memory.mjs",
+        "memory:replacements": "REPLACEMENTS_ONLY=1 bun memory.mjs"
     },
     "dependencies": {
         "express": "^4.21.2"

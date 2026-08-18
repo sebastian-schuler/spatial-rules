@@ -25,3 +25,21 @@ Built dynamic ruleset replacement in core + binding (ADR-0007/0009), committed t
 
 Run: `cargo test --workspace` / `cargo clippy --workspace --all-targets`.
 
+## Comments
+
+### 2026-08-18 — peak-memory measurement closed (was: deferred follow-up)
+
+The §25 replacement-peak / §26 bounded-container follow-up is now measured and
+closed. Harness `integration/memory.mjs` (`bun memory.mjs`; `REPLACEMENTS_ONLY=1`
+isolates the replacement peak), run inside the `spatial-rules` image:
+
+- Baseline (ruleset built): RSS ~50 MB, VmHWM ~51 MB.
+- Query load (20 × 1,000 candidates): peak VmHWM **~65 MB**.
+- Replacement (10 swaps, isolated): peak VmHWM **~52 MB** (+0.5 MB over baseline).
+- Bounded: RSS spread across 10 replacements ≈ 0 (no leak).
+- Under `--memory=128m`: server serves `/health`, `/query` (1,000 → 481), and
+  `/replace` (→ v2) at ~29 MiB cgroup usage (22.7%); smoke green.
+
+Conclusion: bounded container memory (§8/§43) holds; a 128 MB K8s limit leaves
+headroom over the ~65 MB peak. Details in `docs/benchmarks.md` §Memory.
+

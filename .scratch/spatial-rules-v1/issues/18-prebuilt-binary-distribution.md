@@ -26,3 +26,10 @@ Built the prebuilt-distribution pipeline (ADR-0006), committed to `main`.
 
 Deferred to the registry/CI (operational, not code): `npm publish` of the six platform packages + root, and clean-machine installs on the non-host targets — exactly what the CI matrix runs. Tests/clippy are green from prior tickets.
 
+## Comments
+
+### 2026-08-18 — clean-install verified from tarballs; publish is the only remaining (human/CI) step
+
+- **Clean-install validated**: packed `node/spatial-rules-0.1.0.tgz` + `spatial-rules-win32-x64-msvc-0.1.0.tgz` (`npm pack`) and installed both into a fresh temp project — zero toolchain, no Rust, no repo checkout. Ran the new `node/test/clean-install.mjs` (imports the installed `spatial-rules`, exercises mask/`where`/`excludeRuleIds`/`queryRich`/`replace`/`stats`) → **passed**. The loader resolves the installed per-platform package, so the ADR-0006 install path is proven end-to-end for the host target.
+- **Still open — registry publish, human/CI step (wizard domain)**: `npm publish` of the six platform packages + root needs (a) a git remote + `v*` tag to trigger `.github/workflows/prebuild-publish.yml`, and (b) an npm auth token in CI secrets. The repo currently has **no git remote**. This is not code — the CI matrix already builds all six targets; it just needs credentials and a push to run.
+
