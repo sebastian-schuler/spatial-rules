@@ -94,10 +94,25 @@ function loadRules() {
         f.id = f.properties?.ne_id != null ? `ne-${f.properties.ne_id}` : `rule-${i}`;
       }
     }
-    return { features, bytes: Buffer.byteLength(raw) };
+    // The engine validates strictly (ADR-0005) and rejects the whole ruleset if
+    // any rule is invalid; Natural Earth has a few self-intersecting
+    // boundaries. Drop the ones the engine rejects so both sides see the same
+    // valid rules (and the build succeeds).
+    const valid = [];
+    const dropped = [];
+    for (const f of features) {
+      try {
+        new SpatialRuleset(Buffer.from(JSON.stringify(toCollection([f]))));
+        valid.push(f);
+      } catch (e) {
+        if (e?.code === 'SR_INVALID_GEOMETRY') dropped.push(f.id);
+        else throw e;
+      }
+    }
+    return { features: valid, dropped, bytes: Buffer.byteLength(raw) };
   }
   const features = makeRules();
-  return { features, bytes: Buffer.byteLength(JSON.stringify(toCollection(features))) };
+  return { features, dropped: [], bytes: Buffer.byteLength(JSON.stringify(toCollection(features))) };
 }
 
 function countVertices(features) {
@@ -198,10 +213,11 @@ function deriveWhere(ruleGeo) {
   return best;
 }
 
-const { features: ruleGeo, bytes } = loadRules();
+const { features: ruleGeo, bytes, dropped = [] } = loadRules();
 const ruleFeatures = ruleGeo.map((f) => feature(f.geometry));
 const candidateGeo = makeCandidates(ruleGeo, Boolean(process.env.RULES_FILE));
 const candidateFeatures = candidateGeo.map((f) => feature(f.geometry));
+const ruleBboxes = ruleGeo.map((f) => bbox(f));
 const candidatesBuffer = Buffer.from(JSON.stringify(toCollection(candidateGeo)));
 const rulesBuffer = Buffer.from(JSON.stringify(toCollection(ruleGeo)));
 
@@ -222,10 +238,22 @@ function nativeMask(queryJson) {
   return matched;
 }
 
+function bboxOverlap(a, b) {
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+// Naive linear scan with a per-rule bbox fast-reject (the hand-rolled baseline
+// an rbush index would replace). A true scan — relating every candidate against
+// every rule — is O(candidates × rules) relate calls and would take minutes on
+// the 258-country file.
 function turfNaive() {
   let matched = 0;
   for (const c of candidateFeatures) {
-    for (const r of ruleFeatures) if (booleanIntersects(c, r)) { matched += 1; break; }
+    const cb = bbox(c);
+    for (let i = 0; i < ruleFeatures.length; i += 1) {
+      if (!bboxOverlap(cb, ruleBboxes[i])) continue;
+      if (booleanIntersects(c, ruleFeatures[i])) { matched += 1; break; }
+    }
   }
   return matched;
 }
@@ -233,8 +261,10 @@ function turfNaive() {
 function turfWhere(where) {
   let matched = 0;
   for (const c of candidateFeatures) {
+    const cb = bbox(c);
     for (let i = 0; i < ruleFeatures.length; i += 1) {
       if (ruleGeo[i].properties[where.field] !== where.value) continue;
+      if (!bboxOverlap(cb, ruleBboxes[i])) continue;
       if (booleanIntersects(c, ruleFeatures[i])) { matched += 1; break; }
     }
   }
@@ -248,7 +278,7 @@ function once(fn) {
 }
 
 console.log('complexity & metadata stress');
-console.log(`mode=${process.env.RULES_FILE ? 'real-data' : 'synthetic'} rules=${ruleGeo.length} fields=${countFields(ruleGeo)} candidates=${candidateGeo.length}`);
+console.log(`mode=${process.env.RULES_FILE ? 'real-data' : 'synthetic'} rules=${ruleGeo.length}${dropped.length ? ` (${dropped.length} invalid dropped)` : ''} fields=${countFields(ruleGeo)} candidates=${candidateGeo.length}`);
 console.log(`rules GeoJSON size: ${(bytes / 1024 / 1024).toFixed(2)} MB, total vertices: ${countVertices(ruleGeo).toLocaleString('en-US')}`);
 
 // Correctness: naive turf and the addon must agree (with where too).
@@ -278,6 +308,6 @@ const turfWhereRun = where ? once(() => turfWhere(where)) : null;
 
 console.log(`\nbuild (Rust parse+validate+index): ${build.ms.toFixed(1)} ms`);
 console.log(`first query (builds prepared geometries): ${coldQuery.ms.toFixed(1)} ms`);
-console.log(`query spatial   — addon ${nativeSpatial.ms.toFixed(2)} ms | turf ${turfSpatial.ms.toFixed(1)} ms`);
-if (where) console.log(`query + where   — addon ${nativeWhere.ms.toFixed(2)} ms | turf ${turfWhereRun.ms.toFixed(1)} ms`);
+console.log(`query spatial   — addon ${nativeSpatial.ms.toFixed(2)} ms | turf (scan+bbox) ${turfSpatial.ms.toFixed(1)} ms`);
+if (where) console.log(`query + where   — addon ${nativeWhere.ms.toFixed(2)} ms | turf (scan+bbox) ${turfWhereRun.ms.toFixed(1)} ms`);
 console.log(`matched: ${nativeSpatial.result} (spatial)${where ? `, ${nativeWhere.result} (${whereLabel})` : ''}`);

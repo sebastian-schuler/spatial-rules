@@ -197,48 +197,61 @@ equivalent hand-rolled turf in-process (a lower bound: turf has no
 
 ### 4. Complexity & metadata stress (`complex.mjs`)
 
-Synthetic "coastline" rules with tens of thousands of vertices, multiple parts,
-holes, and dozens of typed properties (defaults: 3 rules × 3 parts × 5,000
-vertices/ring + 40 fields ≈ 1.8 MB, 47k vertices). `RULES_FILE=deu.geojson
-bun complex.mjs` runs the same measurements on any real boundary file — in
-real-data mode candidates are derived from the file's own geometry and the
-`where` clause is picked from the data (see below).
+Two modes: synthetic "coastline" rules, and any real boundary file via
+`RULES_FILE`. In real-data mode candidates are derived from the file's own
+geometry and the `where` clause is picked from a shared property on the first
+feature; invalid rules are dropped so both sides agree (see below).
 
-| phase | time |
-|---|---|
-| build (parse + validate + index) | ~920 ms |
-| first query (prepared-geometry build) | ~57 ms |
-| query, steady state (20 candidates) | **0.86 ms** |
-| turf, same query | 3.0 ms |
+**Synthetic** (defaults: 3 rules × 3 parts × 5,000 vertices/ring + 40 fields ≈
+1.8 MB, 47k vertices):
 
-- The addon's steady-state query is **independent of rule complexity**:
-  prepared geometries (ADR-0010) mean a 47k-vertex ruleset queries as fast as a
-  small one; turf's per-relate cost grows with vertex count (JSTS noding).
-- The one-time build (~920 ms) is dominated by strict geometry validation; the
-  property index over 41 fields adds no measurable query cost.
+| phase | addon | turf (scan + bbox) |
+|---|---|---|
+| build (parse + validate + index) | ~932 ms | — |
+| first query (prepared-geometry build) | ~63 ms | — |
+| query, steady state (20 candidates) | **0.91 ms** | 6.7 ms |
+| query + where | **0.85 ms** | 3.1 ms |
+
+**Real boundary** — `RULES_FILE=countries.geojson` (Natural Earth 10 m
+`ne_10m_admin_0_countries`, public domain): 13,287,234 bytes (12.67 MiB),
+258 countries, 546k vertices, 168 properties.
+
+| phase | addon | turf (scan + bbox) |
+|---|---|---|
+| build (parse + validate + index) | ~17.6 s | — |
+| first query (prepared-geometry build) | ~125 ms | — |
+| query, steady state (20 candidates) | **4.8 ms** | 0.4 ms |
+| query + where | 4.8 ms | 0.4 ms |
+
+- The addon's query is **independent of rule complexity**: a 47k-vertex
+  synthetic ruleset and a 546k-vertex real-world ruleset both query in
+  milliseconds, because prepared geometries (ADR-0010) are built once and the
+  R*-tree filters the 258 countries to the ~1 that overlaps each candidate.
+- The one-time build (0.9 s synthetic, **17.6 s** real) is dominated by strict
+  geometry validation; the 168-property index adds no measurable query cost.
+- The addon's ~5 ms real-data query is its per-call floor (GeoJSON re-parse +
+  napi + index) — at 20 candidates the single overlapping country means turf's
+  bbox fast-reject is near-free. A true naive turf scan (relate every candidate
+  × every country, ~5,100 relates) takes minutes; the bbox fast-reject is the
+  hand-rolled baseline an `rbush` index would replace (see `fair.mjs`).
+- Natural Earth has one country with a self-intersecting exterior; the engine's
+  strict validation (ADR-0005) rejects it and the harness drops it (257 rules
+  loaded, "1 invalid dropped" in the output).
 - `core/tests/complex.rs` asserts correctness at scale (2,000-vertex rule,
   40 properties, holes, indexed `where`); larger sizes stay in this benchmark,
   where the release addon avoids debug-mode validation cost.
-- To stress with a real boundary — e.g. Natural Earth's 10 m countries (public
-  domain; every country becomes one complex MultiPolygon rule):
 
   ```bash
   cd benchmarks/js
   curl -L -o countries.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson
-  # keep just one country (bun, no jq needed):
-  bun -e "const fs=require('fs');const g=JSON.parse(fs.readFileSync('countries.geojson','utf8'));fs.writeFileSync('deu.geojson',JSON.stringify({type:'FeatureCollection',features:g.features.filter(x=>x.properties.ADMIN==='Germany')}))"
-  # bun auto-loads .env, so set the file there for a persistent default:
-  printf 'RULES_FILE="deu.geojson"\n' > .env   # PowerShell: Set-Content -Value 'RULES_FILE="deu.geojson"' -Path .env
+  # bun auto-loads .env — set the file there for a persistent default:
+  printf 'RULES_FILE="countries.geojson"\n' > .env   # PowerShell: Set-Content -Value 'RULES_FILE="countries.geojson"' -Path .env
   bun complex.mjs
-  ```
 
-  Real-data mode samples the first feature's boundary for candidate squares
-  (sized from its bbox) and derives the `where` clause from a shared string
-  property on that feature (e.g. `CONTINENT=Asia`); the synthetic
-  `classification` filter is only used when no `RULES_FILE` is set. Filter to
-  a single country for this harness — the full `countries.geojson` (258
-  features) makes the naive turf baseline scan take minutes; that many-rules
-  case is what `scale.mjs` covers.
+  # or keep just one country (bun, no jq needed) for a focused run:
+  bun -e "const fs=require('fs');const g=JSON.parse(fs.readFileSync('countries.geojson','utf8'));fs.writeFileSync('deu.geojson',JSON.stringify({type:'FeatureCollection',features:g.features.filter(x=>x.properties.ADMIN==='Germany')}))"
+  RULES_FILE=deu.geojson bun complex.mjs
+  ```
 
 ## Commands
 
