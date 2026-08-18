@@ -4,10 +4,8 @@ Measurement infrastructure for the spatial rules engine, driven by the
 benchmark-dependent decisions in `docs/Initial-plan.md` §31–§33 (ADR-0002,
 ADR-0008, ADR-0009).
 
-A **rule** is a geometry-bearing zone with queryable properties — in the
-production use case, a VRA zone (a Polygon/MultiPolygon region). A **candidate**
-is a geometry evaluated against the rules — in production, an imagery footprint
-being checked for whether it falls inside a zone. The full glossary is in
+A **rule** is a geometry-bearing feature with queryable properties; a
+**candidate** is a geometry evaluated against the rules. The full glossary is in
 `CONTEXT.md`.
 
 ## Summary

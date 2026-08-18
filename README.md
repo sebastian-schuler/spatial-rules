@@ -4,9 +4,9 @@ A high-performance spatial rules/query engine: evaluate batches of candidate
 GeoJSON geometries against an indexed, attribute-bearing ruleset, with a Rust
 core and a zero-toolchain Node/Bun native addon.
 
-The motivating use case is imagery search — ~30 VRA polygon zones against ~1,000
-candidate footprints per request — but the library is generic: it knows nothing
-about "VRA" or "exemptions"; those are application concepts.
+The motivating use case is a batch of candidate geometries checked against a set
+of geometry-bearing rules with queryable properties; the library is generic and
+knows nothing about any specific application domain.
 
 **One number:** ~20 ms to evaluate 1,000 candidates × 30 rules — about **52×
 faster** than the equivalent turf.js check (~1.1 s). See
@@ -52,7 +52,7 @@ const ruleset = new SpatialRuleset(rulesGeojsonBuffer);
 const mask = ruleset.query(candidatesGeojsonBuffer, JSON.stringify({
   spatial: { predicate: 'intersects' },
   where: { active: true, country: { $in: ['HR', 'SI'] } },
-  excludeRuleIds: userExemptedIds,
+  excludeRuleIds: excludedRuleIds,
 }));
 
 // Rich per-candidate outcomes with original string rule ids.

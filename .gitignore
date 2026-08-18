@@ -1,3 +1,6 @@
 /target
 node_modules/
 *.node
+
+# Internal-only docs (application concepts that must not go public).
+docs/internal/

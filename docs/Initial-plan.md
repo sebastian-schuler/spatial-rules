@@ -11,19 +11,11 @@
 
 Build a reusable, high-performance Rust spatial rules/query engine for evaluating batches of candidate GeoJSON geometries against a relatively small, dynamically replaceable set of geometry-bearing rules with queryable attributes.
 
-The initial production use case is imagery search:
-
-1. A Bun/Express HTTP API sends an AOI to an external imagery provider.
-2. The provider returns approximately **1,000 GeoJSON image footprints/features**.
-3. The application maintains approximately **30 VRA polygon/MultiPolygon features**.
-4. Each VRA feature has geometry plus queryable properties.
-5. Candidate imagery is excluded when it intersects an applicable VRA zone.
-6. Individual users may be exempt from one or more VRA zones.
-7. VRA data may change at any time, although changes are expected roughly weekly.
-8. The API runs in multiple Docker/Kubernetes pods with bounded memory.
-9. The Rust engine is embedded in each Bun/Node process rather than deployed as a separate spatial service.
-
-The library MUST remain generic. **“VRA” and “user exemption” are application concepts, not core-library concepts.**
+A typical deployment: an HTTP application evaluates batches of candidate
+geometries (~1,000 per request) against a small, dynamically replaceable set of
+geometry-bearing rules (~30) with queryable properties, in memory-bounded
+containers. The library MUST remain generic; any specific domain is an
+application concept, not a core-library concept.
 
 The generic abstraction is:
 
@@ -81,7 +73,7 @@ The first version is NOT intended to be:
 * a routing engine
 * a raster/GDAL processing system
 * a SQL database
-* a VRA-specific business rules framework
+* a domain-specific business rules framework
 
 Nearest-point functionality is explicitly **not a priority**.
 
@@ -103,7 +95,7 @@ Example:
 
 ```json
 {
-  "id": "vra-17",
+  "id": "rule-17",
   "type": "Feature",
   "properties": {
     "name": "Example Zone",
@@ -131,12 +123,9 @@ Example:
 
 ```json
 {
-  "id": "image-123",
+  "id": "candidate-123",
   "type": "Feature",
-  "properties": {
-    "provider": "example",
-    "cloud_cover": 4.2
-  },
+  "properties": {},
   "geometry": {
     "type": "Polygon",
     "coordinates": []
@@ -180,11 +169,11 @@ The engine returns matches.
 
 The application decides what those matches mean.
 
-For the initial use case:
+For example:
 
 ```text
-match → exclude imagery
-no match → retain imagery
+match → exclude
+no match → retain
 ```
 
 The core MUST NOT encode this interpretation.
@@ -221,7 +210,7 @@ This enables:
 
 # 7. Dynamic Ruleset Replacement
 
-The VRA/rule dataset is dynamic.
+The rule dataset is dynamic.
 
 Although it may only change approximately once per week, the library MUST support replacement at any time without restarting the application.
 
@@ -317,36 +306,37 @@ The Rust library only needs to make ruleset replacement fast and safe.
 
 ---
 
-# 9. User Exemptions
+# 9. Rule Exclusions
 
-User exemptions are application-level policy.
+Rule exclusions are application-level policy.
 
 The Rust core MUST NOT know what a "user" is.
 
-Instead, the application supplies the rules that are applicable to the current query.
+Instead, the application supplies the rules that are applicable to the current
+query (via `excludeRuleIds`).
 
 Example:
 
 ```text
 All rules:
 
-vra-1
-vra-2
-vra-3
+rule-1
+rule-2
+rule-3
 ...
-vra-30
+rule-30
 
-User exemptions:
+Excluded rules:
 
-vra-17
-vra-21
+rule-17
+rule-21
 
 Applicable rules:
 
-all rules except vra-17 and vra-21
+all rules except rule-17 and rule-21
 ```
 
-The engine MUST NOT rebuild the spatial index for each user.
+The engine MUST NOT rebuild the spatial index for each query.
 
 Because the ruleset is small, an internal bitset/bitmap is a suitable optimization:
 
@@ -647,10 +637,10 @@ The fundamental result SHOULD expose relationships between candidates and rules.
 Conceptually:
 
 ```text
-candidate image-123
+candidate candidate-123
     matched rules:
-      vra-4
-      vra-17
+      rule-4
+      rule-17
 ```
 
 Possible Rust representation:
@@ -755,7 +745,7 @@ It MUST NOT depend on:
 * HTTP
 * authentication
 * user concepts
-* VRA terminology
+* domain terminology
 
 Conceptually:
 
@@ -794,11 +784,11 @@ An initial conceptual API:
 ```javascript
 import { SpatialRuleset } from "@scope/spatial-rules";
 
-const ruleset = new SpatialRuleset(initialVraGeoJson);
+const ruleset = new SpatialRuleset(initialRulesGeoJson);
 
-ruleset.replace(newVraGeoJson);
+ruleset.replace(newRulesGeoJson);
 
-const result = ruleset.query(providerFeatures, {
+const result = ruleset.query(candidateFeatures, {
   spatial: {
     predicate: "intersects"
   },
@@ -808,7 +798,7 @@ const result = ruleset.query(providerFeatures, {
     classification: "restricted"
   },
 
-  excludeRuleIds: ["vra-17", "vra-21"]
+  excludeRuleIds: ["rule-17", "rule-21"]
 });
 ```
 
@@ -817,7 +807,7 @@ The final API can differ, but the semantics MUST remain.
 A filtering-oriented API MAY also exist:
 
 ```javascript
-const mask = ruleset.filterMask(providerFeatures, {
+const mask = ruleset.filterMask(candidateFeatures, {
   spatial: {
     predicate: "intersects"
   },
@@ -826,7 +816,7 @@ const mask = ruleset.filterMask(providerFeatures, {
     active: true
   },
 
-  excludeRuleIds: user.exemptedVraIds
+  excludeRuleIds: excludedRuleIds
 });
 ```
 
@@ -834,7 +824,7 @@ const mask = ruleset.filterMask(providerFeatures, {
 
 # 23. GeoJSON Boundary
 
-GeoJSON SHOULD be the main interoperability format because it matches the external imagery provider.
+GeoJSON SHOULD be the main interoperability format because it matches typical external data providers.
 
 However:
 
@@ -854,7 +844,7 @@ Potential API:
 ```javascript
 ruleset.replaceGeoJSON(buffer);
 
-ruleset.queryGeoJSON(providerBuffer, query);
+ruleset.queryGeoJSON(candidatesBuffer, query);
 ```
 
 Object-based APIs MAY also exist for convenience.
@@ -880,7 +870,7 @@ This should live in Rust-owned memory.
 ## Short-lived
 
 ```text
-~1,000 provider geometries/request
+~1,000 candidate geometries/request
 ```
 
 These should be processed and released as soon as practical.
@@ -1200,10 +1190,10 @@ HTTP request
 authenticate user
     │
     ▼
-determine user's VRA exemptions
+determine the caller's excluded rules
     │
     ▼
-call imagery provider
+fetch candidate features
     │
     ▼
 receive ~1,000 GeoJSON features
@@ -1218,7 +1208,7 @@ Rust spatial query
     └── compact result
     │
     ▼
-remove excluded imagery
+remove excluded candidates
     │
     ▼
 HTTP response
@@ -1229,24 +1219,24 @@ Rust MUST NOT own:
 * authentication
 * authorization
 * HTTP
-* imagery-provider calls
+* external data-provider calls
 * user identity
-* VRA business semantics
+* domain business semantics
 
 ---
 
-# 37. VRA Update Flow
+# 37. Rule Update Flow
 
-The application obtains new VRA data:
+The application obtains new rule data:
 
 ```text
-VRA source
+Rule source
     │
     ▼
 Application
     │
     ▼
-ruleset.replace(newVra)
+ruleset.replace(newRules)
     │
     ├── parse
     ├── validate
@@ -1270,7 +1260,7 @@ The library should be positioned as:
 
 Potential use cases include:
 
-* imagery exclusion zones
+* exclusion zones
 * restricted areas
 * flood zones
 * delivery/service zones
@@ -1281,7 +1271,7 @@ Potential use cases include:
 * geofencing
 * spatial alerting
 
-The library MUST NOT be designed around imagery or VRA terminology.
+The library MUST NOT be designed around any specific domain terminology.
 
 ---
 
@@ -1399,7 +1389,7 @@ matches
 
 ## Phase 5 — Benchmarks
 
-Use realistic VRA and imagery-provider datasets.
+Use realistic rule and candidate datasets.
 
 ---
 
@@ -1489,7 +1479,7 @@ The default deployment is an embedded native library.
 
 ## 41.10 Keep the core reusable
 
-VRA is the first application, not the core abstraction.
+Any specific domain is an application, not the core abstraction.
 
 ---
 
@@ -1523,9 +1513,9 @@ These decisions MUST NOT weaken the requirements defined in this specification.
 The first meaningful production release is complete when the following conceptual API works:
 
 ```javascript
-const ruleset = new SpatialRuleset(vraGeoJson);
+const ruleset = new SpatialRuleset(rulesGeoJson);
 
-const result = ruleset.query(providerGeoJson, {
+const result = ruleset.query(candidatesGeoJson, {
   spatial: {
     predicate: "intersects"
   },
@@ -1534,15 +1524,15 @@ const result = ruleset.query(providerGeoJson, {
     active: true
   },
 
-  excludeRuleIds: user.exemptedVraIds
+  excludeRuleIds: excludedRuleIds
 });
 ```
 
 with:
 
-* approximately 30 complex VRA features
-* approximately 1,000 provider features
-* dynamic VRA replacement
+* approximately 30 complex rule features
+* approximately 1,000 candidate features
+* dynamic ruleset replacement
 * concurrent HTTP requests
 * multiple application pods
 * bounded container memory
@@ -1611,8 +1601,8 @@ The key library abstraction is:
 
 > **Indexed geometry rules + attribute predicates + spatial predicates + batch candidate evaluation.**
 
-The initial production interpretation is:
+An example interpretation is:
 
-> **If an imagery footprint intersects an applicable VRA rule, exclude it unless the requesting user is exempt from that rule.**
+> **If a candidate intersects an applicable rule, apply the application-defined outcome (exclude it unless excluded by the query).**
 
 The library itself remains generic.

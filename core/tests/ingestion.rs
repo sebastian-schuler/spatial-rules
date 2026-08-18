@@ -17,7 +17,7 @@ const VALID_COLLECTION: &str = r#"{
   "features": [
     {
       "type": "Feature",
-      "id": "vra-17",
+      "id": "rule-17",
       "properties": {
         "name": "Example Zone",
         "active": true,
@@ -33,7 +33,7 @@ const VALID_COLLECTION: &str = r#"{
     },
     {
       "type": "Feature",
-      "properties": { "id": "vra-from-props" },
+      "properties": { "id": "rule-from-props" },
       "geometry": {
         "type": "MultiPolygon",
         "coordinates": [[[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]]
@@ -90,7 +90,7 @@ fn builds_rule_with_typed_properties() {
     let rules = rules_from_geojson(VALID_COLLECTION).unwrap();
     let rule = &rules[0];
 
-    assert_eq!(rule.id, "vra-17");
+    assert_eq!(rule.id, "rule-17");
     assert_eq!(rule.properties.get("name"), Some(&PropertyValue::Str("Example Zone".into())));
     assert_eq!(rule.properties.get("active"), Some(&PropertyValue::Bool(true)));
     assert_eq!(rule.properties.get("priority"), Some(&PropertyValue::Int(10)));
@@ -102,7 +102,7 @@ fn builds_rule_with_typed_properties() {
 #[test]
 fn falls_back_to_properties_id() {
     let rules = rules_from_geojson(VALID_COLLECTION).unwrap();
-    assert_eq!(rules[1].id, "vra-from-props");
+    assert_eq!(rules[1].id, "rule-from-props");
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn rejects_feature_without_geometry() {
     let input = r#"{
       "type": "FeatureCollection",
       "features": [
-        { "type": "Feature", "id": "vra-1", "properties": {}, "geometry": null }
+        { "type": "Feature", "id": "rule-1", "properties": {}, "geometry": null }
       ]
     }"#;
     let err = rules_from_geojson(input).unwrap_err();
@@ -133,7 +133,7 @@ fn rejects_feature_without_geometry() {
 fn builds_candidate_from_feature() {
     let candidates: Vec<Candidate> = candidates_from_geojson(VALID_COLLECTION).unwrap();
     assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[0].id, "vra-17");
+    assert_eq!(candidates[0].id, "rule-17");
     assert_eq!(candidates[0].geometry, geo::Geometry::Polygon(square_polygon()));
 }
 
@@ -141,13 +141,13 @@ fn builds_candidate_from_feature() {
 fn single_feature_ingests_without_collection_wrapper() {
     let input = r#"{
       "type": "Feature",
-      "id": "vra-1",
+      "id": "rule-1",
       "properties": {},
       "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] }
     }"#;
     let rules: Vec<Rule> = rules_from_geojson(input).unwrap();
     assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].id, "vra-1");
+    assert_eq!(rules[0].id, "rule-1");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn feature_geometry_rejects_missing_geometry() {
     let input = r#"{
       "type": "FeatureCollection",
       "features": [
-        { "type": "Feature", "id": "vra-1", "properties": {}, "geometry": null }
+        { "type": "Feature", "id": "rule-1", "properties": {}, "geometry": null }
       ]
     }"#;
     let collection = parse_geojson(input).unwrap();
@@ -277,21 +277,21 @@ fn rejects_unsupported_geometry_type() {
 #[test]
 fn rule_and_candidate_constructors_work_directly() {
     let rule = Rule {
-        id: "vra-1".to_string(),
+        id: "rule-1".to_string(),
         properties: Default::default(),
         geometry: geo::Geometry::Polygon(square_polygon()),
     };
     let candidate = Candidate {
-        id: "image-1".to_string(),
+        id: "candidate-1".to_string(),
         geometry: geo::Geometry::Polygon(square_polygon()),
     };
-    assert_eq!(rule.id, "vra-1");
-    assert_eq!(candidate.id, "image-1");
+    assert_eq!(rule.id, "rule-1");
+    assert_eq!(candidate.id, "candidate-1");
 
     // The constructors accept a single feature directly.
     let input = r#"{
       "type": "Feature",
-      "id": "vra-2",
+      "id": "rule-2",
       "properties": {},
       "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] }
     }"#;

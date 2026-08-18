@@ -1,8 +1,8 @@
 //! Deterministic synthetic dataset for the benchmark harness (ticket 12, §31).
 //!
 //! ~30 country-scale MultiPolygon rules (some with holes, variable vertex
-//! count, some highly complex) plus ~1,000 small imagery-footprint polygon
-//! candidates. Generated from a fixed seed so every run is reproducible.
+//! count, some highly complex) plus ~1,000 small polygon candidates. Generated
+//! from a fixed seed so every run is reproducible.
 //!
 //! The geometry is representative (blobby, irregular country-like shapes), not
 //! real Natural Earth data; real open data can be dropped in without changing
@@ -147,7 +147,7 @@ pub fn rules() -> Vec<Rule> {
     rules
 }
 
-/// ~1,000 imagery-footprint-like candidates.
+/// ~1,000 small polygon candidates.
 pub fn candidates() -> Vec<Candidate> {
     let mut rng = Rng::new(0xcafe_2026_f00d);
     let mut candidates = Vec::with_capacity(CANDIDATE_COUNT);
@@ -179,7 +179,7 @@ pub fn candidates() -> Vec<Candidate> {
             },
         ]);
         candidates.push(Candidate {
-            id: format!("image-{index:04}"),
+            id: format!("candidate-{index:04}"),
             geometry: geo::Geometry::Polygon(Polygon::new(ring, vec![])),
         });
     }

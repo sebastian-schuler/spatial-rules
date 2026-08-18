@@ -2,7 +2,7 @@
 
 ## Destination
 
-Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md` §43: a `SpatialRuleset` queryable from Node/Bun with a spatial predicate, property `where`, and `excludeRuleIds`, evaluating ~30 complex VRA-like rules against ~1,000 candidates per request, with dynamic atomic ruleset replacement, bounded container memory, Bun compatibility, and benchmark evidence against the JavaScript baseline. Execution is carried on this map — it closes only when §43 holds.
+Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md` §43: a `SpatialRuleset` queryable from Node/Bun with a spatial predicate, property `where`, and `excludeRuleIds`, evaluating ~30 complex rules against ~1,000 candidates per request, with dynamic atomic ruleset replacement, bounded container memory, Bun compatibility, and benchmark evidence against the JavaScript baseline. Execution is carried on this map — it closes only when §43 holds.
 
 ## Notes
 
@@ -49,4 +49,4 @@ Ship the spatial rules engine to the Definition of Done in `docs/Initial-plan.md
 - SQL-like query language and richer boolean expressions — out of scope for v1 per §11; future §39.
 - Additional spatial predicates (covers, touches, overlaps, distance) and quantitative overlap area/ratio — not mandatory for the first release per §13–§14.
 - Persisted compiled rulesets — future work per §39.
-- Everything in §3 non-goals (PostGIS replacement, distributed DB, spatial microservice, nearest-neighbor, routing, raster/GDAL, SQL DB, VRA-specific framework).
+- Everything in §3 non-goals (PostGIS replacement, distributed DB, spatial microservice, nearest-neighbor, routing, raster/GDAL, SQL DB, domain-specific framework).
