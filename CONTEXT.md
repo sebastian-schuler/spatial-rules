@@ -1,6 +1,6 @@
 # CONTEXT — Spatial Rules Engine
 
-Single-context repo. Requirements source: `docs/Initial-plan.md`. Decisions: `docs/adr/`.
+Single-context repo. Requirements source: `docs/Initial-plan.md`. Decisions: `docs/adr/`. Benchmarks: `docs/benchmarks.md`.
 
 ## Glossary
 
