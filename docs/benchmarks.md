@@ -220,6 +220,50 @@ equivalent hand-rolled turf in-process (a lower bound: turf has no
 - **8×**, and the addon serves the complete query (parse + `where` + exclusions
   + mask) where turf needs application code around it.
 
+### 3b. Sustained concurrent load (`load-bench.mjs`)
+
+Models a search endpoint hit by many users at once: sustained concurrency
+against the real Bun + Express addon server, measuring achievable req/s, query
+latency percentiles, and event-loop responsiveness (via interleaved `/health`
+probes). Two endpoints: `/query` (JSON in/out — the naive `express.json()`
+path) and `/queryRaw` (raw GeoJSON bytes in, raw mask out — the third-party
+fetch pattern with **no `.json()`** in Node). Workload: 1,000 candidates × 30
+rules, `intersects` + `where{classification=restricted}` + 2 exclusions
+(Bun 1.3.14, local machine).
+
+Raw bytes endpoint (`/queryRaw`):
+
+| concurrency | req/s | p50 ms | p95 ms |
+| ----------- | ----- | ------ | ------ |
+| 5           | 164   | 30.5   | 32.2   |
+| 10          | 164   | 60.2   | 63.7   |
+| 25          | 170   | 146.2  | 151.4  |
+
+JSON endpoint (`/query`):
+
+| concurrency | req/s | p50 ms | p95 ms |
+| ----------- | ----- | ------ | ------ |
+| 5           | 130   | 37.7   | 41.8   |
+| 25          | 133   | 186.4  | 194.0  |
+
+Findings:
+
+- The single-threaded server is CPU-bound at a **~165 rps ceiling** (raw) /
+  **~130 rps** (JSON) on this workload. Beyond ~5 concurrent clients throughput
+  stops growing and latency rises with queueing (p50 ≈ service time ×
+  concurrency).
+- Skipping `.json()` (raw bytes in/out) is worth **~25–28% more throughput**
+  (130 → 165 rps) and ~7 ms lower p50 at low concurrency — the overhead
+  avoided is the server-side `express.json()` + stringify + `Array.from`.
+- **Event-loop responsiveness**: at every load level `/health` latency ≈ query
+  latency — the loop is fully consumed by queries under load, so other
+  synchronous work on the same process contends.
+- At the target **100 rps** one process handles it (≈60% of the raw ceiling)
+  with ~30 ms p50 at low concurrency — but with no meaningful headroom; scale
+  out to 2+ pods (or worker threads) for margin. Numbers are machine-specific
+  and for this query shape (the `where` equality index prunes rules, so this
+  query is faster than the unfiltered ~20 ms ladder case).
+
 ### 4. Complexity & metadata stress (`complex.mjs`)
 
 Two modes: synthetic "coastline" rules, and any real boundary file via
@@ -335,6 +379,7 @@ cd benchmarks/js && npm run perf                              # JS baseline vs a
 cd benchmarks/js && npm run scale                             # scaling sweep (§limitations)
 cd benchmarks/js && npm run fair                              # rbush+turf fair competitor
 cd benchmarks/js && npm run http                              # full query over HTTP
+cd benchmarks/js && npm run load                              # sustained concurrent load
 cd benchmarks/js && npm run complex                           # complexity & metadata stress
 cd benchmarks/js && npm run crossover                         # candidate-count crossover sweep
 

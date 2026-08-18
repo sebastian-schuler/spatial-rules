@@ -37,6 +37,23 @@ app.post('/query', (req, res) => {
   res.json({ mask: Array.from(mask) });
 });
 
+// Bytes-in / bytes-out query: raw GeoJSON body (no express.json() object tree
+// on the way in), query as a base64 `x-query` header, mask as raw bytes out.
+// Models the third-party fetch pattern (no `.json()` call in Node).
+app.post('/queryRaw', express.raw({ type: 'application/octet-stream', limit: '20mb' }), (req, res) => {
+  const header = req.headers['x-query'];
+  const queryJson = header
+    ? Buffer.from(String(header), 'base64').toString('utf8')
+    : JSON.stringify({ spatial: { predicate: 'intersects' } });
+  try {
+    const mask = ruleset.query(req.body, queryJson);
+    res.setHeader('content-type', 'application/octet-stream');
+    res.send(Buffer.from(mask));
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: err.code });
+  }
+});
+
 app.post('/replace', (req, res) => {
   const { rules } = req.body ?? {};
   if (!rules) {

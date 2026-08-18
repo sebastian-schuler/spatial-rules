@@ -8,6 +8,7 @@
         "scale": "bun scale.mjs",
         "fair": "bun fair.mjs",
         "http": "bun http-bench.mjs",
+        "load": "bun load-bench.mjs",
         "complex": "bun complex.mjs",
         "crossover": "bun crossover.mjs"
     },
