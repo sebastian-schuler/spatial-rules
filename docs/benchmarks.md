@@ -4,6 +4,29 @@ Measurement infrastructure for the spatial rules engine, driven by the
 benchmark-dependent decisions in `docs/Initial-plan.md` §31–§33 (ADR-0002,
 ADR-0008, ADR-0009).
 
+## Summary
+
+**One number to remember: ~20 ms per request.** Evaluating 1,000 candidate
+footprints against 30 rules returns its match mask in about 20 ms — roughly
+**52× faster** than the same check written in JavaScript with turf.js
+(≈1.1 s per batch).
+
+**Why it got fast.** The cost was dominated by the exact geometry check ("does
+this footprint touch this zone?"). The fix that mattered was **preparing** each
+rule's geometry once per request (~5 ms for all 30), then reusing that work
+across every footprint — a ~23× speedup on its own. The bounding-box index, by
+contrast, barely helped: with 30 large zones, almost every footprint overlaps
+some zone's box anyway.
+
+**Practical impact.** 20 ms is well under the 50 ms ceiling for blocking the
+event loop, so v1 ships a simple synchronous API and needs no async path.
+
+| Workload (1,000 candidates × 30 rules) | Time per batch |
+|---|---|
+| turf.js (JavaScript baseline) | ~1 090 ms |
+| Rust — before prepared geometries | ~470 ms |
+| Rust — after prepared geometries | **~13–20 ms** |
+
 ## Dataset
 
 - **Source**: `benchmarks/src/dataset.rs` — deterministic (seeded LCG, no
