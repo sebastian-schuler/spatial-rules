@@ -12,8 +12,18 @@ use crate::rule::RuleId;
 
 /// Answers envelope-intersection queries against indexed rule envelopes.
 pub trait SpatialIndex: Send + Sync {
+    /// Append rule ids whose envelope intersects `envelope` into `out`, sorted
+    /// ascending and deduplicated (architecture-hardening 03). The caller owns
+    /// and reuses `out` across a batch, so the per-candidate allocation moves
+    /// out of the query hot loop.
+    fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>);
+
     /// Rule ids whose envelope intersects `envelope`, sorted ascending.
-    fn query_envelope(&self, envelope: &Rect<f64>) -> Vec<RuleId>;
+    fn query_envelope(&self, envelope: &Rect<f64>) -> Vec<RuleId> {
+        let mut out = Vec::new();
+        self.query_envelope_into(envelope, &mut out);
+        out
+    }
 }
 
 /// The selectable index implementations (benchmark ladder, ADR-0002).
@@ -65,16 +75,16 @@ impl RStarIndex {
 }
 
 impl SpatialIndex for RStarIndex {
-    fn query_envelope(&self, envelope: &Rect<f64>) -> Vec<RuleId> {
+    fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>) {
         let aabb = rect_to_aabb(envelope);
-        let mut ids: Vec<RuleId> = self
-            .tree
-            .locate_in_envelope_intersecting(aabb)
-            .map(|entry| entry.data)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
+        out.clear();
+        out.extend(
+            self.tree
+                .locate_in_envelope_intersecting(aabb)
+                .map(|entry| entry.data),
+        );
+        out.sort_unstable();
+        out.dedup();
     }
 }
 
@@ -90,16 +100,16 @@ impl LinearScanIndex {
 }
 
 impl SpatialIndex for LinearScanIndex {
-    fn query_envelope(&self, envelope: &Rect<f64>) -> Vec<RuleId> {
-        let mut ids: Vec<RuleId> = self
-            .entries
-            .iter()
-            .filter(|(rect, _)| rects_intersect(rect, envelope))
-            .map(|(_, id)| *id)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
+    fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>) {
+        out.clear();
+        out.extend(
+            self.entries
+                .iter()
+                .filter(|(rect, _)| rects_intersect(rect, envelope))
+                .map(|(_, id)| *id),
+        );
+        out.sort_unstable();
+        out.dedup();
     }
 }
 

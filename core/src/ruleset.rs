@@ -253,6 +253,14 @@ impl Ruleset {
         self.spatial_index.query_envelope(envelope)
     }
 
+    /// Fill `out` with the rule ids whose envelope intersects `envelope`
+    /// (sorted ascending, deduplicated) — the reusable form a batch query uses
+    /// so the per-candidate allocation moves out of the hot loop
+    /// (architecture-hardening 03).
+    pub fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>) {
+        self.spatial_index.query_envelope_into(envelope, out)
+    }
+
     /// Serialize the canonical **rules** (not the compiled indexes) to JSON
     /// bytes (ADR-0013). Deterministic: properties are a sorted `BTreeMap` and
     /// geometry is the validated/canonicalized `geo` geometry.
@@ -334,6 +342,7 @@ impl Ruleset {
             prepared,
             where_filter,
             include_overlap: query.include_overlap,
+            scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -397,6 +406,9 @@ pub struct PreparedQuery<'a> {
     prepared: PreparedGeometries,
     where_filter: Option<HashSet<RuleId>>,
     include_overlap: bool,
+    /// Reused across the batch so the spatial-index result is filled into one
+    /// buffer instead of allocated per candidate (architecture-hardening 03).
+    scratch: RefCell<Vec<RuleId>>,
 }
 
 impl<'a> PreparedQuery<'a> {
@@ -449,7 +461,9 @@ impl<'a> PreparedQuery<'a> {
         let mut matched: Vec<RuleId> = Vec::new();
         let mut overlaps: Vec<OverlapMetric> = Vec::new();
         let mut any_match = false;
-        for rule_id in self.ruleset.query_envelope(&bbox) {
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(&bbox, &mut scratch);
+        for &rule_id in scratch.iter() {
             if self.excluded.contains(&rule_id) {
                 continue;
             }
@@ -481,6 +495,7 @@ impl<'a> PreparedQuery<'a> {
                 }
             }
         }
+        drop(scratch);
 
         let overlaps = if compute_overlaps {
             Some(overlaps)
