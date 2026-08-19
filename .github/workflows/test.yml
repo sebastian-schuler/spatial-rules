@@ -1,0 +1,64 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit + integration tests (includes proptest)
+        run: cargo test --workspace
+      - name: Lint
+        run: cargo clippy --workspace --all-targets
+
+  node:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24, 26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Build addon (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release -p spatial-rules-node
+          cp target/release/libspatial_rules_node.so node/spatial_rules.node
+      - name: Build addon (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release -p spatial-rules-node
+          Copy-Item target\release\spatial_rules_node.dll node\spatial_rules.node -Force
+      - name: Smoke test (Node)
+        working-directory: node
+        run: node test/smoke.mjs
+
+  bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Build addon
+        run: |
+          cargo build --release -p spatial-rules-node
+          cp target/release/libspatial_rules_node.so node/spatial_rules.node
+      - name: Smoke test (Bun)
+        working-directory: node
+        run: bun test/smoke.mjs

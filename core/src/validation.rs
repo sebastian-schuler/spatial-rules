@@ -9,6 +9,16 @@ use geo::Validation;
 
 use crate::error::SpatialError;
 
+/// Whether every coordinate in `geometry` is finite. Non-finite (`NaN`/`±∞`)
+/// coordinates would make geo's `Relate`/`Validation` paths panic (they `unwrap`
+/// `partial_cmp`), so both validity gates reject them up front (ticket 07).
+fn has_non_finite_coords(geometry: &Geometry<f64>) -> bool {
+    use geo::CoordsIter;
+    geometry
+        .coords_iter()
+        .any(|coord| !coord.x.is_finite() || !coord.y.is_finite())
+}
+
 /// The geometry types supported in v1 (§2: Polygon and MultiPolygon).
 pub fn ensure_supported_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialError> {
     match geometry {
@@ -23,6 +33,11 @@ pub fn ensure_supported_geometry(geometry: &Geometry<f64>) -> Result<(), Spatial
 /// Strict gate for rule geometries: supported type AND OGC-valid (ADR-0005).
 pub fn validate_rule_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialError> {
     ensure_supported_geometry(geometry)?;
+    if has_non_finite_coords(geometry) {
+        return Err(SpatialError::invalid_geometry(
+            "invalid rule geometry: non-finite coordinate",
+        ));
+    }
     if !geometry.is_valid() {
         return Err(SpatialError::invalid_geometry(format!(
             "invalid rule geometry: {:?}",
@@ -38,6 +53,9 @@ pub fn validate_rule_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialErr
 /// human-readable `Invalid` reason.
 pub fn classify_candidate(geometry: &Geometry<f64>) -> Result<Rect<f64>, String> {
     ensure_supported_geometry(geometry).map_err(|error| error.message)?;
+    if has_non_finite_coords(geometry) {
+        return Err("invalid geometry: non-finite coordinate".to_string());
+    }
     if !geometry.is_valid() {
         return Err(format!(
             "invalid geometry: {:?}",
@@ -108,5 +126,25 @@ mod tests {
         );
         let reason = classify_candidate(&Geometry::Polygon(bowtie)).unwrap_err();
         assert!(reason.starts_with("invalid geometry:"));
+    }
+
+    #[test]
+    fn non_finite_coords_are_rejected_not_panics() {
+        let nan_square = Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (0.0, f64::NAN),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        );
+
+        let reason = classify_candidate(&Geometry::Polygon(nan_square.clone())).unwrap_err();
+        assert_eq!(reason, "invalid geometry: non-finite coordinate");
+
+        let err = validate_rule_geometry(&Geometry::Polygon(nan_square)).unwrap_err();
+        assert_eq!(err.code, crate::error::ErrorCode::InvalidGeometry);
     }
 }
