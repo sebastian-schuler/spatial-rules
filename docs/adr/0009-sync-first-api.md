@@ -1,3 +1,6 @@
 # Query/replacement API: sync-first with a benchmark trigger
 
 v1 ships synchronous `query()` and `replace()` — simplest and correct for the workload; the request path never touches a partial build (`docs/Initial-plan.md` §37). An asynchronous `queryAsync()` (off the JS thread via `#[napi] async fn`, ADR-0006) is added only if the benchmark harness shows the sync query's p95 latency exceeding 50 ms on the ~1,000-candidate production workload (§28). `replace()` returns the ADR-0007 observability (`lastSwapTime`, `buildDurationMs`, active ruleset id/count).
+
+Amended 2026-08-19 (ADR-0012/post-v1 ticket 06): the latency gate did **not** trigger — the load harness (`benchmarks/js/load-bench.mjs`, `docs/benchmarks.md` §3b) measured a single-process CPU ceiling of ~165 rps raw / ~130 rps JSON on 1,000×30, with p95 ≈ 32 ms over HTTP — but the sync napi call fully consumes the event loop under load (`/health` latency ≈ query latency). `queryAsync()` is therefore added as an **opt-in** lever on the throughput / event-loop-headroom axis, not the latency axis this ADR originally judged. It is byte-for-byte identical to `query()` (same mask, same `SR_*` error model as a Promise rejection), runs the parse + query on libuv's threadpool (`UV_THREADPOOL_SIZE`), copies the candidate buffer once per call, and leaves `query()` as the default. Sync `query()` is unchanged.
+

@@ -264,6 +264,17 @@ Findings:
   and for this query shape (the `where` equality index prunes rules, so this
   query is faster than the unfiltered ~20 ms ladder case).
 
+**`queryAsync` lever (ADR-0009 amendment, ticket 06):** the event-loop
+consumption above is the throughput/headroom axis, not the latency gate ADR-0009
+originally judged (p95 ≈ 32 ms ≪ 50 ms). An **opt-in** `queryAsync()` offloads
+the parse + query to libuv's threadpool (`UV_THREADPOOL_SIZE`, default 4), so
+`/health` and other synchronous work stay responsive while queries are in
+flight. Costs: per-query Promise dispatch overhead, one copy of the candidate
+buffer per async call, contention with fs/DNS/crypto/zlib on the shared
+threadpool, one per-thread prepared-geometry clone per ruleset (ADR-0010,
+bounded), and a concurrent in-flight memory multiplier. Sync `query()` remains
+the default and is byte-for-byte unchanged.
+
 ### 4. Complexity & metadata stress (`complex.mjs`)
 
 Two modes: synthetic "coastline" rules, and any real boundary file via

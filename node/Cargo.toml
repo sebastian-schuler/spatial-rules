@@ -10,7 +10,7 @@ description = "Node-API (napi-rs) binding for the spatial rules core"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "3", features = ["napi8"] }
+napi = { version = "3", features = ["napi8", "async"] }
 napi-derive = { version = "3", default-features = false }
 serde_json.workspace = true
 spatial-rules-core = { path = "../core" }

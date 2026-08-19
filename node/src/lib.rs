@@ -7,6 +7,8 @@
 //! Construction/query errors are thrown as JS errors carrying a stable `SR_*`
 //! code (ADR-0005).
 
+use std::sync::Arc;
+
 use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
@@ -17,6 +19,14 @@ use spatial_rules_core::{
 
 fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
     Error::new(error.code.as_str(), error.message)
+}
+
+/// Async rejections surface as the default `napi::Error` (a `Status` enum code),
+/// which cannot carry a custom `SR_*` code in `.code`. Embed the code in the
+/// message instead; the JS wrapper reconstructs `SpatialRulesError` from it
+/// (ADR-0005).
+fn spatial_error_to_napi_async(error: SpatialError) -> Error {
+    Error::from_reason(format!("{}: {}", error.code, error.message))
 }
 
 fn bytes_to_str<'a>(buffer: &'a Buffer, kind: &str) -> Result<&'a str, SpatialError> {
@@ -60,8 +70,9 @@ fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str>
 }
 
 #[napi]
+#[derive(Clone)]
 pub struct SpatialRuleset {
-    engine: Engine,
+    engine: Arc<Engine>,
 }
 
 #[napi]
@@ -71,7 +82,9 @@ impl SpatialRuleset {
     pub fn new(rules: Buffer) -> napi::Result<Self, &'static str> {
         let text = bytes_to_str(&rules, "rules").map_err(spatial_error_to_napi)?;
         let engine = Engine::from_geojson(text).map_err(spatial_error_to_napi)?;
-        Ok(SpatialRuleset { engine })
+        Ok(SpatialRuleset {
+            engine: Arc::new(engine),
+        })
     }
 
     /// Evaluate candidates (GeoJSON `Buffer`) against `query` (JSON string) and
@@ -79,6 +92,27 @@ impl SpatialRuleset {
     #[napi]
     pub fn query(&self, candidates: Buffer, query: String) -> napi::Result<Uint8Array, &'static str> {
         let (candidates, query) = parse_inputs(candidates, query)?;
+        Ok(Uint8Array::from(self.engine.query_mask(&candidates, &query)))
+    }
+
+    /// Opt-in off-main-thread query (ADR-0009 amendment): returns the same
+    /// mask as [`SpatialRuleset::query`], but the parse + query run on libuv's
+    /// threadpool so the JS event loop stays responsive. The candidate
+    /// `Buffer` is copied once per call (buffers are not moved across
+    /// threads). Errors reject with the same `SR_*` code/message as the sync
+    /// path.
+    #[napi]
+    pub async fn query_async(
+        &self,
+        candidates: Buffer,
+        query: String,
+    ) -> napi::Result<Uint8Array> {
+        let candidates_bytes = candidates.as_ref().to_vec();
+        let text = std::str::from_utf8(&candidates_bytes)
+            .map_err(|e| SpatialError::invalid_geojson(format!("candidates are not valid UTF-8: {e}")))
+            .map_err(spatial_error_to_napi_async)?;
+        let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi_async)?;
+        let query = parse_query(&query).map_err(spatial_error_to_napi_async)?;
         Ok(Uint8Array::from(self.engine.query_mask(&candidates, &query)))
     }
 

@@ -60,6 +60,14 @@ function rethrow(err) {
   if (err && typeof err.code === 'string' && err.code.startsWith('SR_')) {
     throw new SpatialRulesError(err.message, err.code);
   }
+  // Async rejections cannot carry a custom `SR_*` in `.code` (napi forces a
+  // Status enum code), so the addon embeds the code in the message instead.
+  if (err && typeof err.message === 'string') {
+    const match = /^(SR_[A-Z0-9_]+): ([\s\S]*)$/.exec(err.message);
+    if (match) {
+      throw new SpatialRulesError(match[2], match[1]);
+    }
+  }
   throw err;
 }
 
@@ -75,6 +83,14 @@ export class SpatialRuleset {
   query(candidates, query) {
     try {
       return this._native.query(candidates, query);
+    } catch (err) {
+      rethrow(err);
+    }
+  }
+
+  async queryAsync(candidates, query) {
+    try {
+      return await this._native.queryAsync(candidates, query);
     } catch (err) {
       rethrow(err);
     }

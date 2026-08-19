@@ -173,4 +173,28 @@ assert.throws(
 );
 assert.equal(JSON.parse(ruleset.stats()).version, 3);
 
+// Opt-in async query (ADR-0009 amendment): same mask as the sync path.
+const asyncMask = await ruleset.queryAsync(candidates, intersects);
+assert.deepEqual(Array.from(asyncMask), Array.from(ruleset.query(candidates, intersects)));
+
+// Same SR_* error model, surfaced as a Promise rejection.
+await assert.rejects(
+  ruleset.queryAsync(candidates, 'not json'),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',
+);
+await assert.rejects(
+  ruleset.queryAsync(Buffer.from([0xff, 0xfe, 0x00]), intersects),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_GEOJSON',
+);
+
+// An in-flight async query across a replace() settles with a consistent
+// snapshot (ADR-0007): a valid mask of the right length.
+const inFlight = ruleset.queryAsync(candidates, intersects);
+ruleset.replace(replacement);
+const settled = await inFlight;
+assert.equal(settled.length, 3);
+for (const v of settled) {
+  assert.ok(v === 0 || v === 1 || v === 2);
+}
+
 console.log('smoke test passed');
