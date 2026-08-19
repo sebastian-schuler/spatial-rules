@@ -97,6 +97,7 @@ impl PropertyIndex for EqualityIndex {
                 result
             }
             WhereExpr::Or(_) => None,
+            WhereExpr::Nor(_) => None,
         }
     }
 }

@@ -91,8 +91,9 @@ enum Verdict {
 ///
 /// The intersection is computed with [`BooleanOps`] and measured with
 /// [`GeodesicArea`] (spherical), so lon/lat is never treated as planar
-/// (Initial-plan §14). Both geometries are guaranteed Polygon/MultiPolygon by
-/// the upstream validity gates (`classify_candidate`/`validate_rule_geometry`).
+/// (Initial-plan §14). Polygon/MultiPolygon candidates are guaranteed valid by
+/// the upstream gates; a Point/MultiPoint candidate has zero area, so its
+/// overlap area and ratio are both `0` (filtering-scale ticket 01).
 ///
 /// `geodesic_area_signed().abs()` is used (not `geodesic_area_unsigned`) so the
 /// measure is robust to exterior-ring winding: `_unsigned` assumes a
@@ -101,6 +102,13 @@ enum Verdict {
 /// magnitude is correct for any winding of a polygon smaller than half the
 /// Earth (always true for rules/candidates).
 fn overlap_metric(candidate: &Geometry<f64>, rule: &Geometry<f64>) -> OverlapMetric {
+    // A point has zero area: there is no polygon intersection to measure.
+    if matches!(candidate, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+        return OverlapMetric {
+            overlap_area: 0.0,
+            overlap_ratio: 0.0,
+        };
+    }
     let intersection = match (candidate, rule) {
         (Geometry::Polygon(c), Geometry::Polygon(r)) => c.intersection(r),
         (Geometry::Polygon(c), Geometry::MultiPolygon(r)) => c.intersection(r),

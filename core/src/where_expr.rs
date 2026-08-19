@@ -1,9 +1,10 @@
 //! Mongo-style `where` AST: parsing and evaluation (ADR-0003, ADR-0011).
 //!
 //! Subset: implicit top-level `AND`, plain-value equality, `$eq`, `$ne`,
-//! `$gt/$gte/$lt/$lte`, `$in`, `$nin`, `$exists`, field-level `$not`, and
-//! `$and`/`$or`. A missing property or a type mismatch evaluates as non-match
-//! (even for `$ne`); only malformed predicates error.
+//! `$gt/$gte/$lt/$lte`, `$in`, `$nin`, `$exists`, field-level `$not`,
+//! `$and`/`$or`, and whole-clause `$nor`. A missing property or a type
+//! mismatch evaluates as non-match (even for `$ne`); only malformed
+//! predicates error.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -16,6 +17,9 @@ use crate::properties::PropertyValue;
 pub enum WhereExpr {
     And(Vec<WhereExpr>),
     Or(Vec<WhereExpr>),
+    /// `$nor`: matches when none of the inner clauses match — whole-clause
+    /// negation (filtering-scale ticket 02).
+    Nor(Vec<WhereExpr>),
     Predicate(FieldPredicate),
 }
 
@@ -73,6 +77,7 @@ impl WhereExpr {
             match key.as_str() {
                 "$and" => Ok(WhereExpr::And(parse_expr_list(value)?)),
                 "$or" => Ok(WhereExpr::Or(parse_expr_list(value)?)),
+                "$nor" => Ok(WhereExpr::Nor(parse_expr_list(value)?)),
                 _ if key.starts_with('$') => Err(SpatialError::unsupported_property_operator(
                     format!("unsupported operator: {key}"),
                 )),
@@ -88,6 +93,7 @@ impl WhereExpr {
         match self {
             WhereExpr::And(exprs) => exprs.iter().all(|expr| expr.eval(properties)),
             WhereExpr::Or(exprs) => exprs.iter().any(|expr| expr.eval(properties)),
+            WhereExpr::Nor(exprs) => !exprs.iter().any(|expr| expr.eval(properties)),
             WhereExpr::Predicate(predicate) => predicate.eval(properties),
         }
     }
@@ -186,7 +192,7 @@ fn same_variant(a: &PropertyValue, b: &PropertyValue) -> bool {
 fn parse_expr_list(value: &serde_json::Value) -> Result<Vec<WhereExpr>, SpatialError> {
     let array = value
         .as_array()
-        .ok_or_else(|| invalid_predicate("$and/$or requires an array of predicates"))?;
+        .ok_or_else(|| invalid_predicate("$and/$or/$nor requires an array of predicates"))?;
     array.iter().map(WhereExpr::parse).collect()
 }
 

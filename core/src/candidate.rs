@@ -24,7 +24,7 @@ pub enum CandidateClass {
 pub struct Candidate {
     /// Application-supplied identifier (feature `id`).
     pub id: String,
-    /// The candidate geometry (Polygon or MultiPolygon).
+    /// The candidate geometry (Polygon, MultiPolygon, Point, or MultiPoint).
     pub geometry: Geometry<f64>,
     /// The precomputed classification (envelope or invalid reason).
     class: CandidateClass,

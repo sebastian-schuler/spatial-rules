@@ -72,6 +72,11 @@ assert.deepEqual(Array.from(nin), [0, 0, 2]);
 const not = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: { $not: { $eq: false } } } }));
 assert.deepEqual(Array.from(not), [1, 0, 2]);
 
+// Whole-clause $nor (filtering-scale ticket 02): NOT(active = true) keeps only
+// the inactive zone-b, which no candidate reaches.
+const nor = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { $nor: [{ active: true }] } }));
+assert.deepEqual(Array.from(nor), [0, 0, 2]);
+
 // excludeRuleIds removes named rules: excluding both matching zones leaves none.
 const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, excludeRuleIds: ['zone-a', 'zone-c'] }));
 assert.deepEqual(Array.from(excluding), [0, 0, 2]);
@@ -129,6 +134,19 @@ const touches = ruleset.query(candidates, JSON.stringify({ spatial: { predicate:
 assert.deepEqual(Array.from(touches), [0, 0, 2]);
 const overlaps = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'overlaps' } }));
 assert.deepEqual(Array.from(overlaps), [0, 0, 2]);
+
+// Point candidates (filtering-scale ticket 01): a point inside zone-a matches,
+// a disjoint point does not.
+const pointCandidates = Buffer.from(
+  JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', id: 'pt-in', properties: {}, geometry: { type: 'Point', coordinates: [5, 5] } },
+      { type: 'Feature', id: 'pt-out', properties: {}, geometry: { type: 'Point', coordinates: [50, 50] } },
+    ],
+  }),
+);
+assert.deepEqual(Array.from(ruleset.query(pointCandidates, intersects)), [1, 0]);
 
 // Dynamic replacement (ADR-0007): atomic swap + observability.
 const stats = JSON.parse(ruleset.stats());

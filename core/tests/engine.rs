@@ -211,3 +211,42 @@ fn replace_from_canonical_swaps_and_rejects_invalid_input() {
     let outcomes = engine.query(&candidates, &intersects());
     assert_eq!(matched_count(&outcomes), 1);
 }
+
+#[test]
+fn engine_applies_whole_clause_nor() {
+    let engine = Engine::from_geojson(
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            { "type": "Feature", "id": "a", "properties": { "active": true, "zone": "red" }, "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] } }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+    // NOT(zone = blue OR active = false): both are false for rule a, so the
+    // candidate matches — $nor flows through the engine path.
+    let query = Query::from_json(&serde_json::json!({
+        "spatial": { "predicate": "intersects" },
+        "where": { "$nor": [{ "zone": "blue" }, { "active": false }] }
+    }))
+    .unwrap();
+    assert_eq!(matched_count(&engine.query(&candidates, &query)), 1);
+}
+
+#[test]
+fn engine_accepts_point_candidates() {
+    let engine = Engine::from_geojson(RULE_A).unwrap();
+    let candidates = candidates_from_geojson(
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            { "type": "Feature", "id": "pt-inside", "properties": {}, "geometry": { "type": "Point", "coordinates": [5.0, 5.0] } },
+            { "type": "Feature", "id": "pt-outside", "properties": {}, "geometry": { "type": "Point", "coordinates": [50.0, 50.0] } }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let outcomes = engine.query(&candidates, &intersects());
+    assert_eq!(matched_count(&outcomes), 1);
+}

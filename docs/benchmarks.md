@@ -378,10 +378,12 @@ bytes (12.67 MiB), 258 countries, 546k vertices, 168 properties.
 ### 5. Crossover sweep (`bun run bench crossover`)
 
 At how many candidates does the native binding beat a hand-rolled turf scan?
-Sweeps candidates 20 → 5,000 (min-of-3) on the real `countries.geojson`
-ruleset, with candidates scattered across the whole map (sampled from every
-country's boundary, so each one does a real relate). Full addon query vs turf
-scan + bbox fast-reject, matched counts asserted each step.
+Sweeps candidates 20 → 100,000 (min-of-3). Up to 5,000 it runs on the real
+`countries.geojson` ruleset, with candidates scattered across the whole map
+(sampled from every country's boundary, so each one does a real relate); the
+100k level runs on the default synthetic 500-rule grid, because the real-data
+turf baseline there is ~40 minutes per run. Full addon query vs turf scan +
+bbox fast-reject, matched counts asserted each step.
 
 | candidates | addon (ms) | turf (ms) | speedup |
 |---|---|---|---|
@@ -400,21 +402,30 @@ scan + bbox fast-reject, matched counts asserted each step.
   relate work and the addon's floor dominates.
 - Falls back to a synthetic 500-rule grid when no `--rules-file` is set;
   `--rules=… --sizes=… --reps=…` tune it.
+- Top of the sweep (default synthetic mode, 500 rules): at **100,000**
+  candidates the addon is **456 ms** vs turf's bbox-reject scan **1,342 ms**
+  (2.9×, 62,092 matched) — near-linear scaling from 5k (22.4 ms), so the
+  addon adds ~20× time for 20× candidates.
 
 **Second axis — rule count** (`bun run bench crossover --mode=rules`, synthetic
 grid, fixed 1,000 candidates):
 
 | rules | addon (ms) | turf (ms) | speedup | matched |
 |---|---|---|---|---|
-| 500 | 3.45 | 11.83 | 3.4× | 612 |
-| 1,000 | 3.97 | 13.59 | 3.4× | 637 |
-| 2,000 | 4.65 | 17.54 | 3.8× | 641 |
-| 5,000 | 4.86 | 21.85 | 4.5× | 655 |
+| 500 | 4.06 | 15.43 | 3.8× | 612 |
+| 1,000 | 4.66 | 15.53 | 3.3× | 637 |
+| 2,000 | 4.83 | 18.40 | 3.8× | 641 |
+| 5,000 | 4.74 | 22.41 | 4.7× | 655 |
+| 20,000 | 5.60 | 61.82 | 11.0× | 655 |
 
-- The R*-tree keeps the addon ~flat (3.5 → 4.9 ms over 10× rules) while turf's
-  scan + bbox reject grows with the scan (11.8 → 21.9 ms) — the index payoff at
-  moderate rule counts; the naive-scan version at 30 → 300 rules is §1 (up to
-  941×).
+- The R*-tree keeps the addon ~flat (4.1 → 5.6 ms over 40× rules) while turf's
+  scan + bbox reject grows with the scan (15.4 → 61.8 ms) — the index payoff
+  widens to 11× at 20,000 rules; the naive-scan version at 30 → 300 rules is
+  §1 (up to 941×).
+- The one-time ruleset build grows with rule count (~5.3 s at 20,000 rules,
+  measured separately; the crossover times queries only) — fine for the
+  weekly-replacement lifecycle, but the first thing to watch at very high rule
+  counts.
 - Grid candidates land on ~35% of rules' centre holes, so matched is ~65% of
   the 1,000 candidates (see the `matched` column) — both sides still agree, and
   the relate work is unchanged.
@@ -467,7 +478,7 @@ the harnesses read, with the flag that overrides it:
 | `global.paths` | `nodeBinding` | — | `node/spatial_rules.node` |
 | `global.server` | `port` | `--port` | `3000` |
 | `complex` | `rules` `parts` `vertices` `fields` `candidates` `rulesFile` | `--rules` `--parts` `--vertices` `--fields` `--candidates` `--rules-file` | `3` `3` `5000` `40` `20` `null` |
-| `crossover` | `mode` `rules` `sizes` `rulesRange` `candidates` `reps` `rulesFile` | `--mode` `--rules` `--sizes` `--rules-range` `--candidates` `--reps` `--rules-file` | `candidates` `500` `20,200,1000,5000` `500,1000,2000,5000` `1000` `3` `null` |
+| `crossover` | `mode` `rules` `sizes` `rulesRange` `candidates` `reps` `rulesFile` | `--mode` `--rules` `--sizes` `--rules-range` `--candidates` `--reps` `--rules-file` | `candidates` `500` `20,200,1000,5000,100000` `500,1000,2000,5000,20000` `1000` `3` `null` |
 | `fair` | `rules` `candidates` | `--rules` `--candidates` | `300` `1000` |
 | `scale` | `points` | `--points` | `30x100,100x200,300x1000` |
 | `perf` | `iters` | `--iters` | `3` |

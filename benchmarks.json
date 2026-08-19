@@ -24,8 +24,8 @@
     "crossover": {
         "mode": "candidates",
         "rules": 500,
-        "sizes": "20,200,1000,5000",
-        "rulesRange": "500,1000,2000,5000",
+        "sizes": "20,200,1000,5000,100000",
+        "rulesRange": "500,1000,2000,5000,20000",
         "candidates": 1000,
         "reps": 3,
         "rulesFile": null

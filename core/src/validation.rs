@@ -33,15 +33,34 @@ fn has_non_finite_coords(geometry: &Geometry<f64>) -> bool {
         .any(|coord| !coord.x.is_finite() || !coord.y.is_finite())
 }
 
-/// The geometry types supported in v1 (§2: Polygon and MultiPolygon).
+/// The geometry types supported for **rule** geometries (§2: Polygon and
+/// MultiPolygon). Rules stay polygon-only even though candidates widened to
+/// points (filtering-scale ticket 01); see `ensure_supported_candidate_geometry`.
 pub fn ensure_supported_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialError> {
     match geometry {
         Geometry::Polygon(_) | Geometry::MultiPolygon(_) => Ok(()),
-        other => Err(SpatialError::unsupported_geometry_type(format!(
-            "unsupported geometry type: {}",
-            geometry_type_name(other)
-        ))),
+        other => Err(unsupported_type_error(other)),
     }
+}
+
+/// The geometry types supported for **candidates**: Polygon, MultiPolygon,
+/// Point, and MultiPoint (filtering-scale ticket 01).
+fn ensure_supported_candidate_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialError> {
+    match geometry {
+        Geometry::Polygon(_)
+        | Geometry::MultiPolygon(_)
+        | Geometry::Point(_)
+        | Geometry::MultiPoint(_) => Ok(()),
+        other => Err(unsupported_type_error(other)),
+    }
+}
+
+/// The shared unsupported-type error, so the two gates construct it in one place.
+fn unsupported_type_error(geometry: &Geometry<f64>) -> SpatialError {
+    SpatialError::unsupported_geometry_type(format!(
+        "unsupported geometry type: {}",
+        geometry_type_name(geometry)
+    ))
 }
 
 /// Strict gate for rule geometries: supported type AND OGC-valid (ADR-0005).
@@ -62,14 +81,15 @@ pub fn validate_rule_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialErr
 }
 
 /// Classify a candidate geometry for the query pipeline (ADR-0005): it must use
-/// a supported type AND be OGC-valid AND have a bounding rectangle. Success
-/// returns the precomputed envelope the spatial step needs; failure returns the
-/// human-readable `Invalid` reason.
+/// a supported candidate type (Polygon, MultiPolygon, Point, or MultiPoint) AND
+/// be OGC-valid AND have a bounding rectangle. Success returns the precomputed
+/// envelope the spatial step needs; failure returns the human-readable
+/// `Invalid` reason.
 pub fn classify_candidate(geometry: &Geometry<f64>) -> Result<Rect<f64>, String> {
     #[cfg(test)]
     CLASSIFY_CALLS.with(|count| count.set(count.get() + 1));
 
-    ensure_supported_geometry(geometry).map_err(|error| error.message)?;
+    ensure_supported_candidate_geometry(geometry).map_err(|error| error.message)?;
     if has_non_finite_coords(geometry) {
         return Err("invalid geometry: non-finite coordinate".to_string());
     }
@@ -125,8 +145,27 @@ mod tests {
 
     #[test]
     fn unsupported_type_is_rejected() {
-        let reason = classify_candidate(&Geometry::Point(Point::new(1.0, 1.0))).unwrap_err();
-        assert_eq!(reason, "unsupported geometry type: Point");
+        use geo::Line;
+        let reason = classify_candidate(&Geometry::Line(Line::new(
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 1.0),
+        )))
+        .unwrap_err();
+        assert_eq!(reason, "unsupported geometry type: Line");
+    }
+
+    #[test]
+    fn point_candidate_is_supported() {
+        let rect = classify_candidate(&Geometry::Point(Point::new(5.0, 5.0))).unwrap();
+        assert_eq!(rect, Rect::new((5.0, 5.0), (5.0, 5.0)));
+    }
+
+    #[test]
+    fn multipoint_candidate_is_supported() {
+        use geo::MultiPoint;
+        let multipoint = MultiPoint::new(vec![Point::new(1.0, 1.0), Point::new(3.0, 3.0)]);
+        let rect = classify_candidate(&Geometry::MultiPoint(multipoint)).unwrap();
+        assert_eq!(rect, Rect::new((1.0, 1.0), (3.0, 3.0)));
     }
 
     #[test]

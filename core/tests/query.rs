@@ -407,12 +407,18 @@ fn invalid_candidate_stays_in_result() {
 #[test]
 fn unsupported_candidate_type_is_invalid() {
     let ruleset = default_ruleset();
-    let point = candidate_geometry("pt", geo::Geometry::Point(geo::Point::new(1.0, 1.0)));
-    let outcomes = ruleset.query(&[point], &intersects());
+    let line = candidate_geometry(
+        "line",
+        geo::Geometry::Line(geo::Line::new(
+            geo::Point::new(1.0, 1.0),
+            geo::Point::new(2.0, 2.0),
+        )),
+    );
+    let outcomes = ruleset.query(&[line], &intersects());
     assert_eq!(
         outcomes[0],
         CandidateOutcome::Invalid {
-            reason: "unsupported geometry type: Point".to_string()
+            reason: "unsupported geometry type: Line".to_string()
         }
     );
 }
@@ -729,6 +735,116 @@ fn new_operators_compose_inside_and_or() {
     assert_eq!(ruleset.query(std::slice::from_ref(&inside), &or_query), vec![CandidateOutcome::NotMatched]);
 }
 
+// --- Ticket 02: whole-clause $nor negation (filtering-scale) ---
+
+#[test]
+fn nor_matches_when_no_inner_clause_matches() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![matched_outcome(&ruleset)];
+
+    // square.country = "HR": the inner clause matches, so NOR is false.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [{ "country": "HR" }] }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+    // square.country != "SI": the inner clause does not match, so NOR is true.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [{ "country": "SI" }] }))),
+        matched
+    );
+}
+
+#[test]
+fn nor_requires_all_inner_clauses_to_fail() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![matched_outcome(&ruleset)];
+
+    // Neither clause matches (country=SI, active=false) -> NOR matches.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [{ "country": "SI" }, { "active": false }] }))),
+        matched
+    );
+    // One clause matches (country=HR) -> NOR does not match.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [{ "country": "HR" }, { "active": false }] }))),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn nor_with_missing_field_inner_is_vacuous() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // "name" is absent everywhere: the inner clause is a non-match, so NOR matches.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [{ "name": "x" }] }))),
+        vec![matched_outcome(&ruleset)]
+    );
+}
+
+#[test]
+fn nor_empty_array_matches_all() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // No inner clauses: vacuously none match, so NOR matches everything.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [] }))),
+        vec![matched_outcome(&ruleset)]
+    );
+}
+
+#[test]
+fn nor_with_type_mismatch_inner_is_vacuous() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // square.country is Str; a numeric inner clause is a type mismatch
+    // (non-match per ADR-0003), so NOR matches.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&inside), &where_query(json!({ "$nor": [{ "country": 10 }] }))),
+        vec![matched_outcome(&ruleset)]
+    );
+}
+
+#[test]
+fn nor_parity_with_client_side_negation() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    // $nor: [A, B] must equal the client-side encoding AND[!A, !B] — the
+    // same candidate evaluated both ways must agree.
+    let nor = where_query(json!({ "$nor": [{ "country": "HR" }, { "active": false }] }));
+    let client = where_query(json!({ "$and": [{ "country": { "$ne": "HR" } }, { "active": { "$ne": false } }] }));
+    let expected = ruleset.query(std::slice::from_ref(&inside), &client);
+    assert_eq!(ruleset.query(std::slice::from_ref(&inside), &nor), expected);
+
+    // Cross-check the value: square is HR and active, so NOT(HR OR false) is false.
+    assert_eq!(expected, vec![CandidateOutcome::NotMatched]);
+}
+
+#[test]
+fn nor_composes_inside_and_or() {
+    let ruleset = default_ruleset();
+    let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
+    let matched = vec![matched_outcome(&ruleset)];
+
+    let and_query = where_query(json!({
+        "$and": [
+            { "active": true },
+            { "$nor": [{ "country": "SI" }] }
+        ]
+    }));
+    assert_eq!(ruleset.query(std::slice::from_ref(&inside), &and_query), matched);
+
+    let or_query = where_query(json!({
+        "$or": [
+            { "$nor": [{ "active": true }] },
+            { "country": "SI" }
+        ]
+    }));
+    assert_eq!(ruleset.query(std::slice::from_ref(&inside), &or_query), vec![CandidateOutcome::NotMatched]);
+}
+
 #[test]
 fn malformed_new_operators_are_rejected() {
     // $exists requires a boolean operand.
@@ -744,6 +860,13 @@ fn malformed_new_operators_are_rejected() {
     assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
 
     let err = where_query_err(json!({ "active": { "$not": {} } }));
+    assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
+
+    // $nor requires an array of predicates.
+    let err = where_query_err(json!({ "$nor": { "country": "HR" } }));
+    assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
+
+    let err = where_query_err(json!({ "$nor": "HR" }));
     assert_eq!(err.code, ErrorCode::InvalidPropertyPredicate);
 }
 
@@ -896,4 +1019,107 @@ fn include_overlap_flag_parses_and_validates() {
     }))
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidQuery);
+}
+
+// --- Ticket 01: point candidates (filtering-scale) ---
+
+#[test]
+fn point_candidate_inside_rule_matches_intersects() {
+    let ruleset = default_ruleset();
+    let point = candidate_geometry("point", geo::Geometry::Point(geo::Point::new(5.0, 5.0)));
+    // The unit square (0,0)-(10,10) contains (5,5).
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&point), &intersects()),
+        vec![matched_outcome(&ruleset)]
+    );
+}
+
+#[test]
+fn point_candidate_outside_does_not_match() {
+    let ruleset = default_ruleset();
+    let point = candidate_geometry("point", geo::Geometry::Point(geo::Point::new(50.0, 50.0)));
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&point), &intersects()),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn point_predicates_are_directional() {
+    let ruleset = default_ruleset();
+    let interior = candidate_geometry("interior", geo::Geometry::Point(geo::Point::new(5.0, 5.0)));
+    let corner = candidate_geometry("corner", geo::Geometry::Point(geo::Point::new(0.0, 0.0)));
+    let matched = vec![matched_outcome(&ruleset)];
+
+    // A point inside a polygon is within and covered_by it; a polygon does not
+    // contain or cover the point in the candidate→rule DE-9IM direction.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&interior), &Query::new(SpatialPredicate::Within)),
+        matched
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&interior), &Query::new(SpatialPredicate::CoveredBy)),
+        matched
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&interior), &Query::new(SpatialPredicate::Contains)),
+        vec![CandidateOutcome::NotMatched]
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&interior), &Query::new(SpatialPredicate::Covers)),
+        vec![CandidateOutcome::NotMatched]
+    );
+
+    // A point on the rule's boundary touches it.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&corner), &Query::new(SpatialPredicate::Touches)),
+        matched
+    );
+}
+
+#[test]
+fn point_overlaps_predicate_is_false() {
+    let ruleset = default_ruleset();
+    let point = candidate_geometry("point", geo::Geometry::Point(geo::Point::new(5.0, 5.0)));
+    // DE-9IM overlaps requires two same-dimension interiors: a point never
+    // overlaps a polygon.
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&point), &Query::new(SpatialPredicate::Overlaps)),
+        vec![CandidateOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn point_candidate_overlap_is_zero_area_zero_ratio() {
+    let ruleset = default_ruleset();
+    let point = candidate_geometry("point", geo::Geometry::Point(geo::Point::new(5.0, 5.0)));
+    let query = Query::from_json(&json!({
+        "spatial": { "predicate": "intersects" },
+        "includeOverlap": true
+    }))
+    .unwrap();
+    let rich = ruleset.query(std::slice::from_ref(&point), &query);
+    let CandidateOutcome::Matched { overlaps, .. } = &rich[0] else {
+        panic!("expected a match");
+    };
+    let metric = &overlaps.as_ref().unwrap()[0];
+    // A point has zero area: overlap area and ratio are both 0.
+    assert_eq!(metric.overlap_area, 0.0);
+    assert_eq!(metric.overlap_ratio, 0.0);
+}
+
+#[test]
+fn multipoint_candidate_matches_when_any_point_inside() {
+    let ruleset = default_ruleset();
+    let multipoint = candidate_geometry(
+        "multipoint",
+        geo::Geometry::MultiPoint(geo::MultiPoint::new(vec![
+            geo::Point::new(50.0, 50.0),
+            geo::Point::new(5.0, 5.0),
+        ])),
+    );
+    assert_eq!(
+        ruleset.query(std::slice::from_ref(&multipoint), &intersects()),
+        vec![matched_outcome(&ruleset)]
+    );
 }
