@@ -1,7 +1,11 @@
 # Opt-in queryAsync: off-main-thread query
 
 Type: task
-Status: ready-for-agent
+Status: resolved
+
+## Answer
+
+Implemented in `5ce241d` (`feat(node): opt-in off-main-thread queryAsync`): `queryAsync` runs off the JS thread via the libuv threadpool; sync `query()` is byte-for-byte unchanged and remains the default (ADR-0009 latency gate not triggered).
 
 ## Question
 

@@ -1,7 +1,11 @@
 # Test comprehensiveness: audit + expand the suite
 
 Type: task
-Status: ready-for-agent
+Status: resolved
+
+## Answer
+
+Implemented in `4ac8919` (`test: property/edge/error matrices, NaN guard, CI matrix`): proptest + error/edge matrices added, NaN guard, and a test CI matrix workflow — closing the 2026-08-19 audit gaps (test workflow, property-based testing, error/edge coverage; fuzz left as future work).
 
 ## Question
 

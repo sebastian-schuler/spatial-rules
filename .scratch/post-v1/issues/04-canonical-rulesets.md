@@ -1,7 +1,11 @@
 # Persisted rulesets: canonical JSON format, recompile on load
 
 Type: task
-Status: ready-for-agent
+Status: resolved
+
+## Answer
+
+Implemented in `a470ce2` (`feat(core): canonical ruleset persistence`): canonical JSON ruleset serialization with validation at build time and recompile-on-load per ADR-0013.
 
 ## Question
 

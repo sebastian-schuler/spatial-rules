@@ -1,7 +1,11 @@
 # Richer JSON where operators: $not, $nin, $exists
 
 Type: task
-Status: ready-for-agent
+Status: resolved
+
+## Answer
+
+Implemented in `371ad44` (`feat(core): richer where operators $not/$nin/$exists`): field-level `$not`, `$nin`, `$exists` in the `WhereExpr` AST per ADR-0011, per-rule evaluation only (no index extension). Missing field / type mismatch = non-match; `$not`/`$nin` compose under `$and`/`$or`. Tests in `core/tests/query.rs` + `core/tests/engine.rs` and the node smoke pass; `cargo test --workspace` + clippy green.
 
 ## Question
 

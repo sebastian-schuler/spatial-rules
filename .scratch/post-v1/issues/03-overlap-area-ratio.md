@@ -1,8 +1,12 @@
 # Quantitative overlap: overlapArea + overlapRatio (rich path)
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
+
+## Answer
+
+Implemented in `cf4b9fa` (`feat(core): quantitative overlap area/ratio on the rich path`): `includeOverlap` returns `overlapArea`/`overlapRatio` on the rich query path per ADR-0012 (blocker 02 resolved).
 
 ## Question
 

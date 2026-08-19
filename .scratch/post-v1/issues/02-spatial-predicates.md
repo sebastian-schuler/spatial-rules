@@ -1,7 +1,11 @@
 # Spatial predicates: covers, covered_by, touches, overlaps
 
 Type: task
-Status: ready-for-agent
+Status: resolved
+
+## Answer
+
+Implemented in `f683a5c` (`feat(core): spatial predicates covers/covered_by/touches/overlaps`): `SpatialPredicate` extended per ADR-0012 in the candidate-relates-to-rule direction, with turf cross-check parity in the harness.
 
 ## Question
 
