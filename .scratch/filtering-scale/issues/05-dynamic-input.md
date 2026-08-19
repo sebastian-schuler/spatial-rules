@@ -1,7 +1,29 @@
 # Dynamic input types: buffer / string / object
 
 Type: task
-Status: ready-for-agent
+Status: resolved
+
+## Answer
+
+Implemented (filtering-scale, 2026-08-20): wrapper-only input normalization
+in `node/index.js` — two helpers, `toGeoJsonBuffer` (candidates + rules) and
+`toQueryString` (query), applied at the three spec'd entry points only:
+`new SpatialRuleset`, `query()`, and `replace()`. A `Buffer` fast-path passes
+through untouched (byte-faithful); a string is `Buffer.from`-ed (rules/candidates)
+or passed through (query); an object is `JSON.stringify`-ed (value-faithful —
+properties preserved, formatting normalized). Anything else — numbers, `null`,
+`undefined`, and arrays (not GeoJSON values) — throws a clear wrapper
+`TypeError` before the native crossing. The normalized Buffer/query is what
+`query()` hands to `QueryResult`, so `toGeoJson()`/`toRichJson()` work on
+object/string inputs without a second crossing. Streams are out of scope, and
+`node/src/lib.rs` is unchanged (Buffer-in/mask-out stays the boundary; the
+benchmark hot path is untouched). `queryRich()`/`queryAsync()`/`fromCanonical()`
+are unchanged per scope. Tests: `node/test/smoke.mjs` covers each accepted
+input type producing the Buffer form's mask, the query accepting an object,
+constructor/replace accepting object + string rules, and unsupported types
+(including arrays) throwing a `TypeError`; README documents the accepted input
+types and the byte- vs value-faithful nuance. Green under both
+`node node/test/smoke.mjs` and `bun node/test/smoke.mjs`.
 
 ## Question
 
