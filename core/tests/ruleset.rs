@@ -190,10 +190,10 @@ fn linear_scan_matches_rstar() {
 fn where_equality_index_filters_by_property() {
     let ruleset = Ruleset::from_geojson(GEOJSON).unwrap();
     let zone_a = ruleset.rule_id("zone-a").unwrap();
-    let inside_a = Candidate {
-        id: "inside-a".to_string(),
-        geometry: geo::Geometry::Polygon(square(2.0, 2.0, 4.0, 4.0)),
-    };
+    let inside_a = Candidate::new(
+        "inside-a".to_string(),
+        geo::Geometry::Polygon(square(2.0, 2.0, 4.0, 4.0)),
+    );
 
     let restricted = Query::from_json(&json!({
         "spatial": { "predicate": "intersects" },
@@ -232,10 +232,10 @@ fn where_in_index_unions_overlapping_rules() {
         ),
     ])
     .unwrap();
-    let inside = Candidate {
-        id: "inside".to_string(),
-        geometry: geo::Geometry::Polygon(square(6.0, 6.0, 8.0, 8.0)),
-    };
+    let inside = Candidate::new(
+        "inside".to_string(),
+        geo::Geometry::Polygon(square(6.0, 6.0, 8.0, 8.0)),
+    );
     let query = Query::from_json(&json!({
         "spatial": { "predicate": "intersects" },
         "where": { "country": { "$in": ["HR", "SI"] } }
@@ -259,10 +259,10 @@ fn empty_ruleset_is_valid() {
         ruleset.query_envelope(&Rect::new((0.0, 0.0), (10.0, 10.0))),
         Vec::<RuleId>::new()
     );
-    let candidate = Candidate {
-        id: "c".to_string(),
-        geometry: geo::Geometry::Polygon(square(0.0, 0.0, 1.0, 1.0)),
-    };
+    let candidate = Candidate::new(
+        "c".to_string(),
+        geo::Geometry::Polygon(square(0.0, 0.0, 1.0, 1.0)),
+    );
     assert_eq!(
         ruleset.query(&[candidate], &Query::new(SpatialPredicate::Intersects)),
         vec![CandidateOutcome::NotMatched]

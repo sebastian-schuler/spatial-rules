@@ -19,7 +19,7 @@ mod spatial_index;
 mod validation;
 mod where_expr;
 
-pub use candidate::Candidate;
+pub use candidate::{Candidate, CandidateClass};
 pub use engine::{Engine, ReplaceReport};
 pub use error::{ErrorCode, SpatialError};
 pub use ingestion::{

@@ -178,10 +178,10 @@ pub fn candidates() -> Vec<Candidate> {
                 y: cy - height / 2.0,
             },
         ]);
-        candidates.push(Candidate {
-            id: format!("candidate-{index:04}"),
-            geometry: geo::Geometry::Polygon(Polygon::new(ring, vec![])),
-        });
+        candidates.push(Candidate::new(
+            format!("candidate-{index:04}"),
+            geo::Geometry::Polygon(Polygon::new(ring, vec![])),
+        ));
     }
     candidates
 }

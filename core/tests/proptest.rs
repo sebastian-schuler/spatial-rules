@@ -131,10 +131,7 @@ proptest! {
         let candidates: Vec<Candidate> = candidates
             .iter()
             .enumerate()
-            .map(|(index, rect)| Candidate {
-                id: format!("c{index}"),
-                geometry: rect_to_geometry(*rect),
-            })
+            .map(|(index, rect)| Candidate::new(format!("c{index}"), rect_to_geometry(*rect)))
             .collect();
 
         let query = Query::new(SpatialPredicate::Intersects);

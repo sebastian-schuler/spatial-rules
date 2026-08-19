@@ -56,10 +56,7 @@ fn rule(id: &str, polygon: Polygon<f64>, properties: &[(&str, PropertyValue)]) -
 }
 
 fn candidate(id: &str, polygon: Polygon<f64>) -> Candidate {
-    Candidate {
-        id: id.to_string(),
-        geometry: geo::Geometry::Polygon(polygon),
-    }
+    Candidate::new(id.to_string(), geo::Geometry::Polygon(polygon))
 }
 
 fn default_ruleset() -> Ruleset {
@@ -444,9 +441,9 @@ fn exclude_unknown_rule_id_is_ignored() {
 #[test]
 fn invalid_candidate_stays_in_result() {
     let ruleset = default_ruleset();
-    let bowtie = Candidate {
-        id: "bowtie".to_string(),
-        geometry: geo::Geometry::Polygon(Polygon::new(
+    let bowtie = Candidate::new(
+        "bowtie".to_string(),
+        geo::Geometry::Polygon(Polygon::new(
             LineString::from(vec![
                 (0.0, 0.0),
                 (10.0, 10.0),
@@ -456,7 +453,7 @@ fn invalid_candidate_stays_in_result() {
             ]),
             vec![],
         )),
-    };
+    );
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
     let outcomes = ruleset.query(&[bowtie, inside], &intersects());
     assert_eq!(outcomes.len(), 2);
@@ -467,10 +464,7 @@ fn invalid_candidate_stays_in_result() {
 #[test]
 fn unsupported_candidate_type_is_invalid() {
     let ruleset = default_ruleset();
-    let point = Candidate {
-        id: "pt".to_string(),
-        geometry: geo::Geometry::Point(Point::new(1.0, 1.0)),
-    };
+    let point = Candidate::new("pt".to_string(), geo::Geometry::Point(Point::new(1.0, 1.0)));
     let outcomes = ruleset.query(&[point], &intersects());
     assert_eq!(
         outcomes[0],
@@ -483,9 +477,9 @@ fn unsupported_candidate_type_is_invalid() {
 #[test]
 fn invalid_geometry_reason_is_stable() {
     let ruleset = default_ruleset();
-    let bowtie = Candidate {
-        id: "bowtie".to_string(),
-        geometry: geo::Geometry::Polygon(Polygon::new(
+    let bowtie = Candidate::new(
+        "bowtie".to_string(),
+        geo::Geometry::Polygon(Polygon::new(
             LineString::from(vec![
                 (0.0, 0.0),
                 (10.0, 10.0),
@@ -495,7 +489,7 @@ fn invalid_geometry_reason_is_stable() {
             ]),
             vec![],
         )),
-    };
+    );
     let outcomes = ruleset.query(&[bowtie], &intersects());
     let CandidateOutcome::Invalid { reason } = &outcomes[0] else {
         panic!("expected an invalid outcome");
@@ -560,9 +554,9 @@ fn prepared_query_evaluates_and_collects_ids() {
 #[test]
 fn prepared_query_reports_invalid_candidate() {
     let ruleset = default_ruleset();
-    let bowtie = Candidate {
-        id: "bowtie".to_string(),
-        geometry: geo::Geometry::Polygon(Polygon::new(
+    let bowtie = Candidate::new(
+        "bowtie".to_string(),
+        geo::Geometry::Polygon(Polygon::new(
             LineString::from(vec![
                 (0.0, 0.0),
                 (10.0, 10.0),
@@ -572,7 +566,7 @@ fn prepared_query_reports_invalid_candidate() {
             ]),
             vec![],
         )),
-    };
+    );
     let prepared = ruleset.prepare(&intersects());
     assert!(matches!(
         prepared.evaluate(&bowtie),

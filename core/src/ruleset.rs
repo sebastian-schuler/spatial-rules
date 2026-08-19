@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use geo::{BooleanOps, BoundingRect, GeodesicArea, Geometry, PreparedGeometry, Rect, Relate};
 
-use crate::candidate::Candidate;
+use crate::candidate::{Candidate, CandidateClass};
 use crate::error::{ErrorCode, SpatialError};
 use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
 use crate::query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
 use crate::rule::{Rule, RuleId};
 use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
-use crate::validation::{classify_candidate, validate_rule_geometry};
+use crate::validation::validate_rule_geometry;
 use crate::where_expr::WhereExpr;
 
 /// Owned prepared geometries for one ruleset, shared per thread via `Rc`
@@ -428,11 +428,17 @@ impl<'a> PreparedQuery<'a> {
         candidate: &Candidate,
         collect_ids: bool,
     ) -> (Verdict, Vec<RuleId>, Option<Vec<OverlapMetric>>) {
-        // Candidate-level gate (ADR-0005): unsupported type, invalid geometry,
-        // or missing bbox yields an `Invalid` outcome, never a batch failure.
-        let bbox = match classify_candidate(&candidate.geometry) {
-            Ok(bbox) => bbox,
-            Err(reason) => return (Verdict::Invalid { reason }, Vec::new(), None),
+        // Candidate-level gate (ADR-0005): the classification was computed at
+        // intake (architecture-hardening 01), so the hot path reads the cached
+        // envelope or surfaces the recorded invalid reason — never a batch
+        // failure.
+        let bbox = match candidate.class() {
+            CandidateClass::Valid { envelope } => *envelope,
+            CandidateClass::Invalid { reason } => {
+                return (Verdict::Invalid {
+                    reason: reason.clone(),
+                }, Vec::new(), None);
+            }
         };
 
         // Fixed pipeline: spatial bbox filter -> property predicate -> exact

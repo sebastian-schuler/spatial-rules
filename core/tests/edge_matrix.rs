@@ -67,9 +67,9 @@ fn utf8_bom_prefix_is_rejected() {
 #[test]
 fn non_finite_candidate_is_invalid_not_panic() {
     let ruleset = single_rule_ruleset();
-    let nan_candidate = Candidate {
-        id: "nan".to_string(),
-        geometry: Geometry::Polygon(Polygon::new(
+    let nan_candidate = Candidate::new(
+        "nan".to_string(),
+        Geometry::Polygon(Polygon::new(
             LineString::from(vec![
                 (0.0, 0.0),
                 (0.0, f64::NAN),
@@ -79,7 +79,7 @@ fn non_finite_candidate_is_invalid_not_panic() {
             ]),
             vec![],
         )),
-    };
+    );
     let outcomes = ruleset.query(
         std::slice::from_ref(&nan_candidate),
         &Query::new(SpatialPredicate::Intersects),
@@ -116,10 +116,10 @@ fn antimeridian_crossing_rule_queries_without_panic() {
         )),
     }])
     .unwrap();
-    let candidate = Candidate {
-        id: "inside".to_string(),
-        geometry: Geometry::Polygon(square(179.5, -0.5, 180.5, 0.5)),
-    };
+    let candidate = Candidate::new(
+        "inside".to_string(),
+        Geometry::Polygon(square(179.5, -0.5, 180.5, 0.5)),
+    );
     let mask = ruleset.query_mask(std::slice::from_ref(&candidate), &Query::new(SpatialPredicate::Intersects));
     assert_eq!(mask, vec![1]);
 }

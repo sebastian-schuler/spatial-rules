@@ -9,6 +9,20 @@ use geo::Validation;
 
 use crate::error::SpatialError;
 
+#[cfg(test)]
+thread_local! {
+    /// Counts `classify_candidate` calls. Test-only probe for
+    /// architecture-hardening 01: classification runs once at intake, never
+    /// per query.
+    static CLASSIFY_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of `classify_candidate` calls on this thread (test-only).
+#[cfg(test)]
+pub(crate) fn classify_call_count() -> usize {
+    CLASSIFY_CALLS.with(|count| count.get())
+}
+
 /// Whether every coordinate in `geometry` is finite. Non-finite (`NaN`/`±∞`)
 /// coordinates would make geo's `Relate`/`Validation` paths panic (they `unwrap`
 /// `partial_cmp`), so both validity gates reject them up front (ticket 07).
@@ -52,6 +66,9 @@ pub fn validate_rule_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialErr
 /// returns the precomputed envelope the spatial step needs; failure returns the
 /// human-readable `Invalid` reason.
 pub fn classify_candidate(geometry: &Geometry<f64>) -> Result<Rect<f64>, String> {
+    #[cfg(test)]
+    CLASSIFY_CALLS.with(|count| count.set(count.get() + 1));
+
     ensure_supported_geometry(geometry).map_err(|error| error.message)?;
     if has_non_finite_coords(geometry) {
         return Err("invalid geometry: non-finite coordinate".to_string());

@@ -1,3 +1,7 @@
 # Invalid geometry and error model: strict rules, candidate-level invalid, SR_* codes
 
 Invalid rule geometry fails the whole ruleset construction (atomic; `docs/Initial-plan.md` §34); an invalid candidate does not fail the batch — it yields mask value `2` / an `Invalid { reason }` outcome while the rest of the batch completes, and only malformed top-level input (bad JSON, not a FeatureCollection) is a query error. Errors are structured `SpatialError { code, message }` with stable `SR_*` codes (§35): `SR_INVALID_GEOJSON`, `SR_INVALID_GEOMETRY`, `SR_INVALID_QUERY`, `SR_INVALID_PROPERTY_PREDICATE`, `SR_RULESET_CONSTRUCTION_FAILED`, `SR_UNSUPPORTED_GEOMETRY_TYPE`, `SR_UNSUPPORTED_SPATIAL_PREDICATE`, `SR_UNSUPPORTED_PROPERTY_OPERATOR`, `SR_NATIVE`. The Node binding throws `SpatialRulesError extends Error` (with `.code`) for construction/query errors; candidate invalid is result data, never thrown.
+
+## Candidate classification at intake
+
+Candidate OGC validation + bounding-envelope derivation are computed **once at intake** (`Candidate::new` / `candidate_from_feature`), not re-derived on every query. A candidate carries its classification — a precomputed envelope for valid candidates, or the `invalid` reason (unsupported type, non-finite coordinate, invalid geometry, no bounding rectangle) — and the query hot path reads that cached form. The per-candidate `invalid` outcome still surfaces per query and never fails the batch, exactly as above. (Architecture-hardening ticket 01.)

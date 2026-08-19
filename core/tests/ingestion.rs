@@ -281,10 +281,10 @@ fn rule_and_candidate_constructors_work_directly() {
         properties: Default::default(),
         geometry: geo::Geometry::Polygon(square_polygon()),
     };
-    let candidate = Candidate {
-        id: "candidate-1".to_string(),
-        geometry: geo::Geometry::Polygon(square_polygon()),
-    };
+    let candidate = Candidate::new(
+        "candidate-1".to_string(),
+        geo::Geometry::Polygon(square_polygon()),
+    );
     assert_eq!(rule.id, "rule-1");
     assert_eq!(candidate.id, "candidate-1");
 

@@ -47,11 +47,13 @@ pub fn rule_from_feature(feature: &geojson::Feature) -> Result<Rule, SpatialErro
     })
 }
 
-/// Build a [`Candidate`] from a GeoJSON feature.
+/// Build a [`Candidate`] from a GeoJSON feature, classifying it at intake
+/// (architecture-hardening 01): the candidate carries its envelope (valid) or
+/// invalid reason, so the query hot path never re-derives it.
 pub fn candidate_from_feature(feature: &geojson::Feature) -> Result<Candidate, SpatialError> {
     let id = extract_feature_id(feature)?;
     let geometry = feature_geometry(feature)?;
-    Ok(Candidate { id, geometry })
+    Ok(Candidate::new(id, geometry))
 }
 
 /// Parse a GeoJSON FeatureCollection into rules.

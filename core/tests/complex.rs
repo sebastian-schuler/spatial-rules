@@ -81,10 +81,7 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
 
     // On the ring (between the hole at r≈2.1–3.6 and the exterior at r≈7–12):
     // intersects r0 only.
-    let on_ring = Candidate {
-        id: "on-ring".to_string(),
-        geometry: square(5.0, 0.0, 0.25),
-    };
+    let on_ring = Candidate::new("on-ring".to_string(), square(5.0, 0.0, 0.25));
     let outcomes = ruleset.query(
         std::slice::from_ref(&on_ring),
         &Query::new(SpatialPredicate::Intersects),
@@ -92,10 +89,7 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
     assert_eq!(outcomes, vec![CandidateOutcome::Matched { rule_ids: vec![r0], overlaps: None }]);
 
     // Inside the hole: disjoint from r0, and far from r1.
-    let in_hole = Candidate {
-        id: "in-hole".to_string(),
-        geometry: square(0.0, 0.0, 0.25),
-    };
+    let in_hole = Candidate::new("in-hole".to_string(), square(0.0, 0.0, 0.25));
     let outcomes = ruleset.query(
         std::slice::from_ref(&in_hole),
         &Query::new(SpatialPredicate::Intersects),
