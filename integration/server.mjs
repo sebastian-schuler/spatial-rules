@@ -40,7 +40,7 @@ app.post('/query', (req, res) => {
     return;
   }
   const queryJson = JSON.stringify(query ?? SPATIAL_QUERY);
-  const mask = ruleset.query(Buffer.from(JSON.stringify(candidates)), queryJson);
+  const mask = ruleset.query(Buffer.from(JSON.stringify(candidates)), queryJson).toMask();
   res.json({ mask: Array.from(mask) });
 });
 
@@ -53,7 +53,7 @@ app.post('/queryRaw', express.raw({ type: 'application/octet-stream', limit: '20
     ? Buffer.from(String(header), 'base64').toString('utf8')
     : JSON.stringify(SPATIAL_QUERY);
   try {
-    const mask = ruleset.query(req.body, queryJson);
+    const mask = ruleset.query(req.body, queryJson).toMask();
     res.setHeader('content-type', 'application/octet-stream');
     res.send(Buffer.from(mask));
   } catch (err) {

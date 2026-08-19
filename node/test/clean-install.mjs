@@ -52,16 +52,16 @@ const candidates = Buffer.from(
 const intersects = JSON.stringify({ spatial: { predicate: 'intersects' } });
 const ruleset = new SpatialRuleset(rules);
 
-const mask = ruleset.query(candidates, intersects);
+const mask = ruleset.query(candidates, intersects).toMask();
 assert.ok(mask instanceof Uint8Array);
 assert.deepEqual(Array.from(mask), [1, 0, 2]);
 
 // Property `where` filters out zone-b.
-const active = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: true } }));
+const active = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: true } })).toMask();
 assert.deepEqual(Array.from(active), [1, 0, 2]);
 
 // excludeRuleIds removes named rules: excluding zone-a leaves none matched.
-const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, excludeRuleIds: ['zone-a'] }));
+const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, excludeRuleIds: ['zone-a'] })).toMask();
 assert.deepEqual(Array.from(excluding), [0, 0, 2]);
 
 // Rich per-candidate outcomes with original string rule ids.

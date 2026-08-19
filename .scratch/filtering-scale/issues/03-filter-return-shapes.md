@@ -1,25 +1,35 @@
-# Filter return shapes
+# Filter return shapes — chainable query result
 
 Type: task
-Status: needs-info
+Status: resolved
+
+## Answer
+
+Implemented (filtering-scale, 2026-08-19): the API went **chainable** instead
+of one-method-per-return-shape. `query(candidates, query)` now returns a
+`QueryResult` (`node/index.js`) whose terminals derive from the single native
+evaluation: `toMask()` (Uint8Array), `toIndices()` (Uint32Array), `count()`,
+`toGeoJson()` (matched features as a FeatureCollection string, properties
+preserved from the original payload — no lossy round-trip), and
+`toRichJson()` (per-candidate outcomes + overlap, **lazy** — one native call on
+first use, ADR-0012; evaluated against the ruleset current at first call, so a
+replace() between `query()` and `toRichJson()` can tear mask vs rich — the
+mask wins). `query()` is the only native crossing for the cheap
+views; the mask stays the primitive. `replace()`/`queryRich()`/`queryAsync()`
+are unchanged. Benchmarks use the raw binding, so the hot-path mask
+measurement is unaffected. Callers updated: `node/test/smoke.mjs`,
+`node/test/clean-install.mjs`, `integration/server.mjs` (`memory.mjs` discards
+the query return, so it is unaffected); README documents the chainable form.
+Smoke green under Node + Bun; integration `/query` verified.
 
 ## Question
 
-Which return-shape variant to ticket depends on the real filter endpoint's
-response contract (from the post-v1 spec's "Open proposals" — deferred pending
-a concrete consumer). The engine already returns the mask (`query`) and rich
-per-candidate JSON (`queryRich`); callers hold the primitives, so these are
-ergonomics, not capability.
-
-Candidate additive napi methods:
-- `filteredGeojson(candidates, query) -> String` — kept features as a GeoJSON
-  string (pass-through `res.send`). **Default pick** if the endpoint returns
-  the filtered FeatureCollection.
-- `filteredFeatures(candidates, query) -> FeatureCollection` (JS objects) —
-  for consumers that transform the data.
-- `queryRich` object variant — JS array of objects instead of a string.
-- `keep`-indices helper — kept feature indices for cheap slicing.
-
-Needs: confirm what the internal filter endpoint returns (filtered
-FeatureCollection vs transformed objects) — then ticket the matching variant,
-default `filteredGeojson`.
+Decide how the filter endpoint gets its output shape without one
+method-per-format (the post-v1 "Open proposals": filteredGeojson /
+filteredFeatures / object queryRich / keep-indices). Options considered:
+separate methods (status quo — proliferation), a `format` option parameter
+(return type becomes parameter-dependent), and the chainable result (compute
+once, format many; one crossing, lazy rich). Chosen: chainable — `query()`
+returns a `QueryResult` with `toMask/toIndices/count/toGeoJson/toRichJson`.
+The originally-pending fact (the endpoint's response contract) became moot:
+the caller picks the view at the call site.

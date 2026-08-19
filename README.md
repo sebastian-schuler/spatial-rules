@@ -48,15 +48,18 @@ import { SpatialRuleset } from 'spatial-rules';
 
 const ruleset = new SpatialRuleset(rulesGeojsonBuffer);
 
-// Hot path: Uint8Array mask (0 / 1 / 2), aligned to the input candidates.
-const mask = ruleset.query(candidatesGeojsonBuffer, JSON.stringify({
+// One query, many output views (chainable result): the mask is the primitive,
+// and every other view is derived from the same evaluation.
+const result = ruleset.query(candidatesGeojsonBuffer, JSON.stringify({
   spatial: { predicate: 'intersects' },
   where: { active: true, country: { $in: ['HR', 'SI'] } },
   excludeRuleIds: excludedRuleIds,
 }));
-
-// Rich per-candidate outcomes with original string rule ids.
-const rich = JSON.parse(ruleset.queryRich(candidatesGeojsonBuffer, queryJson));
+result.toMask()       // Uint8Array mask (0 / 1 / 2), aligned to the input
+result.toIndices()    // Uint32Array of matched candidate indices
+result.count()        // number of matched candidates
+result.toGeoJson()    // matched candidates as a GeoJSON FeatureCollection string
+result.toRichJson()   // per-candidate outcomes + overlap, as a JSON string (lazy)
 
 // Atomic ruleset replacement + observability (ADR-0007).
 const report = JSON.parse(ruleset.replace(newRulesGeojsonBuffer));
