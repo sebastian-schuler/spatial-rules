@@ -1,6 +1,9 @@
 // Integration server: a small Bun + Express app embedding the addon.
 //
-//   bun server.mjs   (or: node server.mjs)
+//   bun server.mjs [--port=3000] [--rules-file=benchmarks/data/rules.geojson]
+//
+// Defaults come from the repo-root benchmarks.json; flags override. Start it
+// from the repo root with `bun run bench server`.
 //
 // Endpoints:
 //   GET  /health            -> { ok, stats }
@@ -9,14 +12,18 @@
 
 import express from 'express';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SpatialRuleset } from '../node/index.js';
+import { readConfig, parseFlags, resolveRepoPath, SPATIAL_QUERY } from '../benchmarks/js/common.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(here, '..');
+const config = readConfig();
 
-const rulesFile = process.env.RULES_FILE ?? join(repoRoot, 'benchmarks', 'data', 'rules.geojson');
+// CLI overrides only — the harness never uses environment variables.
+const { values } = parseFlags(process.argv.slice(2), {
+  port: { type: 'string' },
+  'rules-file': { type: 'string' },
+});
+
+const rulesFile = values['rules-file'] ?? resolveRepoPath(config.global.paths.rulesFile);
 const ruleset = new SpatialRuleset(readFileSync(rulesFile));
 
 const app = express();
@@ -32,7 +39,7 @@ app.post('/query', (req, res) => {
     res.status(400).json({ error: 'missing candidates' });
     return;
   }
-  const queryJson = JSON.stringify(query ?? { spatial: { predicate: 'intersects' } });
+  const queryJson = JSON.stringify(query ?? SPATIAL_QUERY);
   const mask = ruleset.query(Buffer.from(JSON.stringify(candidates)), queryJson);
   res.json({ mask: Array.from(mask) });
 });
@@ -44,7 +51,7 @@ app.post('/queryRaw', express.raw({ type: 'application/octet-stream', limit: '20
   const header = req.headers['x-query'];
   const queryJson = header
     ? Buffer.from(String(header), 'base64').toString('utf8')
-    : JSON.stringify({ spatial: { predicate: 'intersects' } });
+    : JSON.stringify(SPATIAL_QUERY);
   try {
     const mask = ruleset.query(req.body, queryJson);
     res.setHeader('content-type', 'application/octet-stream');
@@ -68,7 +75,8 @@ app.post('/replace', (req, res) => {
   }
 });
 
-const port = Number(process.env.PORT ?? 3000);
+const port = Number(values.port ?? config.global.server.port ?? 3000);
 app.listen(port, () => {
   console.log(`spatial-rules integration server listening on ${port}`);
 });
+

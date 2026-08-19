@@ -39,14 +39,15 @@ event loop, so v1 ships a simple synchronous API and needs no async path.
 - **Artifacts**: `benchmarks/data/{rules,candidates}.geojson` (committed) and
   `benchmarks/data/cross_check.json` (10 named predicate pairs for the turf
   cross-check).
-- **Regenerate**: `cargo run -p spatial-rules-benchmarks --bin generate_dataset`
+- **Regenerate**: `bun run bench gen`
 - Geometry is synthetic/representative, not Natural Earth; real open data can
   be dropped in without changing the harness.
 
 ## Harnesses
 
 ### 1. Algorithm ladder (criterion)
-`benchmarks/benches/ladder.rs` — `cargo bench -p spatial-rules-benchmarks --bench ladder`
+`benchmarks/benches/ladder.rs` — `bun run bench crit` (or
+`cargo bench -p spatial-rules-benchmarks --bench ladder`)
 
 Ladder (§32), each on the same 1,000 × 30 batch:
 
@@ -61,7 +62,7 @@ Ladder (§32), each on the same 1,000 × 30 batch:
 | `prepare/prepare_30_rules` | per-worker `PreparedGeometry` preparation |
 
 ### 2. JS performance baseline (turf.js vs addon)
-`benchmarks/js/perf.mjs` — `cd benchmarks/js && npm run perf`
+`bun run bench perf`
 
 Times the native addon's `query(Buffer) → Uint8Array` hot path against a naive
 turf.js `booleanIntersects` baseline A on the same workload; both report the
@@ -69,7 +70,8 @@ same matched-candidate count.
 
 ### 3. turf.js cross-check (correctness, ADR-0008)
 `benchmarks/js/cross_check.mjs` + `benchmarks/src/bin/cross_check.rs` —
-`cd benchmarks/js && npm run cross-check`
+`bun run bench cross-check` (build the release binary first with
+`bun run bench build`)
 
 Diffs the 10-pair DE-9IM matrix against pinned `@turf/turf@6.5.0` (JSTS-based).
 Known quirk: turf v6 `booleanContains` rejects a MultiPolygon *contained*
@@ -88,7 +90,7 @@ are still verified).
 | ruleset build (30 rules) | 24.0 ms | — |
 | prepare 30 rules | 5.3 ms | — |
 
-vs turf.js (`perf.mjs`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (both report
+vs turf.js (`bun run bench perf`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (both report
 481 matched candidates). The addon figure includes the Buffer→parse→mask
 round-trip.
 
@@ -115,8 +117,8 @@ round-trip.
 Closes the deferred follow-up from tickets 17/19 — §24 "the exact memory layout
 must be benchmarked" and §25 "peak memory during replacement MUST be measured
 because the application runs in constrained containers". Harness:
-`integration/memory.mjs` (`cd integration && bun memory.mjs`, or
-`REPLACEMENTS_ONLY=1 bun memory.mjs` to isolate the replacement peak).
+`bun run bench memory` (or `bun run bench memory --replacements-only` to
+isolate the replacement peak).
 
 Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
 1,000 candidates:
@@ -144,10 +146,10 @@ Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
 ## Limitations suite — why turf doesn't scale
 
 Five harnesses demonstrate turf.js's limits and why the engine exists
-(`cd benchmarks/js && npm install`, then `npm run scale` / `npm run fair` /
-`npm run http` / `npm run complex` / `npm run crossover` — the scripts run
-under `bun`, which also auto-loads `benchmarks/js/.env`). All workloads assert
-turf and the addon agree on the matched count before timing.
+(`bun run bench scale` / `bun run bench fair` / `bun run bench http` /
+`bun run bench complex` / `bun run bench crossover` — all under `bun`, all
+reading their defaults from the repo-root `benchmarks.json`). All workloads
+assert turf and the addon agree on the matched count before timing.
 
 #### How the measurements are taken (and why it's fair to turf)
 
@@ -167,14 +169,14 @@ turf and the addon agree on the matched count before timing.
   pre-parsed data, **a turf win would be real, and an addon win is conservative**
   — the handicap runs against the addon, not against turf.
 - The turf baseline escalates across harnesses: naive scan (no index) in
-  `scale.mjs` → scan + bbox fast-reject in `complex.mjs`/`crossover.mjs` →
-  `rbush` + turf in `fair.mjs`. `crossover.mjs` uses the middle one; `fair.mjs`
-  uses the strongest hand-rolled JS answer.
+  `bench scale` → scan + bbox fast-reject in `bench complex`/`bench crossover`
+  → `rbush` + turf in `bench fair`. `bench crossover` uses the middle one;
+  `bench fair` uses the strongest hand-rolled JS answer.
 - Known turf property, not an artifact: `booleanIntersects` flattens a
   MultiPolygon and relates each part without a per-part bbox short-circuit, so
   island countries (many parts) genuinely cost turf more.
 
-### 1. Scaling sweep (`scale.mjs`)
+### 1. Scaling sweep (`bun run bench scale`)
 
 Complex blob rules (120–300 vertices, ~35% with holes) laid out on a grid, so a
 bbox index filters to ~1 rule per candidate while a naive scan touches every
@@ -194,7 +196,7 @@ rule. turf runs the naive scan; the addon runs the full mask query.
 - At fixed 30 rules both scale with candidates (the addon re-parses GeoJSON per
   call), but turf is still ~104× slower at every point.
 
-### 2. Fair competitor (`fair.mjs`)
+### 2. Fair competitor (`bun run bench fair`)
 
 The strongest pure-JS answer — an `rbush` bbox index + turf relate — vs the
 addon, same full-mask output, 300 rules × 1,000 candidates:
@@ -208,7 +210,7 @@ addon, same full-mask output, 300 rules × 1,000 candidates:
 The rbush index makes JS 337× faster — but the engine is still ~2.8× faster, and
 the JS had to hand-roll the index the engine ships by default.
 
-### 3. Production query over HTTP (`http-bench.mjs`)
+### 3. Production query over HTTP (`bun run bench http`)
 
 The full query shape — `intersects` + `where{classification}` +
 `excludeRuleIds` — served by the Bun + Express addon over HTTP, vs the
@@ -220,7 +222,7 @@ equivalent hand-rolled turf in-process (a lower bound: turf has no
 - **8×**, and the addon serves the complete query (parse + `where` + exclusions
   + mask) where turf needs application code around it.
 
-### 3b. Sustained concurrent load (`load-bench.mjs`)
+### 3b. Sustained concurrent load (`bun run bench load`)
 
 Models a search endpoint hit by many users at once: sustained concurrency
 against the real Bun + Express addon server, measuring achievable req/s, query
@@ -275,10 +277,10 @@ threadpool, one per-thread prepared-geometry clone per ruleset (ADR-0010,
 bounded), and a concurrent in-flight memory multiplier. Sync `query()` remains
 the default and is byte-for-byte unchanged.
 
-### 4. Complexity & metadata stress (`complex.mjs`)
+### 4. Complexity & metadata stress (`bun run bench complex`)
 
 Two modes: synthetic "coastline" rules, and any real boundary file via
-`RULES_FILE`. In real-data mode candidates are derived from the file's own
+`--rules-file`. In real-data mode candidates are derived from the file's own
 geometry and the `where` clause is picked from a shared property on the first
 feature; invalid rules are dropped so both sides agree (see below).
 
@@ -292,9 +294,9 @@ feature; invalid rules are dropped so both sides agree (see below).
 | query, steady state (20 candidates) | **0.91 ms** | 6.7 ms |
 | query + where | **0.85 ms** | 3.1 ms |
 
-**Real boundary** — `RULES_FILE=countries.geojson` (Natural Earth 10 m
-`ne_10m_admin_0_countries`, public domain): 13,287,234 bytes (12.67 MiB),
-258 countries, 546k vertices, 168 properties.
+**Real boundary** — `--rules-file=benchmarks/data/countries.geojson`
+(Natural Earth 10 m `ne_10m_admin_0_countries`, public domain): 13,287,234
+bytes (12.67 MiB), 258 countries, 546k vertices, 168 properties.
 
 | phase | addon | turf (scan + bbox) |
 |---|---|---|
@@ -324,18 +326,13 @@ feature; invalid rules are dropped so both sides agree (see below).
   where the release addon avoids debug-mode validation cost.
 
   ```bash
-  cd benchmarks/js
-  curl -L -o countries.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson
-  # bun auto-loads .env — set the file there for a persistent default:
-  printf 'RULES_FILE="countries.geojson"\n' > .env   # PowerShell: Set-Content -Value 'RULES_FILE="countries.geojson"' -Path .env
-  bun complex.mjs
-
-  # or keep just one country (bun, no jq needed) for a focused run:
-  bun -e "const fs=require('fs');const g=JSON.parse(fs.readFileSync('countries.geojson','utf8'));fs.writeFileSync('deu.geojson',JSON.stringify({type:'FeatureCollection',features:g.features.filter(x=>x.properties.ADMIN==='Germany')}))"
-  RULES_FILE=deu.geojson bun complex.mjs
+  bun run bench data                            # download Natural Earth + derive deu.geojson
+  bun run bench complex --rules-file=benchmarks/data/countries.geojson
+  bun run bench crossover --rules-file=benchmarks/data/countries.geojson
+  bun run bench complex --rules-file=benchmarks/data/deu.geojson   # Germany only
   ```
 
-### 5. Crossover sweep (`crossover.mjs`)
+### 5. Crossover sweep (`bun run bench crossover`)
 
 At how many candidates does the native binding beat a hand-rolled turf scan?
 Sweeps candidates 20 → 5,000 (min-of-3) on the real `countries.geojson`
@@ -358,11 +355,11 @@ scan + bbox fast-reject, matched counts asserted each step.
   only matters below ~20 candidates. §4's 0.4 ms turf figure is the opposite
   corner — 20 candidates clustered on one country, where turf has almost no
   relate work and the addon's floor dominates.
-- Falls back to a synthetic 500-rule grid when no `RULES_FILE` is set;
-  `RULES=… SIZES=… REPS=…` tune it.
+- Falls back to a synthetic 500-rule grid when no `--rules-file` is set;
+  `--rules=… --sizes=… --reps=…` tune it.
 
-**Second axis — rule count** (`MODE=rules bun crossover.mjs`, synthetic grid,
-fixed 1,000 candidates):
+**Second axis — rule count** (`bun run bench crossover --mode=rules`, synthetic
+grid, fixed 1,000 candidates):
 
 | rules | addon (ms) | turf (ms) | speedup | matched |
 |---|---|---|---|---|
@@ -381,24 +378,60 @@ fixed 1,000 candidates):
 
 ## Commands
 
+Everything runs from the repo root through one dispatcher — `bun run bench`
+(no `cd`, no env vars, no `.env` files). All knobs default to the single
+committed `benchmarks.json` and are overridable per run with `--flag=value`.
+
 ```bash
-cargo bench -p spatial-rules-benchmarks --bench ladder       # criterion ladder
-cargo run -p spatial-rules-benchmarks --bin generate_dataset  # regenerate dataset
+bun run bench                # list every command
 
-cd benchmarks/js && npm install && npm run cross-check        # correctness vs turf
-cd benchmarks/js && npm run perf                              # JS baseline vs addon
-cd benchmarks/js && npm run scale                             # scaling sweep (§limitations)
-cd benchmarks/js && npm run fair                              # rbush+turf fair competitor
-cd benchmarks/js && npm run http                              # full query over HTTP
-cd benchmarks/js && npm run load                              # sustained concurrent load
-cd benchmarks/js && npm run complex                           # complexity & metadata stress
-cd benchmarks/js && npm run crossover                         # candidate-count crossover sweep
+bun run bench build          # native binding + copy + cross_check binary
+bun run bench gen            # regenerate the synthetic dataset
+bun run bench data           # download Natural Earth countries + derive deu.geojson
 
-cd integration && bun memory.mjs                              # container memory (§24/§25)
-REPLACEMENTS_ONLY=1 bun memory.mjs                            # isolate replacement peak
+bun run bench cross-check    # correctness vs turf (§3)
+bun run bench perf           # JS baseline vs addon (§2)
+bun run bench scale          # scaling sweep
+bun run bench fair           # rbush+turf fair competitor
+bun run bench complex        # complexity & metadata stress (§4)
+bun run bench crossover      # candidate-count crossover sweep (§5)
+bun run bench http           # full query over HTTP (spawns the server)
+bun run bench load           # sustained concurrent load (server must be running)
+bun run bench server         # start the integration server
+bun run bench smoke          # integration smoke (server must be running)
+bun run bench memory         # container memory (§24/§25)
+bun run bench memory --replacements-only   # isolate replacement peak
+bun run bench smoke:node     # node package smoke test
+bun run bench crit           # criterion ladder
+bun run bench all            # full battery (build + gen if needed)
 
 # verify under a hard cap (§26)
 docker build -f integration/Dockerfile -t spatial-rules .
 docker run --rm --memory=128m --memory-swap=128m -p 3000:3000 spatial-rules
-node integration/smoke.mjs
+bun run bench smoke
 ```
+
+### Config
+
+`benchmarks.json` at the repo root is the single source of truth — every knob
+the harnesses read, with the flag that overrides it:
+
+| Section | Key | Flag | Default |
+|---|---|---|---|
+| `global.paths` | `rulesFile` / `candidatesFile` / `crossCheckFile` | `--rules-file` / `--candidates-file` / `--cross-check-file` | `benchmarks/data/*.geojson` / `cross_check.json` |
+| `global.paths` | `realRulesFile` | `--rules-file` | `benchmarks/data/countries.geojson` |
+| `global.paths` | `crossCheckBin` | `--cross-check-bin` | `target/release/cross_check` |
+| `global.paths` | `nodeBinding` | — | `node/spatial_rules.node` |
+| `global.server` | `port` | `--port` | `3000` |
+| `complex` | `rules` `parts` `vertices` `fields` `candidates` `rulesFile` | `--rules` `--parts` `--vertices` `--fields` `--candidates` `--rules-file` | `3` `3` `5000` `40` `20` `null` |
+| `crossover` | `mode` `rules` `sizes` `rulesRange` `candidates` `reps` `rulesFile` | `--mode` `--rules` `--sizes` `--rules-range` `--candidates` `--reps` `--rules-file` | `candidates` `500` `20,200,1000,5000` `500,1000,2000,5000` `1000` `3` `null` |
+| `fair` | `rules` `candidates` | `--rules` `--candidates` | `300` `1000` |
+| `scale` | `points` | `--points` | `30x100,100x200,300x1000` |
+| `perf` | `iters` | `--iters` | `3` |
+| `http` | `iters` | `--iters` | `10` |
+| `load` | `endpoint` `concurrency` `duration` | `--endpoint` `--concurrency` `--duration` | `json` `25` `10000` |
+| `memory` | `queryBatches` `replacements` `replacementsOnly` | `--query-batches` `--replacements` `--replacements-only` | `20` `10` `false` |
+
+`rulesFile: null` means synthetic mode; set it (or pass `--rules-file=…`) to run
+against a real GeoJSON boundary file. Paths are repo-root-relative. There are no
+environment variables.

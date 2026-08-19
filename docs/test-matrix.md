@@ -23,7 +23,7 @@ for it. This is the enforceable complement to each ticket's `Tests` section.
 - `cargo test --workspace` green (proptest runs a bounded case count by default).
 - `cargo clippy --workspace --all-targets` green.
 - Node smoke green under the runtime matrix (Node 22/24/26 + Bun) — `.github/workflows/test.yml`.
-- turf cross-check green (`cd benchmarks/js && node cross_check.mjs`), with DE-9IM/turf
+- turf cross-check green (`bun run bench cross-check`), with DE-9IM/turf
   disagreements recorded as known quirks in `cross_check.mjs` and ADR-0008.
 
 ## Not yet covered (follow-ups)

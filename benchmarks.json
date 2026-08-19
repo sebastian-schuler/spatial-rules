@@ -1,0 +1,55 @@
+{
+    "global": {
+        "paths": {
+            "rulesFile": "benchmarks/data/rules.geojson",
+            "candidatesFile": "benchmarks/data/candidates.geojson",
+            "crossCheckFile": "benchmarks/data/cross_check.json",
+            "crossCheckBin": "target/release/cross_check",
+            "realRulesFile": "benchmarks/data/countries.geojson",
+            "nodeBinding": "node/spatial_rules.node"
+        },
+        "server": {
+            "port": 3000
+        }
+    },
+    "complex": {
+        "rules": 3,
+        "parts": 3,
+        "vertices": 5000,
+        "fields": 40,
+        "candidates": 20,
+        "rulesFile": null
+    },
+    "crossover": {
+        "mode": "candidates",
+        "rules": 500,
+        "sizes": "20,200,1000,5000",
+        "rulesRange": "500,1000,2000,5000",
+        "candidates": 1000,
+        "reps": 3,
+        "rulesFile": null
+    },
+    "fair": {
+        "rules": 300,
+        "candidates": 1000
+    },
+    "scale": {
+        "points": "30x100,100x200,300x1000"
+    },
+    "perf": {
+        "iters": 3
+    },
+    "http": {
+        "iters": 10
+    },
+    "load": {
+        "endpoint": "json",
+        "concurrency": 25,
+        "duration": 10000
+    },
+    "memory": {
+        "queryBatches": 20,
+        "replacements": 10,
+        "replacementsOnly": false
+    }
+}

@@ -30,7 +30,7 @@ Run: `cargo test --workspace` / `cargo clippy --workspace --all-targets`.
 ### 2026-08-18 — peak-memory measurement closed (was: deferred follow-up)
 
 The §25 replacement-peak / §26 bounded-container follow-up is now measured and
-closed. Harness `integration/memory.mjs` (`bun memory.mjs`; `REPLACEMENTS_ONLY=1`
+closed. Harness `integration/memory.mjs` (`bun run bench memory`; `--replacements-only`
 isolates the replacement peak), run inside the `spatial-rules` image:
 
 - Baseline (ruleset built): RSS ~50 MB, VmHWM ~51 MB.

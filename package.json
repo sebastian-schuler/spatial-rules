@@ -1,0 +1,17 @@
+{
+    "name": "spatial-rules-harness",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "bench": "bun bench.mjs"
+    },
+    "dependencies": {
+        "express": "^4.21.2"
+    },
+    "devDependencies": {
+        "@turf/boolean-touches": "^6.5.0",
+        "@turf/turf": "6.5.0",
+        "rbush": "3.0.1"
+    }
+}

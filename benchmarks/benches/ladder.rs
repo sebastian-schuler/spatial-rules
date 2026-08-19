@@ -8,7 +8,7 @@
 //! - ruleset build time and per-worker preparation cost (§31).
 //!
 //! **A** (the existing JS implementation) is the turf.js baseline in
-//! `benchmarks/js/perf.mjs`.
+//! `bun run bench perf` (`benchmarks/js/server-bench.mjs`).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use geo::{BoundingRect, PreparedGeometry, Relate};

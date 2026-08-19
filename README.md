@@ -109,55 +109,29 @@ cargo build -p spatial-rules-node
 node node/test/smoke.mjs
 bun  node/test/smoke.mjs
 
-# Benchmarks
-cargo bench -p spatial-rules-benchmarks --bench ladder
-cd benchmarks/js && npm install && npm run cross-check && npm run perf
+# Benchmarks + integration — one dispatcher at the repo root
+bun install                        # once: harness deps (turf, rbush, express)
+bun run bench                      # list every command
+bun run bench build                # build binding (+ copy) + cross_check binary
+bun run bench cross-check && bun run bench perf
+bun run bench all                  # full battery
 
 # Docker integration (server + memory measurement)
 docker build -f integration/Dockerfile -t spatial-rules .
 docker run --rm --memory=128m -p 3000:3000 spatial-rules
 ```
 
-### Environment variables
+### Configuration
 
-The benchmark and integration harnesses read configuration from
-`process.env`. Only the JS benchmark scripts auto-load a `.env` file — bun
-reads `benchmarks/js/.env` from that directory (the file is gitignored). The
-core engine and the `node/` addon read no environment variables; their config
-travels through the API only.
+The benchmark and integration harnesses read all configuration from the single
+committed `benchmarks.json` at the repo root; per-run tweaks are `--flag=value`
+arguments (e.g. `bun run bench crossover --sizes=20,200,1000,5000`). There are
+**no environment variables and no `.env` files** — every knob is either in
+`benchmarks.json` or passed as a flag. See
+[`docs/benchmarks.md`](docs/benchmarks.md) for the full key → flag map.
 
-**`benchmarks/js/.env`** (bun auto-loads it when run from `benchmarks/js`):
-
-| Variable | Used by | Default | Meaning |
-|---|---|---|---|
-| `RULES_FILE` | `complex.mjs`, `crossover.mjs` | — | GeoJSON boundary file for real-data mode |
-| `RULES` | `complex.mjs` / `crossover.mjs` / `fair.mjs` | `3` / `500` / `300` | synthetic rule count |
-| `PARTS` | `complex.mjs` | `3` | parts per synthetic rule |
-| `VERTICES` | `complex.mjs` | `5000` | vertices per synthetic ring |
-| `FIELDS` | `complex.mjs` | `40` | properties per synthetic rule |
-| `CANDIDATES` | `complex.mjs` / `crossover.mjs` / `fair.mjs` | `20` / `1000` / `1000` | candidate count |
-| `MODE` | `crossover.mjs` | `candidates` | sweep axis: `candidates` or `rules` |
-| `SIZES` | `crossover.mjs` | `20,200,1000,5000` | candidate sizes to sweep |
-| `RULES_RANGE` | `crossover.mjs` | `500,1000,2000,5000` | rule counts for `MODE=rules` |
-| `REPS` | `crossover.mjs` | `3` | timing reps (min-of) |
-| `CROSS_CHECK_BIN` | `cross_check.mjs` | `target/release/cross_check[.exe]` | cross-check binary path |
-| `BASE_URL` | `http-bench.mjs` | `http://localhost:3000` | server URL |
-| `PORT` | `http-bench.mjs` | `3000` | server port |
-| `BUN` | `http-bench.mjs` | `bun` | bun executable path |
-| `ITERS` | `http-bench.mjs` / `perf.mjs` | `10` / `3` | repetitions |
-
-**`integration/`** (set inline — no committed `.env`; e.g. PowerShell
-`$env:PORT=4000; bun server.mjs`, or POSIX `PORT=4000 bun server.mjs`):
-
-| Variable | Used by | Default | Meaning |
-|---|---|---|---|
-| `RULES_FILE` | `server.mjs`, `memory.mjs` | `benchmarks/data/rules.geojson` | rules to serve / measure |
-| `CANDIDATES_FILE` | `memory.mjs` | `benchmarks/data/candidates.geojson` | candidates to measure |
-| `QUERY_BATCHES` | `memory.mjs` | `20` | query batches per measurement |
-| `REPLACEMENTS` | `memory.mjs` | `10` | ruleset swaps |
-| `REPLACEMENTS_ONLY` | `memory.mjs` | — | set to `1` to isolate the replacement peak |
-| `PORT` | `server.mjs` | `3000` | HTTP port |
-| `BASE_URL` | `smoke.mjs` | `http://localhost:3000` | server URL |
+The core engine and the `node/` addon read no configuration at all; their
+input travels through the API only.
 
 ## Docs
 

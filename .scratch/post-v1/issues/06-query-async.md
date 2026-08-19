@@ -7,7 +7,7 @@ Status: ready-for-agent
 
 Add an **opt-in** asynchronous query to the napi surface, off the JS thread. Sync `query()` stays the default and is byte-for-byte unchanged.
 
-**Why (measured, 2026-08-19):** the sync napi call blocks the event loop. Load test (`benchmarks/js/load-bench.mjs`, `docs/benchmarks.md` §3b) shows a single-process CPU ceiling of ~165 rps (raw bytes) / ~130 rps (JSON) on 1,000×30, with `/health` latency ≈ query latency under load (event loop fully consumed). The original ADR-0009 latency gate (sync p95 > 50 ms) did **not** trigger — p95 ≈ 32 ms over HTTP — so this is the **throughput / event-loop-headroom axis**, not the latency axis ADR-0009 judged. This ticket adds the opt-in lever and amends ADR-0009 to record it; it does NOT flip the API to async.
+**Why (measured, 2026-08-19):** the sync napi call blocks the event loop. Load test (`bun run bench load`, `benchmarks/js/server-bench.mjs`, `docs/benchmarks.md` §3b) shows a single-process CPU ceiling of ~165 rps (raw bytes) / ~130 rps (JSON) on 1,000×30, with `/health` latency ≈ query latency under load (event loop fully consumed). The original ADR-0009 latency gate (sync p95 > 50 ms) did **not** trigger — p95 ≈ 32 ms over HTTP — so this is the **throughput / event-loop-headroom axis**, not the latency axis ADR-0009 judged. This ticket adds the opt-in lever and amends ADR-0009 to record it; it does NOT flip the API to async.
 
 ## Design
 
@@ -21,7 +21,7 @@ Add an **opt-in** asynchronous query to the napi surface, off the JS thread. Syn
 ## Tests
 
 - Node smoke (`node/test/smoke.mjs` or `test/`): `queryAsync` returns the **same mask** as `query` on identical inputs; Promise rejects with the same `SR_*` code as sync for invalid input; concurrent `queryAsync` calls across a `replace()` produce consistent results (snapshot semantics, ADR-0007); Bun smoke green.
-- Extend `load-bench.mjs` or add a small concurrent-async test: event-loop responsiveness (`/health`) must stay low while async queries are in flight, unlike the sync path.
+- Extend `bench load` (`benchmarks/js/server-bench.mjs`) or add a small concurrent-async test: event-loop responsiveness (`/health`) must stay low while async queries are in flight, unlike the sync path.
 - Sync path untouched: existing tests + ladder stay green.
 
 ## Docs
@@ -29,4 +29,4 @@ Add an **opt-in** asynchronous query to the napi surface, off the JS thread. Syn
 - Amend **ADR-0009** to record the opt-in `queryAsync` and the throughput/headroom rationale (the latency gate did not trigger; this is the off-main-thread lever, opt-in by design).
 - Note the async costs in docs/benchmarks.md §3b or the README: per-query dispatch + promise overhead, buffer memcpy, threadpool contention, N thread-local prepared caches, concurrent in-flight memory multiplier.
 
-Run: `cargo test --workspace` / `cargo clippy --workspace --all-targets`, node + Bun smoke, `npm run load` — green before commit.
+Run: `cargo test --workspace` / `cargo clippy --workspace --all-targets`, node + Bun smoke, `bun run bench load` — green before commit.

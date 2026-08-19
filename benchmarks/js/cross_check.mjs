@@ -2,25 +2,38 @@
 // JSTS-based, is the trusted reference; any disagreement is investigated, never
 // silently accepted).
 //
-// Usage:
-//   1. cargo build --release -p spatial-rules-benchmarks --bin cross_check
-//   2. cd benchmarks/js && npm install
-//   3. npm run cross-check
+//   bun cross_check.mjs [--cross-check-bin=target/release/cross_check]
+//                       [--cross-check-file=benchmarks/data/cross_check.json]
+//
+// Defaults come from benchmarks.json (`global.paths.crossCheckBin` /
+// `crossCheckFile`). Needs the release `cross_check` binary: build it with
+// `bun run bench build`. Invoked from the repo root via
+// `bun run bench cross-check`.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { feature, booleanIntersects, booleanContains, booleanWithin, booleanOverlap } from '@turf/turf';
 import booleanTouches from '@turf/boolean-touches';
+import {
+  readConfig, parseFlags, resolveRepoPath,
+} from './common.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const pairsFile = join(here, '..', 'data', 'cross_check.json');
-const fixtures = JSON.parse(readFileSync(pairsFile, 'utf8'));
+const cfg = readConfig();
+const { values } = parseFlags(process.argv.slice(2));
 
+// Flag names match the config keys they override (kebab -> camel).
+const pairsFile = resolveRepoPath(
+  values['cross-check-file'] ?? cfg.global.paths.crossCheckFile,
+);
+
+// The config path is platform-neutral ("target/release/cross_check"); append
+// the Windows `.exe` unless a custom path already carries it.
+const configuredBin = values['cross-check-bin'] ?? cfg.global.paths.crossCheckBin;
+const rustBinRaw = resolveRepoPath(configuredBin);
 const rustBin =
-  process.env.CROSS_CHECK_BIN ??
-  join(here, '..', '..', 'target', 'release', process.platform === 'win32' ? 'cross_check.exe' : 'cross_check');
+  process.platform === 'win32' && !rustBinRaw.endsWith('.exe') ? `${rustBinRaw}.exe` : rustBinRaw;
+
+const fixtures = JSON.parse(readFileSync(pairsFile, 'utf8'));
 
 const rust = JSON.parse(execFileSync(rustBin, [pairsFile], { encoding: 'utf8' }));
 

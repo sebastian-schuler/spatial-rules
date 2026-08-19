@@ -17,10 +17,12 @@ COPY node/index.js /app/node/index.js
 COPY node/package.json /app/node/package.json
 COPY integration/server.mjs /app/integration/server.mjs
 COPY integration/memory.mjs /app/integration/memory.mjs
-COPY integration/package.json /app/integration/package.json
+COPY integration/smoke.mjs /app/integration/smoke.mjs
+COPY benchmarks/js/common.mjs /app/benchmarks/js/common.mjs
+COPY benchmarks.json /app/benchmarks.json
+COPY package.json /app/package.json
 COPY benchmarks/data/rules.geojson /app/benchmarks/data/rules.geojson
 COPY benchmarks/data/candidates.geojson /app/benchmarks/data/candidates.geojson
-WORKDIR /app/integration
 RUN bun install --production
 EXPOSE 3000
-CMD ["bun", "server.mjs"]
+CMD ["bun", "integration/server.mjs"]

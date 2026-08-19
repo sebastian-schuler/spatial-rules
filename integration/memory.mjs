@@ -4,11 +4,14 @@
 // "peak memory during replacement MUST be measured because the application runs
 // in constrained containers".
 //
-//   bun integration/memory.mjs                              # all phases
-//   REPLACEMENTS_ONLY=1 bun integration/memory.mjs          # isolate replacement peak
+//   bun memory.mjs [--query-batches=20] [--replacements=10] [--replacements-only]
+//                  [--rules-file=benchmarks/data/rules.geojson]
+//                  [--candidates-file=benchmarks/data/candidates.geojson]
 //
-// Works locally (Windows: no /proc/self/status, so only RSS samples) and inside
-// the Docker image (VmHWM/VmPeak give the exact high-water mark).
+// Defaults come from the repo-root benchmarks.json; flags override. Run from
+// the repo root via `bun run bench memory`. Works locally (Windows: no
+// /proc/self/status, so only RSS samples) and inside the Docker image
+// (VmHWM/VmPeak give the exact high-water mark).
 //
 // Metric notes:
 //   - VmHWM (/proc/self/status) is the exact all-time peak RSS, recorded by the
@@ -20,22 +23,32 @@
 //     memory were leaked per replacement, last ≫ first; if bounded, they agree.
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SpatialRuleset } from '../node/index.js';
+import { readConfig, parseFlags, resolveRepoPath, SPATIAL_QUERY } from '../benchmarks/js/common.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(here, '..');
-const rulesFile = process.env.RULES_FILE ?? join(repoRoot, 'benchmarks', 'data', 'rules.geojson');
-const candidatesFile = process.env.CANDIDATES_FILE ?? join(repoRoot, 'benchmarks', 'data', 'candidates.geojson');
+const config = readConfig();
 
-const QUERY_BATCHES = Number(process.env.QUERY_BATCHES ?? 20);
-const REPLACEMENTS = Number(process.env.REPLACEMENTS ?? 10);
-const REPLACEMENTS_ONLY = process.env.REPLACEMENTS_ONLY === '1';
+// CLI overrides only — the harness never uses environment variables.
+const { values } = parseFlags(process.argv.slice(2), {
+  'rules-file': { type: 'string' },
+  'candidates-file': { type: 'string' },
+  'query-batches': { type: 'string' },
+  replacements: { type: 'string' },
+  'replacements-only': { type: 'boolean' },
+});
+
+const rulesFile = values['rules-file'] ?? resolveRepoPath(config.global.paths.rulesFile);
+const candidatesFile =
+  values['candidates-file'] ?? resolveRepoPath(config.global.paths.candidatesFile);
+
+const QUERY_BATCHES = Number(values['query-batches'] ?? config.memory.queryBatches ?? 20);
+const REPLACEMENTS = Number(values.replacements ?? config.memory.replacements ?? 10);
+// Flag overrides the config default; the knob exists in benchmarks.json too.
+const REPLACEMENTS_ONLY = Boolean(values['replacements-only'] ?? config.memory.replacementsOnly);
 
 const rulesBuf = readFileSync(rulesFile);
 const candidates = JSON.parse(readFileSync(candidatesFile, 'utf8'));
-const queryJson = JSON.stringify({ spatial: { predicate: 'intersects' } });
+const queryJson = JSON.stringify(SPATIAL_QUERY);
 
 const mb = (bytes) => (bytes == null ? null : Number((bytes / 1024 / 1024).toFixed(1)));
 
