@@ -4,39 +4,19 @@
 
 use std::collections::BTreeMap;
 
-use geo::{Coord, LineString, Polygon};
+use geo::Polygon;
 use spatial_rules_core::{
-    Candidate, CandidateOutcome, PropertyValue, Query, Rule, Ruleset, SpatialPredicate,
+    CandidateOutcome, PropertyValue, Query, Rule, Ruleset, SpatialPredicate,
 };
 
-/// A closed, star-shaped jittered circle (radius jitter always positive → a
-/// valid, non-self-intersecting ring), seeded for determinism.
-fn jittered_circle(cx: f64, cy: f64, radius: f64, vertices: usize, seed: u64) -> LineString<f64> {
-    let mut state = seed;
-    let mut next = move || {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        ((state >> 11) as f64) / ((1u64 << 53) as f64)
-    };
-    let mut coords: Vec<Coord<f64>> = Vec::with_capacity(vertices + 1);
-    for i in 0..vertices {
-        let angle = (i as f64 / vertices as f64) * std::f64::consts::TAU;
-        let r = radius * (0.7 + 0.5 * next());
-        coords.push(Coord {
-            x: cx + r * angle.cos(),
-            y: cy + r * angle.sin(),
-        });
-    }
-    coords.push(coords[0]);
-    LineString::from(coords)
-}
+mod common;
+use common::{candidate_geometry, jittered_ring, square_around};
 
 /// A rule with a `vertices`-point exterior, a hole, and `fields` extra typed
 /// properties (plus `classification`).
 fn complex_rule(id: &str, cx: f64, vertices: usize, fields: usize, seed: u64) -> Rule {
-    let exterior = jittered_circle(cx, 0.0, 10.0, vertices, seed);
-    let hole = jittered_circle(cx, 0.0, 3.0, 400, seed.wrapping_add(1));
+    let exterior = jittered_ring(cx, 0.0, 10.0, vertices, seed);
+    let hole = jittered_ring(cx, 0.0, 3.0, 400, seed.wrapping_add(1));
     let mut properties = BTreeMap::new();
     properties.insert(
         "classification".to_string(),
@@ -50,19 +30,6 @@ fn complex_rule(id: &str, cx: f64, vertices: usize, fields: usize, seed: u64) ->
         properties,
         geometry: geo::Geometry::Polygon(Polygon::new(exterior, vec![hole])),
     }
-}
-
-fn square(cx: f64, cy: f64, half: f64) -> geo::Geometry<f64> {
-    geo::Geometry::Polygon(Polygon::new(
-        LineString::from(vec![
-            (cx - half, cy - half),
-            (cx - half, cy + half),
-            (cx + half, cy + half),
-            (cx + half, cy - half),
-            (cx - half, cy - half),
-        ]),
-        vec![],
-    ))
 }
 
 #[test]
@@ -81,7 +48,7 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
 
     // On the ring (between the hole at r≈2.1–3.6 and the exterior at r≈7–12):
     // intersects r0 only.
-    let on_ring = Candidate::new("on-ring".to_string(), square(5.0, 0.0, 0.25));
+    let on_ring = candidate_geometry("on-ring", square_around(5.0, 0.0, 0.25));
     let outcomes = ruleset.query(
         std::slice::from_ref(&on_ring),
         &Query::new(SpatialPredicate::Intersects),
@@ -89,7 +56,7 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
     assert_eq!(outcomes, vec![CandidateOutcome::Matched { rule_ids: vec![r0], overlaps: None }]);
 
     // Inside the hole: disjoint from r0, and far from r1.
-    let in_hole = Candidate::new("in-hole".to_string(), square(0.0, 0.0, 0.25));
+    let in_hole = candidate_geometry("in-hole", square_around(0.0, 0.0, 0.25));
     let outcomes = ruleset.query(
         std::slice::from_ref(&in_hole),
         &Query::new(SpatialPredicate::Intersects),

@@ -29,7 +29,7 @@ pub use ingestion::{
 pub use properties::{properties_from_json, PropertyValue};
 pub use query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
 pub use rule::{Rule, RuleId};
-pub use ruleset::{PreparedQuery, RuleSource, Ruleset};
+pub use ruleset::{PreparedQuery, PreparedRuleGeometries, RuleSource, Ruleset};
 pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};
 pub use validation::{classify_candidate, ensure_supported_geometry, validate_rule_geometry};
 pub use where_expr::{FieldOp, FieldPredicate, WhereExpr};

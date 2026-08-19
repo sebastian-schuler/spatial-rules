@@ -72,37 +72,10 @@ fn spatial_predicate_holds(
         SpatialPredicate::Contains => matrix.is_contains(),
         SpatialPredicate::Within => matrix.is_within(),
         SpatialPredicate::Covers => matrix.is_covers(),
-        SpatialPredicate::CoveredBy => covered_by_holds(&matrix),
+        SpatialPredicate::CoveredBy => matrix.is_coveredby(),
         SpatialPredicate::Touches => matrix.is_touches(),
         SpatialPredicate::Overlaps => matrix.is_overlaps(),
     }
-}
-
-/// `covered_by` on the candidate→rule matrix (ADR-0012): geo has no
-/// `is_covered_by` helper, so match the four DE-9IM `coveredBy` patterns
-/// (`T*F**F*** | *TF**F*** | **FT*F*** | **F*TF***`) directly.
-fn covered_by_holds(matrix: &geo::algorithm::relate::IntersectionMatrix) -> bool {
-    use geo::coordinate_position::CoordPos::{Inside, OnBoundary, Outside};
-    use geo::dimensions::Dimensions;
-
-    let not_empty = |dim: Dimensions| dim != Dimensions::Empty;
-
-    // T*F**F***
-    (not_empty(matrix.get(Inside, Inside))
-        && matrix.get(Inside, Outside) == Dimensions::Empty
-        && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
-        // *TF**F***
-        || (not_empty(matrix.get(Inside, OnBoundary))
-            && matrix.get(Inside, Outside) == Dimensions::Empty
-            && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
-        // **FT*F***
-        || (matrix.get(Inside, Outside) == Dimensions::Empty
-            && not_empty(matrix.get(OnBoundary, Inside))
-            && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
-        // **F*TF***
-        || (matrix.get(Inside, Outside) == Dimensions::Empty
-            && not_empty(matrix.get(OnBoundary, OnBoundary))
-            && matrix.get(OnBoundary, Outside) == Dimensions::Empty)
 }
 
 /// A candidate verdict before the `Matched` ids are attached (ADR-0004).
@@ -294,6 +267,16 @@ impl Ruleset {
         }
     }
 
+    /// The prepared rule geometries for this ruleset, cached per thread
+    /// (ADR-0010). A handle indexed by opaque [`RuleId`], so callers (the
+    /// benchmark ladder) never reconstruct a positional id-to-index map
+    /// (architecture-hardening 04). Cloning the handle is cheap (`Rc`).
+    pub fn prepared(&self) -> PreparedRuleGeometries {
+        PreparedRuleGeometries {
+            inner: self.cached_prepared(),
+        }
+    }
+
     /// Evaluate a batch of candidates against `query`, returning one outcome
     /// per candidate in input order (ADR-0004). Invalid candidates produce an
     /// [`CandidateOutcome::Invalid`] outcome without failing the batch
@@ -390,6 +373,35 @@ impl<'a> RuleSource<'a> {
             .iter()
             .enumerate()
             .map(|(index, rule)| (RuleId(index as u32), &rule.geometry, &self.envelopes[index]))
+    }
+}
+
+/// A handle to one ruleset's prepared rule geometries (ADR-0010), indexed by
+/// opaque [`RuleId`]. Callers fetch a rule's prepared form by id without ever
+/// reading the numeric position (architecture-hardening 04).
+pub struct PreparedRuleGeometries {
+    inner: PreparedGeometries,
+}
+
+impl PreparedRuleGeometries {
+    /// The prepared DE-9IM geometry for a rule by opaque [`RuleId`].
+    pub fn get(&self, rule_id: RuleId) -> &PreparedGeometry<'static, Geometry<f64>> {
+        &self.inner[rule_id.0 as usize]
+    }
+
+    /// Iterate over prepared geometries in ruleset order.
+    pub fn iter(&self) -> impl Iterator<Item = &PreparedGeometry<'static, Geometry<f64>>> {
+        self.inner.iter()
+    }
+
+    /// Number of prepared geometries (== the ruleset's rule count).
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Whether the prepared geometry set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 }
 

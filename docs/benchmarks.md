@@ -18,9 +18,10 @@ in JavaScript with turf.js (≈1.1 s per batch).
 **Why it got fast.** The cost was dominated by the exact geometry check ("does
 this footprint touch this zone?"). The fix that mattered was **preparing** each
 rule's geometry once per ruleset, per thread (~5 ms for all 30), then reusing
-that work across every footprint and every request — a ~34× speedup on its own.
-The bounding-box index, by contrast, barely helped: with 30 large zones, almost
-every footprint overlaps some zone's box anyway.
+that work across every footprint and every request — a ~29× speedup on its own
+(the ladder's B → E rung). The bounding-box index, by contrast, barely helped:
+with 30 large zones, almost every footprint overlaps some zone's box anyway
+(B → C → D ≈ 1×). See the separated attribution in the ladder Results below.
 
 **Practical impact.** ~15 ms is well under the 50 ms ceiling for blocking the
 event loop, so v1 ships a simple synchronous API and needs no async path.
@@ -49,17 +50,23 @@ event loop, so v1 ships a simple synchronous API and needs no async path.
 `benchmarks/benches/ladder.rs` — `bun run bench crit` (or
 `cargo bench -p spatial-rules-benchmarks --bench ladder`)
 
-Ladder (§32), each on the same 1,000 × 30 batch:
+Each rung drives the engine through its public seams (rule source, envelope
+query, prepared form by opaque id) and differs from its neighbour by exactly
+**one** variable, so each speedup can be attributed to the rung that produced
+it (architecture-hardening 04):
 
 | Bench | What it measures |
 |---|---|
-| `B_naive_candidate_times_rule` | every candidate × every rule, exact DE-9IM only (no index, unprepared) |
-| `C_linear_scan_bbox` | + bounding-box filtering (linear envelope scan) |
-| `D_rstar_bbox` | + spatial index (`rstar` bulk-load, the default) |
-| `E_prepared_naive` | + prepared geometries (no bbox) |
-| `F_prepared_rstar_bbox` | + spatial index + prepared geometries |
+| `B_naive_candidate_times_rule` | every candidate × every rule, exact DE-9IM, unprepared (no bbox) |
+| `C_linear_scan_bbox` | B + bounding-box filter (linear envelope scan), still unprepared |
+| `D_rstar_bbox` | C but with the `rstar` index instead of the linear scan |
+| `E_prepared_naive` | B but with prepared geometries instead of unprepared (no bbox) |
+| `F_prepared_rstar_bbox` | E + `rstar` bbox filter |
 | `ruleset_build/build_30_rules` | ruleset construction |
 | `prepare/prepare_30_rules` | per-worker `PreparedGeometry` preparation |
+
+The two levers are isolated: bbox/index filter = B→C→D; prepared geometries =
+B→E (and D→F with the index held constant).
 
 ### 2. JS performance baseline (turf.js vs addon)
 `bun run bench perf`
@@ -80,15 +87,27 @@ are still verified).
 
 ## Results (release profile, 1,000 candidates × 30 rules)
 
-| Bench | Time/batch | Throughput |
+Quick criterion run (`--warm-up-time 1 --measurement-time 2 --sample-size 10`,
+Windows, 2026-08-19) — order-of-magnitude figures, not tuned medians:
+
+| Bench | Time/batch | vs B |
 |---|---|---|
-| B naive (unprepared) | 502.2 ms | 2.0 Kelem/s |
-| C linear-scan bbox | 14.6 ms | 68 Kelem/s |
-| D rstar bbox | 15.5 ms | 65 Kelem/s |
-| E prepared (naive) | 14.1 ms | 71 Kelem/s |
-| F prepared + rstar | 13.8 ms | 72 Kelem/s |
-| ruleset build (30 rules) | 24.0 ms | — |
-| prepare 30 rules | 5.3 ms | — |
+| B naive (unprepared, no bbox) | 580 ms | 1× |
+| C linear-scan bbox (unprepared) | 570 ms | ≈1× |
+| D rstar bbox (unprepared) | 554 ms | ≈1× |
+| E prepared (naive, no bbox) | 20.3 ms | **≈29×** |
+| F prepared + rstar bbox | 21.6 ms | ≈27× |
+| ruleset build (30 rules) | 32.7 ms | — |
+| prepare 30 rules | 6.2 ms | — |
+
+**Attribution (the two levers, separated).** The bbox/index filter alone is
+negligible at these shapes — B → C → D ≈ 1×, because with 30 large
+country-scale rules nearly every candidate's envelope already overlaps most
+rules. The dominant lever is **prepared geometry**: B → E ≈ 29× (each relate is
+~29× cheaper once the rule's topology is prepared, ADR-0010), and adding the
+index on top (F) adds nothing (E ≈ F). Previous ladder tables conflated the two
+because the C/D rungs ran the full engine (bbox **and** prepared); the rungs
+above isolate one variable each (architecture-hardening 04).
 
 vs turf.js (`bun run bench perf`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (both report
 481 matched candidates). The addon figure includes the Buffer→parse→mask
@@ -96,17 +115,16 @@ round-trip.
 
 ## Findings
 
-- **Prepared geometry is the lever.** It cuts the core query ~34× (B → C/D);
-  the bbox index alone gives ≈0 help at 30 large rules (B ≈ C ≈ D when
-  unprepared).
-- **Prepare cost is ~5.3 ms for 30 rules**, now paid once per thread per
+- **Prepared geometry is the lever.** It cuts the core query ~29× (B → E on the
+  separated ladder); the bbox/index filter alone gives ≈0 help at 30 large
+  rules (B ≈ C ≈ D). Earlier tables attributed B → C/D to prepared geometry,
+  but those rungs ran the full engine — bbox **and** prepared — conflating the
+  two (architecture-hardening 04).
+- **Prepare cost is ~6.2 ms for 30 rules**, now paid once per thread per
   ruleset: `PreparedGeometry` is `!Send` in geo 0.33, so owned prepared
   geometries are cached in a `thread_local!` keyed by ruleset identity
   (ADR-0010) rather than rebuilt per query or stored in the shared
   `Arc<Ruleset>`.
-- **The cache closes the indexed/prepared gap.** Once preparation is no longer
-  per-call, the index-backed benches fall to the hand-rolled prepared level:
-  C 19.6 → 14.6 ms and D 20.1 → 15.5 ms (this table's earlier run).
 - **ADR-0009 gate met**: sync p50 ≈ 18.5 ms ≪ 50 ms, so `queryAsync()` is not
   needed for v1.
 - **Correctness**: the turf cross-check is green; Rust and turf agree on all
@@ -120,8 +138,8 @@ because the application runs in constrained containers". Harness:
 `bun run bench memory` (or `bun run bench memory --replacements-only` to
 isolate the replacement peak).
 
-Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
-1,000 candidates:
+Measured inside the `spatial-rules` Docker image (oven/bun:1.3.14 — pinned to
+CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates:
 
 | Phase | RSS | VmHWM (peak resident) |
 |---|---|---|
@@ -142,6 +160,31 @@ Measured inside the `spatial-rules` Docker image (oven/bun:1.3), 30 rules ×
   resident memory — ignore it when sizing container limits. The number that
   matters for a K8s `limits.memory` is VmHWM (~65 MB), so a 128 MB limit leaves
   comfortable headroom.
+
+### Peak RSS under sustained load (architecture-hardening 09)
+
+Reproducible measurement method — the **load** harness (sustained HTTP
+concurrency), not the in-process memory harness above, run inside the pinned
+image:
+
+```
+docker build -f integration/Dockerfile -t spatial-rules .
+docker run --rm -d --name spatial-rules-load -p 3000:3000 spatial-rules
+bun run bench load --duration=20000            # sustained /query load
+docker exec spatial-rules-load cat /proc/1/status | grep -E 'VmHWM|VmRSS'
+docker stop spatial-rules-load
+```
+
+`VmHWM` of PID 1 (the Bun server) is the kernel-recorded all-time peak
+resident, capturing the load phase even though the event loop can't sample
+mid-request. **Baseline: peak resident ≈ 65 MB** (the VmHWM from the memory
+harness above, which already exercises 20 × 1,000-candidate batches in the
+container); the load-harness VmHWM re-measurement is recorded here on the next
+Docker run — the figure is expected to sit in the same ~65 MB envelope against
+the documented 128 MB bound. The per-thread prepared-geometry cache's marginal
+contribution (ADR-0010, one owned geometry clone per thread per ruleset) is
+deferred to the geo 0.34 upgrade (ticket 05 of `post-v1`), which moves the
+cache from owned per-thread clones to borrowed `Arc`-shared prepared forms.
 
 ## Limitations suite — why turf doesn't scale
 

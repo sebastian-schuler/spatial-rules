@@ -1,73 +1,27 @@
-// Shared helpers for the benchmark harness (sweeps, server-bench, cross-check)
-// and the integration scripts (server/memory/smoke). Turf-free on purpose: the
-// Docker image (which imports common.mjs but not the dev-only turf deps) and
-// the JS harness both use it.
-//
-// Config lives in one committed file at the repo root — `benchmarks.json` —
-// and per-run tweaks come through CLI flags (never environment variables).
-// See docs/benchmarks.md for the key -> flag map.
+// Shared helpers for the benchmark harness (sweeps, server-bench, cross-check).
+// Turf-free on purpose. The config plumbing and query shape live in the neutral
+// `shared/config.mjs` module (architecture-hardening 05) and are re-exported
+// here so the harness keeps a single import while the integration app consumes
+// the neutral module directly.
 
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { join } from 'node:path';
 
-const here = dirname(fileURLToPath(import.meta.url));
+import { REPO_ROOT, readConfig } from '../../shared/config.mjs';
+
+// Re-export the neutral config plumbing + query shape for harness consumers.
+export {
+  REPO_ROOT,
+  SPATIAL_QUERY,
+  readConfig,
+  resolveRepoPath,
+  parseFlags,
+  applyOverrides,
+  sectionConfig,
+} from '../../shared/config.mjs';
+
 const require = createRequire(import.meta.url);
-
-// The harness scripts live in benchmarks/js/, so the repo root is two up.
-export const REPO_ROOT = join(here, '..', '..');
-
-// The simple spatial-only query every harness drives — defined once, turf-free.
-export const SPATIAL_QUERY = { spatial: { predicate: 'intersects' } };
-
-// ---- config ---------------------------------------------------------------
-
-export function readConfig() {
-  return JSON.parse(readFileSync(join(REPO_ROOT, 'benchmarks.json'), 'utf8'));
-}
-
-// Config paths are repo-root-relative; absolute paths (and null) pass through.
-export function resolveRepoPath(rel) {
-  if (!rel || isAbsolute(rel)) return rel;
-  return join(REPO_ROOT, rel);
-}
-
-// kebab-case flag (`--rules-file`) -> config key (`rulesFile`).
-const toCamel = (key) => key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-
-// Parse `--flag=value` (and boolean flags listed in `spec`) with no new deps.
-// Unknown flags are collected as strings; per-run tweaks never use env vars.
-// A bare `--` separator (e.g. `bun run bench scale -- --sizes=...`) is dropped:
-// `bun run` uses it to separate script args from its own flags.
-export function parseFlags(args, spec = {}) {
-  const { values } = parseArgs({
-    args: args.filter((arg) => arg !== '--'),
-    options: spec,
-    strict: false,
-  });
-  return { values };
-}
-
-// Apply `--flag=value` overrides onto a config section (unknown flags ignored).
-export function applyOverrides(section, values) {
-  const out = { ...section };
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) continue;
-    out[toCamel(key)] = value;
-  }
-  return out;
-}
-
-// Read one tool's config section with `--flag=value` overrides applied, plus
-// the full config (for global paths). The one preamble every harness repeats.
-export function sectionConfig(name, args, spec = {}) {
-  const cfg = readConfig();
-  const { values } = parseFlags(args, spec);
-  return { cfg, section: applyOverrides(cfg[name] ?? {}, values), values };
-}
 
 // "30x100,100x200,300x1000" -> [{ rules: 30, candidates: 100 }, ...]
 export function parsePoints(text) {

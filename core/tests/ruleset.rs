@@ -6,12 +6,15 @@
 
 use std::collections::BTreeMap;
 
-use geo::{LineString, Point, Polygon, Rect};
+use geo::{Point, Rect};
 use serde_json::json;
 use spatial_rules_core::{
-    rules_from_geojson, Candidate, CandidateOutcome, ErrorCode, PropertyValue, Query, Rule,
-    RuleId, Ruleset, SpatialIndexKind, SpatialPredicate,
+    rules_from_geojson, CandidateOutcome, ErrorCode, PropertyValue, Query, Rule, RuleId, Ruleset,
+    SpatialIndexKind, SpatialPredicate,
 };
+
+mod common;
+use common::{bowtie, candidate, rule_with_props as rule, square};
 
 const GEOJSON: &str = r#"{
   "type": "FeatureCollection",
@@ -30,30 +33,6 @@ const GEOJSON: &str = r#"{
     }
   ]
 }"#;
-
-fn square(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (min_x, min_y),
-            (min_x, max_y),
-            (max_x, max_y),
-            (max_x, min_y),
-            (min_x, min_y),
-        ]),
-        vec![],
-    )
-}
-
-fn rule(id: &str, polygon: Polygon<f64>, properties: &[(&str, PropertyValue)]) -> Rule {
-    Rule {
-        id: id.to_string(),
-        properties: properties
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.clone()))
-            .collect(),
-        geometry: geo::Geometry::Polygon(polygon),
-    }
-}
 
 #[test]
 fn builds_ruleset_from_geojson() {
@@ -101,17 +80,7 @@ fn exposes_precomputed_envelopes() {
 
 #[test]
 fn rejects_invalid_rule_geometry() {
-    let bowtie = Polygon::new(
-        LineString::from(vec![
-            (0.0, 0.0),
-            (10.0, 10.0),
-            (0.0, 10.0),
-            (10.0, 0.0),
-            (0.0, 0.0),
-        ]),
-        vec![],
-    );
-    let err = Ruleset::build(vec![rule("bad", bowtie, &[])]).unwrap_err();
+    let err = Ruleset::build(vec![rule("bad", bowtie(), &[])]).unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidGeometry);
     assert!(err.message.contains("bad"));
 }
@@ -190,10 +159,7 @@ fn linear_scan_matches_rstar() {
 fn where_equality_index_filters_by_property() {
     let ruleset = Ruleset::from_geojson(GEOJSON).unwrap();
     let zone_a = ruleset.rule_id("zone-a").unwrap();
-    let inside_a = Candidate::new(
-        "inside-a".to_string(),
-        geo::Geometry::Polygon(square(2.0, 2.0, 4.0, 4.0)),
-    );
+    let inside_a = candidate("inside-a", square(2.0, 2.0, 4.0, 4.0));
 
     let restricted = Query::from_json(&json!({
         "spatial": { "predicate": "intersects" },
@@ -232,10 +198,7 @@ fn where_in_index_unions_overlapping_rules() {
         ),
     ])
     .unwrap();
-    let inside = Candidate::new(
-        "inside".to_string(),
-        geo::Geometry::Polygon(square(6.0, 6.0, 8.0, 8.0)),
-    );
+    let inside = candidate("inside", square(6.0, 6.0, 8.0, 8.0));
     let query = Query::from_json(&json!({
         "spatial": { "predicate": "intersects" },
         "where": { "country": { "$in": ["HR", "SI"] } }
@@ -259,10 +222,7 @@ fn empty_ruleset_is_valid() {
         ruleset.query_envelope(&Rect::new((0.0, 0.0), (10.0, 10.0))),
         Vec::<RuleId>::new()
     );
-    let candidate = Candidate::new(
-        "c".to_string(),
-        geo::Geometry::Polygon(square(0.0, 0.0, 1.0, 1.0)),
-    );
+    let candidate = candidate("c", square(0.0, 0.0, 1.0, 1.0));
     assert_eq!(
         ruleset.query(&[candidate], &Query::new(SpatialPredicate::Intersects)),
         vec![CandidateOutcome::NotMatched]
@@ -318,21 +278,12 @@ fn from_canonical_rejects_malformed_input() {
 fn from_canonical_rejects_invalid_geometry() {
     // A canonical ruleset holding a self-intersecting bowtie must fail the
     // same validation as any other load path (ADR-0013).
-    let bowtie = Rule {
+    let bad_rule = Rule {
         id: "bad".to_string(),
         properties: BTreeMap::new(),
-        geometry: geo::Geometry::Polygon(Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-                (10.0, 0.0),
-                (0.0, 0.0),
-            ]),
-            vec![],
-        )),
+        geometry: geo::Geometry::Polygon(bowtie()),
     };
-    let bytes = serde_json::to_vec(&vec![bowtie]).unwrap();
+    let bytes = serde_json::to_vec(&vec![bad_rule]).unwrap();
     let err = Ruleset::from_canonical(&bytes).unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidGeometry);
 }

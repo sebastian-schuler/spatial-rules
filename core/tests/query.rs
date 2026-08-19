@@ -5,63 +5,18 @@
 //! `CandidateOutcome` result model. Expected values are hand-computed literals
 //! from the DE-9IM semantics in ADR-0008, not recomputed by the code.
 
-use geo::{LineString, Point, Polygon};
 use serde_json::json;
 use spatial_rules_core::{
-    Candidate, CandidateOutcome, ErrorCode, PropertyValue, Query, Rule, RuleId, Ruleset,
-    SpatialError, SpatialPredicate,
+    CandidateOutcome, ErrorCode, PropertyValue, Query, RuleId, Ruleset, SpatialError,
+    SpatialPredicate,
 };
 
-fn square(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (min_x, min_y),
-            (min_x, max_y),
-            (max_x, max_y),
-            (max_x, min_y),
-            (min_x, min_y),
-        ]),
-        vec![],
-    )
-}
-
-fn square_with_hole() -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (0.0, 0.0),
-            (0.0, 10.0),
-            (10.0, 10.0),
-            (10.0, 0.0),
-            (0.0, 0.0),
-        ]),
-        vec![LineString::from(vec![
-            (2.0, 2.0),
-            (2.0, 4.0),
-            (4.0, 4.0),
-            (4.0, 2.0),
-            (2.0, 2.0),
-        ])],
-    )
-}
-
-fn rule(id: &str, polygon: Polygon<f64>, properties: &[(&str, PropertyValue)]) -> Rule {
-    Rule {
-        id: id.to_string(),
-        properties: properties
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.clone()))
-            .collect(),
-        geometry: geo::Geometry::Polygon(polygon),
-    }
-}
-
-fn candidate(id: &str, polygon: Polygon<f64>) -> Candidate {
-    Candidate::new(id.to_string(), geo::Geometry::Polygon(polygon))
-}
+mod common;
+use common::{bowtie, candidate, candidate_geometry, rule_with_props, square, square_with_hole};
 
 fn default_ruleset() -> Ruleset {
     Ruleset::build(vec![
-        rule(
+        rule_with_props(
             "square",
             square(0.0, 0.0, 10.0, 10.0),
             &[
@@ -71,7 +26,7 @@ fn default_ruleset() -> Ruleset {
                 ("priority", PropertyValue::Int(10)),
             ],
         ),
-        rule(
+        rule_with_props(
             "far",
             square(100.0, 100.0, 110.0, 110.0),
             &[
@@ -283,7 +238,7 @@ fn new_predicates_parse_from_string() {
 
 #[test]
 fn candidate_inside_hole_is_disjoint() {
-    let ruleset = Ruleset::build(vec![rule("donut", square_with_hole(), &[])]).unwrap();
+    let ruleset = Ruleset::build(vec![rule_with_props("donut", square_with_hole(), &[])]).unwrap();
     let in_hole = candidate("in-hole", square(2.5, 2.5, 3.5, 3.5));
     // bbox overlaps the rule, but the exact DE-9IM step sees the hole.
     assert_eq!(ruleset.query(&[in_hole], &intersects()), vec![CandidateOutcome::NotMatched]);
@@ -441,19 +396,7 @@ fn exclude_unknown_rule_id_is_ignored() {
 #[test]
 fn invalid_candidate_stays_in_result() {
     let ruleset = default_ruleset();
-    let bowtie = Candidate::new(
-        "bowtie".to_string(),
-        geo::Geometry::Polygon(Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-                (10.0, 0.0),
-                (0.0, 0.0),
-            ]),
-            vec![],
-        )),
-    );
+    let bowtie = candidate_geometry("bowtie", geo::Geometry::Polygon(bowtie()));
     let inside = candidate("inside", square(2.0, 2.0, 4.0, 4.0));
     let outcomes = ruleset.query(&[bowtie, inside], &intersects());
     assert_eq!(outcomes.len(), 2);
@@ -464,7 +407,7 @@ fn invalid_candidate_stays_in_result() {
 #[test]
 fn unsupported_candidate_type_is_invalid() {
     let ruleset = default_ruleset();
-    let point = Candidate::new("pt".to_string(), geo::Geometry::Point(Point::new(1.0, 1.0)));
+    let point = candidate_geometry("pt", geo::Geometry::Point(geo::Point::new(1.0, 1.0)));
     let outcomes = ruleset.query(&[point], &intersects());
     assert_eq!(
         outcomes[0],
@@ -477,19 +420,7 @@ fn unsupported_candidate_type_is_invalid() {
 #[test]
 fn invalid_geometry_reason_is_stable() {
     let ruleset = default_ruleset();
-    let bowtie = Candidate::new(
-        "bowtie".to_string(),
-        geo::Geometry::Polygon(Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-                (10.0, 0.0),
-                (0.0, 0.0),
-            ]),
-            vec![],
-        )),
-    );
+    let bowtie = candidate_geometry("bowtie", geo::Geometry::Polygon(bowtie()));
     let outcomes = ruleset.query(&[bowtie], &intersects());
     let CandidateOutcome::Invalid { reason } = &outcomes[0] else {
         panic!("expected an invalid outcome");
@@ -500,8 +431,8 @@ fn invalid_geometry_reason_is_stable() {
 #[test]
 fn candidate_matching_multiple_rules_reports_all_ids() {
     let ruleset = Ruleset::build(vec![
-        rule("a", square(0.0, 0.0, 10.0, 10.0), &[]),
-        rule("b", square(5.0, 5.0, 15.0, 15.0), &[]),
+        rule_with_props("a", square(0.0, 0.0, 10.0, 10.0), &[]),
+        rule_with_props("b", square(5.0, 5.0, 15.0, 15.0), &[]),
     ])
     .unwrap();
     let both = candidate("both", square(6.0, 6.0, 8.0, 8.0));
@@ -554,19 +485,7 @@ fn prepared_query_evaluates_and_collects_ids() {
 #[test]
 fn prepared_query_reports_invalid_candidate() {
     let ruleset = default_ruleset();
-    let bowtie = Candidate::new(
-        "bowtie".to_string(),
-        geo::Geometry::Polygon(Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-                (10.0, 0.0),
-                (0.0, 0.0),
-            ]),
-            vec![],
-        )),
-    );
+    let bowtie = candidate_geometry("bowtie", geo::Geometry::Polygon(bowtie()));
     let prepared = ruleset.prepare(&intersects());
     assert!(matches!(
         prepared.evaluate(&bowtie),
@@ -647,7 +566,7 @@ fn typed_query_builder_produces_expected_struct() {
     assert_eq!(query.where_clause, None);
 
     // Sanity: a rule with no properties is still filterable by an empty map.
-    let ruleset = Ruleset::build(vec![rule("bare", square(0.0, 0.0, 10.0, 10.0), &[])]).unwrap();
+    let ruleset = Ruleset::build(vec![rule_with_props("bare", square(0.0, 0.0, 10.0, 10.0), &[])]).unwrap();
     let bare = candidate("bare", square(1.0, 1.0, 2.0, 2.0));
     assert_eq!(
         ruleset.query(&[bare], &intersects()),
@@ -933,8 +852,8 @@ fn overlap_mask_is_unchanged_by_the_flag() {
 #[test]
 fn overlap_metrics_align_to_matched_rule_ids() {
     let ruleset = Ruleset::build(vec![
-        rule("a", square(0.0, 0.0, 10.0, 10.0), &[]),
-        rule("b", square(5.0, 5.0, 15.0, 15.0), &[]),
+        rule_with_props("a", square(0.0, 0.0, 10.0, 10.0), &[]),
+        rule_with_props("b", square(5.0, 5.0, 15.0, 15.0), &[]),
     ])
     .unwrap();
     // Partially overlaps rule "a" (0,0)-(10,10) and is fully inside rule "b".

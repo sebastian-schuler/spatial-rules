@@ -1,19 +1,34 @@
 //! Algorithm-ladder benchmarks (ticket 12, §32).
 //!
-//! - **B** — Rust naive: every candidate × every rule, exact DE-9IM only.
-//! - **C** — Rust + bounding-box filtering (linear envelope scan).
-//! - **D** — Rust + spatial index (`rstar` bulk-load, the default).
-//! - **E** — Rust + prepared geometries (naive, no bbox).
-//! - **F** — Rust + spatial index + prepared geometries.
-//! - ruleset build time and per-worker preparation cost (§31).
+//! Every rung drives the engine through its public seams (rule source,
+//! envelope query, prepared form by opaque id — architecture-hardening 04) and
+//! differs from its neighbour by exactly one variable:
+//!
+//! - **B** — naive: every candidate × every rule, exact DE-9IM, unprepared.
+//! - **C** — + bounding-box filtering (linear envelope scan), unprepared.
+//! - **D** — + spatial index (`rstar` bulk-load, the default), unprepared.
+//! - **E** — prepared geometries, no bbox.
+//! - **F** — prepared geometries + rstar bbox.
+//!
+//! So the two levers are isolated: bbox filter (B→C), index kind (C→D),
+//! prepared geometries (B→E, and D→F with the index held constant).
 //!
 //! **A** (the existing JS implementation) is the turf.js baseline in
 //! `bun run bench perf` (`benchmarks/js/server-bench.mjs`).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use geo::{BoundingRect, PreparedGeometry, Relate};
+use geo::{PreparedGeometry, Relate};
 use spatial_rules_benchmarks::dataset;
-use spatial_rules_core::{Query, RuleId, Ruleset, SpatialIndexKind, SpatialPredicate};
+use spatial_rules_core::{Candidate, CandidateClass, Ruleset, SpatialIndexKind};
+
+/// The precomputed candidate envelope (architecture-hardening 01). The ladder
+/// reads it instead of re-deriving `bounding_rect` per candidate.
+fn candidate_envelope(candidate: &Candidate) -> geo::Rect<f64> {
+    match candidate.class() {
+        CandidateClass::Valid { envelope } => *envelope,
+        CandidateClass::Invalid { .. } => unreachable!("dataset candidates are valid"),
+    }
+}
 
 fn bench_ladder(criterion: &mut Criterion) {
     let rules = dataset::rules();
@@ -21,27 +36,18 @@ fn bench_ladder(criterion: &mut Criterion) {
     let rstar = Ruleset::build_with(rules.clone(), SpatialIndexKind::RStar).expect("rstar ruleset");
     let scan =
         Ruleset::build_with(rules.clone(), SpatialIndexKind::LinearScan).expect("scan ruleset");
-    let query = Query::new(SpatialPredicate::Intersects);
     let candidate_count = candidates.len() as u64;
 
-    // Rule geometries in ruleset order via the `RuleSource` seam, prepared once
-    // outside the timed loop. `prepared_by_id` maps an opaque RuleId to its
-    // position so the bbox-filtered prepared stage (F) reuses the same prepared
-    // slice without reconstructing a rule's position.
-    let rule_source = rstar.rules();
-    let geometries: Vec<&geo::Geometry<f64>> = rule_source
+    // Rule geometries in ruleset order via the `RuleSource` seam (ADR-0002),
+    // and prepared forms via the `PreparedRuleGeometries` seam indexed by
+    // opaque `RuleId` (architecture-hardening 04) — no positional id→index map
+    // is rebuilt.
+    let geometries: Vec<&geo::Geometry<f64>> = rstar
+        .rules()
         .iter()
         .map(|(_, geometry, _)| geometry)
         .collect();
-    let prepared: Vec<PreparedGeometry<'_, &geo::Geometry<f64>>> = geometries
-        .iter()
-        .map(|geometry| PreparedGeometry::from(*geometry))
-        .collect();
-    let prepared_by_id: std::collections::HashMap<RuleId, usize> = rule_source
-        .iter()
-        .enumerate()
-        .map(|(index, (id, _, _))| (id, index))
-        .collect();
+    let prepared = rstar.prepared();
 
     let mut group = criterion.benchmark_group("batch_query");
     group.throughput(Throughput::Elements(candidate_count));
@@ -61,18 +67,44 @@ fn bench_ladder(criterion: &mut Criterion) {
     });
 
     group.bench_function("C_linear_scan_bbox", |bencher| {
-        bencher.iter(|| black_box(scan.query(black_box(&candidates), &query)))
+        let mut hits = Vec::new();
+        bencher.iter(|| {
+            let mut matches = 0usize;
+            for candidate in &candidates {
+                let bbox = candidate_envelope(candidate);
+                scan.query_envelope_into(&bbox, &mut hits);
+                for &rule_id in &hits {
+                    if candidate.geometry.relate(scan.geometry(rule_id)).is_intersects() {
+                        matches += 1;
+                    }
+                }
+            }
+            black_box(matches)
+        })
     });
 
     group.bench_function("D_rstar_bbox", |bencher| {
-        bencher.iter(|| black_box(rstar.query(black_box(&candidates), &query)))
+        let mut hits = Vec::new();
+        bencher.iter(|| {
+            let mut matches = 0usize;
+            for candidate in &candidates {
+                let bbox = candidate_envelope(candidate);
+                rstar.query_envelope_into(&bbox, &mut hits);
+                for &rule_id in &hits {
+                    if candidate.geometry.relate(rstar.geometry(rule_id)).is_intersects() {
+                        matches += 1;
+                    }
+                }
+            }
+            black_box(matches)
+        })
     });
 
     group.bench_function("E_prepared_naive", |bencher| {
         bencher.iter(|| {
             let mut matches = 0usize;
             for candidate in &candidates {
-                for prepared_rule in &prepared {
+                for prepared_rule in prepared.iter() {
                     if candidate.geometry.relate(prepared_rule).is_intersects() {
                         matches += 1;
                     }
@@ -83,16 +115,14 @@ fn bench_ladder(criterion: &mut Criterion) {
     });
 
     group.bench_function("F_prepared_rstar_bbox", |bencher| {
+        let mut hits = Vec::new();
         bencher.iter(|| {
             let mut matches = 0usize;
             for candidate in &candidates {
-                let bbox = candidate.geometry.bounding_rect().expect("candidate bbox");
-                for rule_id in rstar.query_envelope(&bbox) {
-                    if candidate
-                        .geometry
-                        .relate(&prepared[prepared_by_id[&rule_id]])
-                        .is_intersects()
-                    {
+                let bbox = candidate_envelope(candidate);
+                rstar.query_envelope_into(&bbox, &mut hits);
+                for &rule_id in &hits {
+                    if candidate.geometry.relate(prepared.get(rule_id)).is_intersects() {
                         matches += 1;
                     }
                 }
@@ -125,3 +155,4 @@ fn bench_ladder(criterion: &mut Criterion) {
 
 criterion_group!(benches, bench_ladder);
 criterion_main!(benches);
+

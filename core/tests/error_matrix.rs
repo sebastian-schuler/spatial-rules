@@ -1,43 +1,12 @@
 //! Error-model matrix (ticket 07): every stable `SR_*` code is reachable by a
 //! documented input, so the error surface is explicit and enforceable.
 
-use geo::{LineString, Point, Polygon};
+use geo::Point;
 use serde_json::json;
-use spatial_rules_core::{ErrorCode, Query, Rule, Ruleset, SpatialError};
+use spatial_rules_core::{ErrorCode, Query, Ruleset, SpatialError};
 
-fn square_polygon() -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (0.0, 0.0),
-            (0.0, 10.0),
-            (10.0, 10.0),
-            (10.0, 0.0),
-            (0.0, 0.0),
-        ]),
-        vec![],
-    )
-}
-
-fn bowtie_polygon() -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (0.0, 0.0),
-            (10.0, 10.0),
-            (0.0, 10.0),
-            (10.0, 0.0),
-            (0.0, 0.0),
-        ]),
-        vec![],
-    )
-}
-
-fn rule(id: &str, geometry: geo::Geometry<f64>) -> Rule {
-    Rule {
-        id: id.to_string(),
-        properties: Default::default(),
-        geometry,
-    }
-}
+mod common;
+use common::{bowtie, rule, square};
 
 /// `SR_NATIVE` is intentionally absent: it is the reserved catch-all for
 /// unexpected runtime failures and has no deterministic public input.
@@ -50,7 +19,7 @@ fn every_error_code_is_reachable_by_a_documented_input() {
         ),
         (
             ErrorCode::InvalidGeometry,
-            Ruleset::build(vec![rule("bad", geo::Geometry::Polygon(bowtie_polygon()))]).unwrap_err(),
+            Ruleset::build(vec![rule("bad", geo::Geometry::Polygon(bowtie()))]).unwrap_err(),
         ),
         (
             ErrorCode::InvalidQuery,
@@ -67,8 +36,8 @@ fn every_error_code_is_reachable_by_a_documented_input() {
         (
             ErrorCode::RulesetConstructionFailed,
             Ruleset::build(vec![
-                rule("a", geo::Geometry::Polygon(square_polygon())),
-                rule("a", geo::Geometry::Polygon(square_polygon())),
+                rule("a", geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0))),
+                rule("a", geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0))),
             ])
             .unwrap_err(),
         ),

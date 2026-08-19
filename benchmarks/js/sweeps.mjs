@@ -1,9 +1,10 @@
 // Sweep / experiment harnesses: scale, fair, complex, crossover.
 //
-//   bun sweeps.mjs scale [--points=30x100,100x200,300x1000]
-//   bun sweeps.mjs fair [--rules=300] [--candidates=1000]
+//   bun sweeps.mjs scale [--points=30x100,100x200,300x1000] [--reps=3]
+//   bun sweeps.mjs fair [--rules=300] [--candidates=1000] [--reps=3]
 //   bun sweeps.mjs complex [--rules=3] [--parts=3] [--vertices=5000] [--fields=40]
-//                          [--candidates=20] [--rules-file=benchmarks/data/countries.geojson]
+//                          [--candidates=20] [--reps=3]
+//                          [--rules-file=benchmarks/data/countries.geojson]
 //   bun sweeps.mjs crossover [--mode=candidates|rules] [--rules=500]
 //                            [--sizes=20,200,1000,5000] [--rules-range=500,1000,2000,5000]
 //                            [--candidates=1000] [--reps=3]
@@ -12,6 +13,9 @@
 // All knobs default to benchmarks.json; flags override. `--rules-file` switches
 // to real-data mode (a GeoJSON boundary file such as Natural Earth; fetch with
 // `bun run bench data`). Invoked from the repo root via `bun run bench <cmd>`.
+// Every timed number is min-of-`reps` (one methodology, architecture-hardening
+// 02); one-time setup costs (ruleset build, prepared-geometry warmup) are
+// reported as single samples and labelled as such.
 
 import { booleanIntersects, bbox } from '@turf/turf';
 import RBush from 'rbush';
@@ -57,6 +61,7 @@ switch (sub) {
 function runScale(args) {
   const { section: scale } = sectionConfig('scale', args);
   const points = parsePoints(scale.points);
+  const REPS = Number(scale.reps ?? 3);
 
   console.log('scaling sweep — turf.js (early-exit) vs native addon (full mask), intersects only');
   console.log('rules  candidates  |  turf (ms)  |  addon (ms)  |  speedup');
@@ -84,8 +89,8 @@ function runScale(args) {
     // Warmup only when the turf run is cheap (JIT); the large points are one-shot.
     if (rn * cn < 100_000) turf();
 
-    const turfMs = timed(turf).ms;
-    const nativeMs = timed(() => ruleset.query(candidatesBuffer, queryJson)).ms;
+    const turfMs = minOf(turf, REPS);
+    const nativeMs = minOf(() => ruleset.query(candidatesBuffer, queryJson), REPS);
 
     console.log(
       `${String(rn).padStart(5)}  ${String(cn).padStart(10)}  |  ${turfMs.toFixed(1).padStart(9)}  |  ${nativeMs.toFixed(2).padStart(10)}  |  ${(turfMs / nativeMs).toFixed(0)}×`,
@@ -99,6 +104,7 @@ function runFair(args) {
   const { section: fair } = sectionConfig('fair', args);
   const RULES = Number(fair.rules);
   const CANDIDATES = Number(fair.candidates);
+  const REPS = Number(fair.reps ?? 3);
 
   const rng = makeRng(0xf00d);
   const ruleGeo = makeRules(RULES);
@@ -148,9 +154,9 @@ function runFair(args) {
   }
 
   console.log(`fair competitor — ${RULES} grid rules × ${CANDIDATES} candidates, ${expected} matched`);
-  console.log(`naive turf (scan)      : ${timed(naiveTurf).ms.toFixed(1)} ms`);
-  console.log(`rbush + turf (indexed) : ${timed(indexedTurf).ms.toFixed(1)} ms`);
-  console.log(`native addon           : ${timed(nativeBatch).ms.toFixed(2)} ms`);
+  console.log(`naive turf (scan)      : ${minOf(naiveTurf, REPS).toFixed(1)} ms`);
+  console.log(`rbush + turf (indexed) : ${minOf(indexedTurf, REPS).toFixed(1)} ms`);
+  console.log(`native addon           : ${minOf(nativeBatch, REPS).toFixed(2)} ms`);
 }
 
 // === complex — complexity & metadata stress ================================
@@ -162,6 +168,7 @@ function runComplex(args) {
   const VERTICES = Number(complex.vertices);
   const FIELDS = Number(complex.fields);
   const CANDIDATES = Number(complex.candidates);
+  const REPS = Number(complex.reps ?? 3);
   const rulesFile = complex.rulesFile ? resolveRepoPath(complex.rulesFile) : null;
 
   // The "coastline" rings are the same jittered-ring shape as `blobRing` in
@@ -332,16 +339,18 @@ function runComplex(args) {
     process.exit(1);
   }
 
-  const nativeSpatial = timed(() => nativeMask(querySpatial));
-  const nativeWhere = where ? timed(() => nativeMask(queryWhere)) : null;
-  const turfSpatial = timed(turfNaive);
-  const turfWhereRun = where ? timed(() => turfWhere(where)) : null;
+  const nativeSpatial = minOf(() => nativeMask(querySpatial), REPS);
+  const nativeWhere = where ? minOf(() => nativeMask(queryWhere), REPS) : null;
+  const turfSpatial = minOf(turfNaive, REPS);
+  const turfWhereRun = where ? minOf(() => turfWhere(where), REPS) : null;
+  const spatialMatched = nativeMask(querySpatial);
+  const whereMatched = where ? nativeMask(queryWhere) : null;
 
   console.log(`\nbuild (Rust parse+validate+index): ${build.ms.toFixed(1)} ms`);
   console.log(`first query (builds prepared geometries): ${coldQuery.ms.toFixed(1)} ms`);
-  console.log(`query spatial   — addon ${nativeSpatial.ms.toFixed(2)} ms | turf (scan+bbox) ${turfSpatial.ms.toFixed(1)} ms`);
-  if (where) console.log(`query + where   — addon ${nativeWhere.ms.toFixed(2)} ms | turf (scan+bbox) ${turfWhereRun.ms.toFixed(1)} ms`);
-  console.log(`matched: ${nativeSpatial.result} (spatial)${where ? `, ${nativeWhere.result} (${whereLabel})` : ''}`);
+  console.log(`query spatial   — addon ${nativeSpatial.toFixed(2)} ms | turf (scan+bbox) ${turfSpatial.toFixed(1)} ms`);
+  if (where) console.log(`query + where   — addon ${nativeWhere.toFixed(2)} ms | turf (scan+bbox) ${turfWhereRun.toFixed(1)} ms`);
+  console.log(`matched: ${spatialMatched} (spatial)${where ? `, ${whereMatched} (${whereLabel})` : ''}`);
 }
 
 // === crossover — break-even sweep ==========================================

@@ -8,7 +8,7 @@
 // override it.
 
 import { readFileSync } from 'node:fs';
-import { readConfig, parseFlags, resolveRepoPath, SPATIAL_QUERY } from '../benchmarks/js/common.mjs';
+import { readConfig, parseFlags, resolveRepoPath, SPATIAL_QUERY } from '../shared/config.mjs';
 
 const config = readConfig();
 

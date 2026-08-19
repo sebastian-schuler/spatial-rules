@@ -2,32 +2,13 @@
 //! documented outcome or `SR_*` error — and never panic.
 
 use geo::{Geometry, LineString, Point, Polygon};
-use spatial_rules_core::{candidates_from_geojson, Candidate, Query, Ruleset, SpatialPredicate};
+use spatial_rules_core::{candidates_from_geojson, Query, Ruleset, SpatialPredicate};
 
-fn square(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (min_x, min_y),
-            (min_x, max_y),
-            (max_x, max_y),
-            (max_x, min_y),
-            (min_x, min_y),
-        ]),
-        vec![],
-    )
-}
-
-fn polygon_geometry() -> geo::Geometry<f64> {
-    Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0))
-}
+mod common;
+use common::{candidate_geometry, rule, square, unit_square_geometry};
 
 fn single_rule_ruleset() -> Ruleset {
-    Ruleset::build(vec![spatial_rules_core::Rule {
-        id: "zone".to_string(),
-        properties: Default::default(),
-        geometry: polygon_geometry(),
-    }])
-    .unwrap()
+    Ruleset::build(vec![rule("zone", unit_square_geometry())]).unwrap()
 }
 
 #[test]
@@ -67,8 +48,8 @@ fn utf8_bom_prefix_is_rejected() {
 #[test]
 fn non_finite_candidate_is_invalid_not_panic() {
     let ruleset = single_rule_ruleset();
-    let nan_candidate = Candidate::new(
-        "nan".to_string(),
+    let nan_candidate = candidate_geometry(
+        "nan",
         Geometry::Polygon(Polygon::new(
             LineString::from(vec![
                 (0.0, 0.0),
@@ -116,8 +97,8 @@ fn antimeridian_crossing_rule_queries_without_panic() {
         )),
     }])
     .unwrap();
-    let candidate = Candidate::new(
-        "inside".to_string(),
+    let candidate = candidate_geometry(
+        "inside",
         Geometry::Polygon(square(179.5, -0.5, 180.5, 0.5)),
     );
     let mask = ruleset.query_mask(std::slice::from_ref(&candidate), &Query::new(SpatialPredicate::Intersects));

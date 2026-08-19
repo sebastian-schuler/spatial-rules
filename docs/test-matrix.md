@@ -4,6 +4,11 @@ Maps each feature area to the test file that owns its coverage (ticket 07). A
 post-v1 feature is not "done" unless the file that owns its behavior has a test
 for it. This is the enforceable complement to each ticket's `Tests` section.
 
+Shared fixtures (unit-square polygon, rule/candidate builders, jittered ring)
+live once in `core/tests/common/mod.rs` and are consumed by every core
+integration test (architecture-hardening 07) — the file→coverage-owner mapping
+below is unchanged; only the duplication moved into that module.
+
 | Area | Test file | What it owns |
 | ---- | --------- | ------------ |
 | Where operators (`$eq/$ne/$gt/$gte/$lt/$lte/$in/$nin/$exists/$not`, `$and`/`$or`) | `core/tests/query.rs`, `core/src/where_expr.rs` (unit) | parse + eval semantics, missing/type-mismatch = non-match, indexability |

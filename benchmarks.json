@@ -18,6 +18,7 @@
         "vertices": 5000,
         "fields": 40,
         "candidates": 20,
+        "reps": 3,
         "rulesFile": null
     },
     "crossover": {
@@ -31,10 +32,12 @@
     },
     "fair": {
         "rules": 300,
-        "candidates": 1000
+        "candidates": 1000,
+        "reps": 3
     },
     "scale": {
-        "points": "30x100,100x200,300x1000"
+        "points": "30x100,100x200,300x1000",
+        "reps": 3
     },
     "perf": {
         "iters": 3

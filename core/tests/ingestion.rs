@@ -12,6 +12,9 @@ use spatial_rules_core::{
     ErrorCode, PropertyValue, Rule,
 };
 
+mod common;
+use common::{candidate_geometry, square};
+
 const VALID_COLLECTION: &str = r#"{
   "type": "FeatureCollection",
   "features": [
@@ -42,19 +45,6 @@ const VALID_COLLECTION: &str = r#"{
   ]
 }"#;
 
-fn square_polygon() -> Polygon<f64> {
-    Polygon::new(
-        LineString::from(vec![
-            (0.0, 0.0),
-            (0.0, 10.0),
-            (10.0, 10.0),
-            (10.0, 0.0),
-            (0.0, 0.0),
-        ]),
-        vec![],
-    )
-}
-
 #[test]
 fn parses_a_valid_feature_collection() {
     let geojson = parse_geojson(VALID_COLLECTION).unwrap();
@@ -81,7 +71,7 @@ fn rejects_non_feature_document() {
 #[test]
 fn extracts_polygon_geometry() {
     let features = rules_from_geojson(VALID_COLLECTION).unwrap();
-    let expected = geo::Geometry::Polygon(square_polygon());
+    let expected = geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0));
     assert_eq!(features[0].geometry, expected);
 }
 
@@ -134,7 +124,7 @@ fn builds_candidate_from_feature() {
     let candidates: Vec<Candidate> = candidates_from_geojson(VALID_COLLECTION).unwrap();
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0].id, "rule-17");
-    assert_eq!(candidates[0].geometry, geo::Geometry::Polygon(square_polygon()));
+    assert_eq!(candidates[0].geometry, geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)));
 }
 
 #[test]
@@ -168,7 +158,7 @@ fn feature_geometry_rejects_missing_geometry() {
 
 #[test]
 fn accepts_valid_polygon_and_multipolygon() {
-    let polygon = geo::Geometry::Polygon(square_polygon());
+    let polygon = geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0));
     validate_rule_geometry(&polygon).unwrap();
 
     let multipolygon = geo::Geometry::MultiPolygon(geo::MultiPolygon::new(vec![
@@ -279,11 +269,11 @@ fn rule_and_candidate_constructors_work_directly() {
     let rule = Rule {
         id: "rule-1".to_string(),
         properties: Default::default(),
-        geometry: geo::Geometry::Polygon(square_polygon()),
+        geometry: geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)),
     };
-    let candidate = Candidate::new(
-        "candidate-1".to_string(),
-        geo::Geometry::Polygon(square_polygon()),
+    let candidate = candidate_geometry(
+        "candidate-1",
+        geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)),
     );
     assert_eq!(rule.id, "rule-1");
     assert_eq!(candidate.id, "candidate-1");
