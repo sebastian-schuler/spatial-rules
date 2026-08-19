@@ -187,14 +187,31 @@ await assert.rejects(
   (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_GEOJSON',
 );
 
-// An in-flight async query across a replace() settles with a consistent
-// snapshot (ADR-0007): a valid mask of the right length.
+// An in-flight async query across a replace() observes one consistent
+// snapshot (ADR-0007): the pre-replace or post-replace mask, never a torn mix.
+const replacement2 = Buffer.from(
+  JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        id: 'zone-e',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] },
+      },
+    ],
+  }),
+);
+const preMask = Array.from(ruleset.query(candidates, intersects)); // [0,0,2]
 const inFlight = ruleset.queryAsync(candidates, intersects);
-ruleset.replace(replacement);
-const settled = await inFlight;
-assert.equal(settled.length, 3);
-for (const v of settled) {
-  assert.ok(v === 0 || v === 1 || v === 2);
-}
+ruleset.replace(replacement2); // "inside" now matches -> [1,0,2]
+const settled = Array.from(await inFlight);
+const postMask = Array.from(ruleset.query(candidates, intersects));
+const matchesPre = settled.every((v, i) => v === preMask[i]);
+const matchesPost = settled.every((v, i) => v === postMask[i]);
+assert.ok(
+  matchesPre || matchesPost,
+  'in-flight queryAsync must observe a consistent snapshot',
+);
 
 console.log('smoke test passed');

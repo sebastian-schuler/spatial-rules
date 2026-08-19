@@ -62,3 +62,33 @@ jobs:
       - name: Smoke test (Bun)
         working-directory: node
         run: bun test/smoke.mjs
+
+  clean-install:
+    # Zero-toolchain install path (ticket 18 / ticket 07): install the packed
+    # root + platform tarballs into a fresh dir and run the install smoke.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build addon into the platform package
+        run: |
+          cargo build --release -p spatial-rules-node
+          mkdir -p node/npm/linux-x64-gnu
+          cp target/release/libspatial_rules_node.so node/npm/linux-x64-gnu/spatial-rules.linux-x64-gnu.node
+      - name: Pack root + platform tarballs
+        run: |
+          set -euxo pipefail
+          (cd node && npm pack --pack-destination /tmp/root)
+          (cd node/npm/linux-x64-gnu && npm pack --pack-destination /tmp/platform)
+      - name: Install and run clean-install smoke
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/ci-clean-install
+          cd /tmp/ci-clean-install
+          npm init -y >/dev/null
+          npm install /tmp/root/*.tgz /tmp/platform/*.tgz >/dev/null
+          cp "$GITHUB_WORKSPACE/node/test/clean-install.mjs" .
+          node clean-install.mjs

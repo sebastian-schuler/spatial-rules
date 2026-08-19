@@ -40,14 +40,17 @@ fn parse_query(query_json: &str) -> Result<Query, SpatialError> {
     Query::from_json(&value)
 }
 
-/// Parse a candidates buffer and query string into the types the engine needs.
-fn parse_inputs(
-    candidates: Buffer,
-    query: String,
-) -> napi::Result<(Vec<Candidate>, Query), &'static str> {
-    let text = bytes_to_str(&candidates, "candidates").map_err(spatial_error_to_napi)?;
-    let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi)?;
-    let query = parse_query(&query).map_err(spatial_error_to_napi)?;
+/// Parse candidate bytes + query JSON into the engine types. The caller maps
+/// the `SpatialError` to the sync (`Error<&'static str>`) or async (`Error`)
+/// napi error shape.
+fn parse_inputs_core(
+    candidates: &[u8],
+    query: &str,
+) -> Result<(Vec<Candidate>, Query), SpatialError> {
+    let text = std::str::from_utf8(candidates)
+        .map_err(|e| SpatialError::invalid_geojson(format!("candidates are not valid UTF-8: {e}")))?;
+    let candidates = candidates_from_geojson(text)?;
+    let query = parse_query(query)?;
     Ok((candidates, query))
 }
 
@@ -91,7 +94,8 @@ impl SpatialRuleset {
     /// return a `Uint8Array` mask: `0` no match, `1` matched, `2` invalid.
     #[napi]
     pub fn query(&self, candidates: Buffer, query: String) -> napi::Result<Uint8Array, &'static str> {
-        let (candidates, query) = parse_inputs(candidates, query)?;
+        let (candidates, query) =
+            parse_inputs_core(candidates.as_ref(), &query).map_err(spatial_error_to_napi)?;
         Ok(Uint8Array::from(self.engine.query_mask(&candidates, &query)))
     }
 
@@ -108,11 +112,8 @@ impl SpatialRuleset {
         query: String,
     ) -> napi::Result<Uint8Array> {
         let candidates_bytes = candidates.as_ref().to_vec();
-        let text = std::str::from_utf8(&candidates_bytes)
-            .map_err(|e| SpatialError::invalid_geojson(format!("candidates are not valid UTF-8: {e}")))
-            .map_err(spatial_error_to_napi_async)?;
-        let candidates = candidates_from_geojson(text).map_err(spatial_error_to_napi_async)?;
-        let query = parse_query(&query).map_err(spatial_error_to_napi_async)?;
+        let (candidates, query) =
+            parse_inputs_core(&candidates_bytes, &query).map_err(spatial_error_to_napi_async)?;
         Ok(Uint8Array::from(self.engine.query_mask(&candidates, &query)))
     }
 
@@ -122,7 +123,8 @@ impl SpatialRuleset {
     /// `overlapArea`/`overlapRatio` geodesic metrics.
     #[napi]
     pub fn query_rich(&self, candidates: Buffer, query: String) -> napi::Result<String, &'static str> {
-        let (candidates, query) = parse_inputs(candidates, query)?;
+        let (candidates, query) =
+            parse_inputs_core(candidates.as_ref(), &query).map_err(spatial_error_to_napi)?;
         // Snapshot once so outcomes and their string ids come from the same
         // ruleset (a concurrent replace can't tear them apart, ADR-0007).
         let ruleset = self.engine.snapshot();

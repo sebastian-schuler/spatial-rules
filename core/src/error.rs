@@ -21,7 +21,8 @@ pub enum ErrorCode {
     RulesetConstructionFailed,
     /// A geometry type outside the supported `Polygon`/`MultiPolygon` set.
     UnsupportedGeometryType,
-    /// A spatial predicate other than `intersects`/`contains`/`within`.
+    /// A spatial predicate outside the supported DE-9IM set (ADR-0008,
+    /// ADR-0012).
     UnsupportedSpatialPredicate,
     /// A property operator outside the supported Mongo-style subset.
     UnsupportedPropertyOperator,
