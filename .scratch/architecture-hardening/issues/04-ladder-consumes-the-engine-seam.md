@@ -31,3 +31,10 @@ envelope query, prepared form) and differs from its neighbour by exactly one
 variable (B→C bbox, C→D index, B→E prepared, D→F prepared+index). Measured
 separation: prepared geometry ≈29× (B→E), bbox/index ≈1× at 30 large rules;
 `docs/benchmarks.md` attribution corrected.
+
+Note: this overturns the ticket's stated premise ("bbox is the dominant lever,
+prepared ≈1.4×"). The separated rungs show the reverse at these shapes —
+prepared geometry is the dominant lever (B→E ≈ 29×), and the bbox/index filter
+is negligible (B→C→D ≈ 1×) because 30 large rules already overlap nearly every
+candidate. The premise conflated the old C/D full-engine rungs (bbox **and**
+prepared); the separation the ticket asked for is what exposed it.
