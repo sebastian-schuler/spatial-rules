@@ -74,7 +74,9 @@ function rethrow(err) {
 // A chainable evaluation result (filtering-scale ticket 03): one native query
 // call computes the mask; every terminal derives from it without another
 // crossing, except `toRichJson()`, which lazily makes one native rich call on
-// first use (ADR-0012).
+// first use (ADR-0012). Memory: the mask is the minimal primitive (1 byte per
+// candidate); the heavy views (`toGeoJson`/`toRichJson`) are one-shot and
+// never cached, so results stay lean for giant lists.
 export class QueryResult {
   constructor(native, candidates, query, mask) {
     this._native = native;
@@ -91,13 +93,40 @@ export class QueryResult {
   }
 
   // Indices of matched candidates (mask === 1), ascending, aligned to input.
+  // Exactly sized — no oversized transient buffer (memory-lean for giant
+  // lists).
   toIndices() {
-    const indices = new Uint32Array(this._mask.length);
-    let n = 0;
+    return this._indicesWhere((value) => value === 1);
+  }
+
+  // Indices of invalid candidates (mask === 2), ascending — the positions a
+  // caller should skip rather than treat as filtered out.
+  invalidIndices() {
+    return this._indicesWhere((value) => value === 2);
+  }
+
+  // A count breakdown of the batch: matched / notMatched / invalid. Cheap —
+  // prefer this before materialising a heavy view (toGeoJson/toRichJson).
+  summary() {
+    let matched = 0;
+    let notMatched = 0;
+    let invalid = 0;
     for (let i = 0; i < this._mask.length; i += 1) {
-      if (this._mask[i] === 1) indices[n++] = i;
+      if (this._mask[i] === 1) matched += 1;
+      else if (this._mask[i] === 2) invalid += 1;
+      else notMatched += 1;
     }
-    return indices.slice(0, n);
+    return { matched, notMatched, invalid };
+  }
+
+  // Exact-size index array for the positions whose mask value passes `test`.
+  _indicesWhere(test) {
+    let n = 0;
+    for (let i = 0; i < this._mask.length; i += 1) if (test(this._mask[i])) n += 1;
+    const indices = new Uint32Array(n);
+    let k = 0;
+    for (let i = 0; i < this._mask.length; i += 1) if (test(this._mask[i])) indices[k++] = i;
+    return indices;
   }
 
   // Number of matched candidates.

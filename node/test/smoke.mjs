@@ -63,6 +63,8 @@ assert.deepEqual(Array.from(mask), [1, 0, 2]);
 // everything except the rich view is derived in JS with no extra crossing.
 assert.equal(result.count(), 1);
 assert.deepEqual(Array.from(result.toIndices()), [0]); // only "inside" matched
+assert.deepEqual(result.summary(), { matched: 1, notMatched: 1, invalid: 1 });
+assert.deepEqual(Array.from(result.invalidIndices()), [2]); // the bowtie
 const kept = JSON.parse(result.toGeoJson());
 assert.equal(kept.type, 'FeatureCollection');
 assert.equal(kept.features.length, 1);

@@ -58,6 +58,8 @@ const result = ruleset.query(candidatesGeojsonBuffer, JSON.stringify({
 result.toMask()       // Uint8Array mask (0 / 1 / 2), aligned to the input
 result.toIndices()    // Uint32Array of matched candidate indices
 result.count()        // number of matched candidates
+result.summary()      // { matched, notMatched, invalid } count breakdown
+result.invalidIndices() // Uint32Array of invalid candidate indices
 result.toGeoJson()    // matched candidates as a GeoJSON FeatureCollection string
 result.toRichJson()   // per-candidate outcomes + overlap, as a JSON string (lazy)
 
