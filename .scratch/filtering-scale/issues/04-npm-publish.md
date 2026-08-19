@@ -19,3 +19,13 @@ Steps (human — requires registry credentials):
 
 Run: clean-install smoke green on host (and CI matrix); `bun` + `node` smoke
 pass through the installed package path.
+
+## Comments
+
+2026-08-20: the published surface changed before release — `query()` now
+returns a chainable `QueryResult` (tickets 01–03 landed: point candidates,
+whole-clause `$nor`, chainable output with toMask/toIndices/toGeoJson/
+toRichJson/summary). The smoke/clean-install verification steps therefore use
+`.toMask()`. What ships: Buffer-in/mask-out native core, 7 DE-9IM predicates,
+property `where` (+`$nor`), point candidates, chainable output, atomic
+replace, canonical persistence. Publish from `main`.
