@@ -71,6 +71,28 @@ function rethrow(err) {
   throw err;
 }
 
+// Input normalization (filtering-scale ticket 05): the native boundary stays
+// Buffer-in/mask-out (ADR-0006); the wrapper accepts Buffer | GeoJSON string |
+// GeoJSON object for candidates and rules, and string | object for the query.
+// A Buffer fast-path passes through untouched (byte-faithful); anything else
+// throws a clear TypeError before the native crossing.
+function toGeoJsonBuffer(value, what) {
+  if (Buffer.isBuffer(value)) return value;
+  if (typeof value === 'string') return Buffer.from(value);
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return Buffer.from(JSON.stringify(value));
+  }
+  throw new TypeError(`${what} must be a Buffer, a GeoJSON string, or a GeoJSON object`);
+}
+
+function toQueryString(value) {
+  if (typeof value === 'string') return value;
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+  throw new TypeError('query must be a JSON string or an object');
+}
+
 // A chainable evaluation result (filtering-scale ticket 03): one native query
 // call computes the mask; every terminal derives from it without another
 // crossing, except `toRichJson()`, which lazily makes one native rich call on
@@ -172,17 +194,20 @@ export class QueryResult {
 
 export class SpatialRuleset {
   constructor(rules) {
+    const normalized = toGeoJsonBuffer(rules, 'rules');
     try {
-      this._native = new native.SpatialRuleset(rules);
+      this._native = new native.SpatialRuleset(normalized);
     } catch (err) {
       rethrow(err);
     }
   }
 
   query(candidates, query) {
+    const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
+    const normalizedQuery = toQueryString(query);
     try {
-      const mask = this._native.query(candidates, query);
-      return new QueryResult(this._native, candidates, query, mask);
+      const mask = this._native.query(normalizedCandidates, normalizedQuery);
+      return new QueryResult(this._native, normalizedCandidates, normalizedQuery, mask);
     } catch (err) {
       rethrow(err);
     }
@@ -205,8 +230,9 @@ export class SpatialRuleset {
   }
 
   replace(rules) {
+    const normalized = toGeoJsonBuffer(rules, 'rules');
     try {
-      return this._native.replace(rules);
+      return this._native.replace(normalized);
     } catch (err) {
       rethrow(err);
     }

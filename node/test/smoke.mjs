@@ -250,4 +250,56 @@ assert.ok(
   'in-flight queryAsync must observe a consistent snapshot',
 );
 
+// Dynamic input types (filtering-scale ticket 05): the wrapper normalizes
+// Buffer | string | object for candidates + rules, and string | object for the
+// query, before the native crossing. Each accepted type produces the same mask
+// as the Buffer form; unsupported types throw a TypeError from the wrapper.
+const candidatesObject = JSON.parse(candidates.toString('utf8'));
+const candidatesString = candidates.toString('utf8');
+const rulesObject = JSON.parse(rules.toString('utf8'));
+const rulesString = rules.toString('utf8');
+const intersectsObject = JSON.parse(intersects);
+
+// Constructor accepts an object; query accepts object candidates + object query.
+const dynamicRuleset = new SpatialRuleset(rulesObject);
+assert.deepEqual(
+  Array.from(dynamicRuleset.query(candidatesObject, intersectsObject).toMask()),
+  [1, 0, 2],
+);
+// String candidates with a string query (Buffer forms already covered above).
+assert.deepEqual(
+  Array.from(dynamicRuleset.query(candidatesString, intersects).toMask()),
+  [1, 0, 2],
+);
+// Constructor accepts a string; Buffer candidates with an object query.
+const stringRuleset = new SpatialRuleset(rulesString);
+assert.deepEqual(
+  Array.from(stringRuleset.query(candidates, intersectsObject).toMask()),
+  [1, 0, 2],
+);
+
+// The result holds the normalized Buffer, so toGeoJson stays value-faithful
+// for object inputs (properties preserved, formatting normalized).
+const objectResult = dynamicRuleset.query(candidatesObject, intersectsObject);
+const objectKept = JSON.parse(objectResult.toGeoJson());
+assert.equal(objectKept.features.length, 1);
+assert.equal(objectKept.features[0].id, 'inside');
+assert.equal(objectKept.features[0].properties.name, 'inside-poly');
+
+// replace() accepts object and string rules.
+assert.equal(JSON.parse(dynamicRuleset.replace(rulesObject)).version, 2);
+assert.equal(JSON.parse(dynamicRuleset.replace(rulesString)).version, 3);
+
+// Unsupported input types throw a clear TypeError from the wrapper.
+assert.throws(() => new SpatialRuleset(42), TypeError);
+assert.throws(() => new SpatialRuleset(null), TypeError);
+assert.throws(() => new SpatialRuleset(undefined), TypeError);
+assert.throws(() => new SpatialRuleset([]), TypeError);
+assert.throws(() => dynamicRuleset.query(42, intersects), TypeError);
+assert.throws(() => dynamicRuleset.query(candidates, 42), TypeError);
+assert.throws(() => dynamicRuleset.query(candidates, null), TypeError);
+assert.throws(() => dynamicRuleset.query(candidates, []), TypeError);
+assert.throws(() => dynamicRuleset.replace(42), TypeError);
+assert.throws(() => dynamicRuleset.replace([]), TypeError);
+
 console.log('smoke test passed');

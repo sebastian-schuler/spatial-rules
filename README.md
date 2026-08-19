@@ -68,8 +68,14 @@ const report = JSON.parse(ruleset.replace(newRulesGeojsonBuffer));
 console.log(ruleset.stats()); // { version, ruleCount, buildDurationMs, lastSwapTime }
 ```
 
-Both `candidates` and `rules` are GeoJSON `FeatureCollection` buffers; `query`
-is the JSON query shape above.
+Both `candidates` and `rules` are GeoJSON `FeatureCollection`s, accepted as a
+`Buffer`, a GeoJSON string, or a GeoJSON object; `query` is the JSON query
+shape above, accepted as a string or an object. The wrapper normalizes
+candidates and rules to a `Buffer` and the query to a string before the native
+crossing: a `Buffer` passes through untouched (byte-faithful), while a string
+or object is value-faithful — properties are preserved but formatting is
+normalized by the wrapper's serialization and by `toGeoJson()`. Any other type
+throws a `TypeError`.
 
 ### Error codes
 
