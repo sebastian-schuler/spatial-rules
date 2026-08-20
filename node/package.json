@@ -31,7 +31,7 @@
         "build:ts": "tsc -p tsconfig.build.json",
         "prepublishOnly": "tsc -p tsconfig.build.json && napi prepublish -t npm",
         "typecheck": "tsc --noEmit",
-        "test": "node test/smoke.mjs"
+        "test": "node --experimental-strip-types test/smoke.ts"
     },
     "devDependencies": {
         "@napi-rs/cli": "^2.18.4",

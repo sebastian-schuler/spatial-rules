@@ -45,7 +45,7 @@ const CROSS_CHECK = join(REPO_ROOT, 'benchmarks', 'js', 'cross_check.mjs');
 const MEMORY = join(REPO_ROOT, 'integration', 'memory.mjs');
 const SERVER = join(REPO_ROOT, 'integration', 'server.mjs');
 const SMOKE = join(REPO_ROOT, 'integration', 'smoke.mjs');
-const NODE_SMOKE = join(REPO_ROOT, 'node', 'test', 'smoke.mjs');
+const NODE_SMOKE = join(REPO_ROOT, 'node', 'test', 'smoke.ts');
 
 // Run a command synchronously with output inherited; exit on failure.
 function run(cmd, args, opts = {}) {

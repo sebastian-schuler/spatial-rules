@@ -6,11 +6,14 @@
 //
 //   # in a temp project dir (see ticket 18 comment for the full loop):
 //   npm install /path/to/spatial-rules-0.1.0.tgz /path/to/spatial-rules-win32-x64-msvc-0.1.0.tgz
-//   node clean-install.mjs      # copy this file there first (bare 'spatial-rules'
-//                               # resolves from THIS file's location, so it must
-//                               # live inside the temp project, not the repo)
+//   node clean-install.ts      # copy this file there first (bare 'spatial-rules'
+//                              # resolves from THIS file's location, so it must
+//                              # live inside the temp project, not the repo)
 //
-// Mirrors node/test/smoke.mjs but against the installed package.
+// Mirrors node/test/smoke.ts but against the installed compiled package
+// (`dist/index.js`). In-repo typecheck resolves `spatial-rules` to the TS
+// source via tsconfig `paths`; at runtime in the temp project it resolves the
+// installed tarball.
 
 import assert from 'node:assert/strict';
 import { SpatialRuleset } from 'spatial-rules';

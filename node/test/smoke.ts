@@ -1,12 +1,16 @@
 // Smoke test for the binding — runnable under both Node and Bun:
-//   node test/smoke.mjs
-//   bun test/smoke.mjs
+//   node test/smoke.ts
+//   bun test/smoke.ts
 //
 // Build the addon first: cargo build -p spatial-rules-node
 // and copy it to `node/spatial_rules.node` (see the ticket Answer).
 
 import assert from 'node:assert/strict';
 import { SpatialRulesError, SpatialRuleset } from '../index.ts';
+
+// Deliberately-invalid inputs: these assert the wrapper's runtime TypeErrors,
+// so they are cast to `never` to bypass the compile-time signatures.
+const invalid = (value: unknown) => value as never;
 
 const rules = Buffer.from(
   JSON.stringify({
@@ -291,16 +295,16 @@ assert.equal(JSON.parse(dynamicRuleset.replace(rulesObject)).version, 2);
 assert.equal(JSON.parse(dynamicRuleset.replace(rulesString)).version, 3);
 
 // Unsupported input types throw a clear TypeError from the wrapper.
-assert.throws(() => new SpatialRuleset(42), TypeError);
-assert.throws(() => new SpatialRuleset(null), TypeError);
-assert.throws(() => new SpatialRuleset(undefined), TypeError);
-assert.throws(() => new SpatialRuleset([]), TypeError);
-assert.throws(() => dynamicRuleset.query(42, intersects), TypeError);
-assert.throws(() => dynamicRuleset.query(candidates, 42), TypeError);
-assert.throws(() => dynamicRuleset.query(candidates, null), TypeError);
-assert.throws(() => dynamicRuleset.query(candidates, []), TypeError);
-assert.throws(() => dynamicRuleset.replace(42), TypeError);
-assert.throws(() => dynamicRuleset.replace([]), TypeError);
+assert.throws(() => new SpatialRuleset(invalid(42)), TypeError);
+assert.throws(() => new SpatialRuleset(invalid(null)), TypeError);
+assert.throws(() => new SpatialRuleset(invalid(undefined)), TypeError);
+assert.throws(() => new SpatialRuleset(invalid([])), TypeError);
+assert.throws(() => dynamicRuleset.query(invalid(42), intersects), TypeError);
+assert.throws(() => dynamicRuleset.query(candidates, invalid(42)), TypeError);
+assert.throws(() => dynamicRuleset.query(candidates, invalid(null)), TypeError);
+assert.throws(() => dynamicRuleset.query(candidates, invalid([])), TypeError);
+assert.throws(() => dynamicRuleset.replace(invalid(42)), TypeError);
+assert.throws(() => dynamicRuleset.replace(invalid([])), TypeError);
 
 // SpatialRulesError is a real Error subclass carrying a stable code (ADR-0005).
 const directError = new SpatialRulesError('boom', 'SR_TEST');
