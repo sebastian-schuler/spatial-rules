@@ -14,32 +14,26 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: linux-x64-gnu
-            zig: false
             musl: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             platform: linux-x64-musl
-            zig: true
             musl: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64-gnu
-            zig: false
             musl: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             platform: linux-arm64-musl
-            zig: false
             musl: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: win32-x64-msvc
-            zig: false
             musl: false
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             platform: win32-arm64-msvc
-            zig: false
             musl: false
 
     runs-on: ${{ matrix.os }}
@@ -48,64 +42,51 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install zig (x64 musl)
-        if: matrix.zig
+      - name: Install zig + cargo-zigbuild (musl)
+        if: matrix.musl
         run: |
           set -euxo pipefail
           curl -fsSL -o /tmp/zig.tar.xz \
             https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
           tar -C /tmp -xf /tmp/zig.tar.xz
           echo "/tmp/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
+          cargo install cargo-zigbuild --locked
       - name: Install aarch64 glibc cross-gcc
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Install zig (aarch64 musl)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          set -euxo pipefail
-          curl -fsSL -o /tmp/zig.tar.xz \
-            https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
-          tar -C /tmp -xf /tmp/zig.tar.xz
-          echo "/tmp/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
-      - name: Install cargo-zigbuild (aarch64 musl)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo install cargo-zigbuild --locked
-      - name: Install dependencies
-        working-directory: node
-        run: npm install
       - name: Build addon
         shell: bash
         working-directory: node
         run: |
+          set -euxo pipefail
           case "${{ matrix.target }}" in
             aarch64-unknown-linux-gnu)
               # zig rejects rustc's --fix-cortex-a53-843419; use a real glibc
               # cross-gcc, which supports it.
               CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-                npx napi build --target ${{ matrix.target }} --release
+                cargo build --release --target ${{ matrix.target }} -p spatial-rules-node
               ;;
-            aarch64-unknown-linux-musl)
-              # musl.cc is unreliable; build with cargo-zigbuild (zig handles
-              # the aarch64 linker flag that napi --zig passes through raw).
+            *-musl)
+              # musl cdylib needs a dynamic crt; cargo-zigbuild handles the
+              # aarch64 linker flag too.
               RUSTFLAGS="-C target-feature=-crt-static" \
-                cargo zigbuild --release --target aarch64-unknown-linux-musl \
-                -p spatial-rules-node
-              mkdir -p npm/linux-arm64-musl
-              # Cargo writes to the workspace-root target dir, not node/target.
-              cp ../target/aarch64-unknown-linux-musl/release/libspatial_rules_node.so \
-                npm/linux-arm64-musl/spatial-rules.linux-arm64-musl.node
-              ;;
-            x86_64-unknown-linux-musl)
-              RUSTFLAGS="-C target-feature=-crt-static" \
-                npx napi build --target ${{ matrix.target }} --release --zig
+                cargo zigbuild --release --target ${{ matrix.target }} -p spatial-rules-node
               ;;
             *)
-              npx napi build --target ${{ matrix.target }} --release
+              cargo build --release --target ${{ matrix.target }} -p spatial-rules-node
               ;;
           esac
+          # Stage the cdylib as the platform package's .node. Cargo writes to
+          # the workspace-root target dir (../target), and napi build does NOT
+          # drop the binary into npm/<platform>/ on its own.
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            ARTIFACT=spatial_rules_node.dll
+          else
+            ARTIFACT=libspatial_rules_node.so
+          fi
+          mkdir -p "npm/${{ matrix.platform }}"
+          cp "../target/${{ matrix.target }}/release/$ARTIFACT" \
+            "npm/${{ matrix.platform }}/spatial-rules.${{ matrix.platform }}.node"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
