@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.0](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-v0.1.0...spatial-rules-v0.1.0) (2026-08-20)
+
+
+### Features
+
+* **core:** canonical ruleset persistence (ticket 04) ([a470ce2](https://github.com/sebastian-schuler/spatial-rules/commit/a470ce2afb3f5b39b3e8d1e9f8aed0027a41be04))
+* **core:** point candidates and whole-clause $nor ([41b93f3](https://github.com/sebastian-schuler/spatial-rules/commit/41b93f330d9f08bde83c2c7a52a0daf2d9cd7086))
+* **core:** quantitative overlap area/ratio on the rich path (ticket 03) ([cf4b9fa](https://github.com/sebastian-schuler/spatial-rules/commit/cf4b9fadee38b3e2cc02514d1dce7b4f10363be5))
+* **core:** richer where operators $not/$nin/$exists (ticket 01) ([371ad44](https://github.com/sebastian-schuler/spatial-rules/commit/371ad4492a8b89abf1e27c2556fc33932ba98857))
+* **core:** spatial predicates covers/covered_by/touches/overlaps (ticket 02) ([f683a5c](https://github.com/sebastian-schuler/spatial-rules/commit/f683a5cfd243b471d4c8df665ff913aaed61512d))
+* **node:** chainable query result (ticket 03) ([edc0df7](https://github.com/sebastian-schuler/spatial-rules/commit/edc0df78dcaca5e6333681955f3a7cf298047b94))
+* **node:** dynamic input types (ticket 05) ([0cbf720](https://github.com/sebastian-schuler/spatial-rules/commit/0cbf720655d6faf8d127434a3a723fce6836a07b))
+* **node:** memory-lean query result terminals ([79b3366](https://github.com/sebastian-schuler/spatial-rules/commit/79b3366f43b7e6868c5b52a1b49af493c45a17c8))
+* **node:** migrate wrapper to TypeScript, compile-on-publish (ts-migration 02) ([b59e414](https://github.com/sebastian-schuler/spatial-rules/commit/b59e4146483a5a6e98a7ccbb6f1c577263f8631b))
+* **node:** opt-in off-main-thread queryAsync (ticket 06) ([5ce241d](https://github.com/sebastian-schuler/spatial-rules/commit/5ce241d004ff7d4c61c40b2f596056ad2c6a7b4c))
+* **node:** TS tooling bootstrap — tsconfig, native.d.ts, typecheck (ts-migration 01) ([eb8f1b6](https://github.com/sebastian-schuler/spatial-rules/commit/eb8f1b636e4944056ac3cf6ca4600e24d93d7e15))
+
+## Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
