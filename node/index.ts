@@ -165,10 +165,10 @@ function toQueryString(value: QueryInput): string {
 /**
  * A chainable evaluation result from one native query call. Every terminal
  * view is derived from a single computed mask without another native
- * crossing, except `toRichJson()`, which lazily makes one native rich call on
+ * crossing, except `toOutcomesJson()`, which lazily makes one native call on
  * first use (ADR-0012). Memory: the mask is the minimal primitive (1 byte per
- * candidate); the heavy views (`toGeoJson`/`toRichJson`) are one-shot and
- * never cached, so results stay lean for giant lists.
+ * candidate); the heavy views (`toGeoJson`/`toOutcomesJson`) are computed on
+ * demand rather than eagerly, so results stay lean for giant lists.
  */
 export class QueryResult {
   private _native: RichQuerySource;
@@ -194,7 +194,7 @@ export class QueryResult {
    * candidates (`0` = no match, `1` = matched, `2` = invalid).
    * @returns The raw mask, one byte per candidate.
    */
-  toMask(): Uint8Array {
+  mask(): Uint8Array {
     return this._mask;
   }
 
@@ -204,7 +204,7 @@ export class QueryResult {
    * giant lists).
    * @returns Sorted indices of the matched candidates.
    */
-  toIndices(): Uint32Array {
+  indices(): Uint32Array {
     return this._indicesWhere((value) => value === 1);
   }
 
@@ -219,7 +219,7 @@ export class QueryResult {
 
   /**
    * A count breakdown of the batch: matched / notMatched / invalid. Cheap —
-   * prefer this before materialising a heavy view (`toGeoJson`/`toRichJson`).
+   * prefer this before materialising a heavy view (`toGeoJson`/`toOutcomesJson`).
    * @returns The matched, notMatched, and invalid counts.
    */
   summary(): QuerySummary {
@@ -275,15 +275,15 @@ export class QueryResult {
   }
 
   /**
-   * Per-candidate rich outcomes (original string rule ids, optional overlap
+   * Per-candidate outcomes (original string rule ids, optional overlap
    * metrics) as a JSON string. Lazy: one native call on first use, then
    * cached (ADR-0012). Unlike the mask (captured at query time), this is
    * evaluated against the ruleset current at first call — a `replace()`
-   * between `query()` and `toRichJson()` can make the two disagree; the mask
-   * wins.
-   * @returns A JSON string of per-candidate rich outcomes.
+   * between `query()` and `toOutcomesJson()` can make the two disagree; the
+   * mask wins.
+   * @returns A JSON string of per-candidate outcomes.
    */
-  toRichJson(): string {
+  toOutcomesJson(): string {
     if (this._rich === null) {
       this._rich = callNative(() => this._native.queryRich(this._candidates, this._query));
     }
@@ -314,7 +314,7 @@ export class SpatialRuleset {
    * @param candidates - Candidate features: Buffer, GeoJSON string, or object.
    * @param query - The query to run: JSON string or object.
    * @returns A `QueryResult` whose terminals expose the match mask, indices,
-   *   counts, GeoJSON, or rich outcomes.
+   *   counts, GeoJSON, or per-candidate outcomes.
    */
   query(candidates: GeoJsonInput, query: QueryInput): QueryResult {
     const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
@@ -334,13 +334,13 @@ export class SpatialRuleset {
   }
 
   /**
-   * Per-candidate rich outcomes (original string rule ids, optional overlap
+   * Per-candidate outcomes (original string rule ids, optional overlap
    * metrics) as a JSON string.
    * @param candidates - Candidate features as a Buffer.
    * @param query - The query as a JSON string.
-   * @returns A JSON string of per-candidate rich outcomes.
+   * @returns A JSON string of per-candidate outcomes.
    */
-  queryRich(candidates: Buffer, query: string): string {
+  queryOutcomes(candidates: Buffer, query: string): string {
     return callNative(() => this._native.queryRich(candidates, query));
   }
 
@@ -359,7 +359,7 @@ export class SpatialRuleset {
    * Canonical (validated) ruleset serialization (ADR-0013).
    * @returns The canonical ruleset as a JSON string.
    */
-  toJSON(): string {
+  toCanonical(): string {
     return callNative(() => this._native.toJSON());
   }
 

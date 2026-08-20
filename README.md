@@ -31,8 +31,8 @@ faster** than the equivalent turf.js check (~1.1 s). See
   `$gt/$gte/$lt/$lte`, `$in`/`$nin`, `$exists`, `$not`, `$and`/`$or`/`$nor`,
   served by a compile-time equality index with a per-rule fallback.
 - **Result model** — a compact `Uint8Array` mask (`0` no match, `1` matched,
-  `2` invalid) for the hot path, and a rich per-candidate API with string rule
-  ids.
+  `2` invalid) for the hot path, and a per-candidate outcomes API with string
+  rule ids.
 - **Errors** — a stable `SR_*` code model (see below), surfaced in Node as
   `SpatialRulesError`.
 
@@ -87,13 +87,13 @@ const result = ruleset.query(candidates, {
 
 // `query()` returns a chainable QueryResult: one evaluation, many output
 // views (ADR-0014). See "Outputs" for each terminal's exact type and meaning.
-result.toMask();          // Uint8Array
-result.toIndices();       // Uint32Array
-result.invalidIndices();  // Uint32Array
-result.count();           // number
-result.summary();         // { matched, notMatched, invalid }
-result.toGeoJson();       // string (FeatureCollection)
-result.toRichJson();      // string (per-candidate outcomes, lazy)
+result.mask();           // Uint8Array
+result.indices();        // Uint32Array
+result.invalidIndices(); // Uint32Array
+result.count();          // number
+result.summary();        // { matched, notMatched, invalid }
+result.toGeoJson();      // string (FeatureCollection)
+result.toOutcomesJson(); // string (per-candidate outcomes, lazy)
 
 // Atomic ruleset replacement + observability (ADR-0007): pass another
 // FeatureCollection of the same shape to swap the active ruleset.
@@ -109,9 +109,9 @@ console.log(ruleset.stats()); // same report shape for the current ruleset
 | `ruleset.replace(rules)` | rules | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
 | `ruleset.query(candidates, query)` | candidates | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
 | `ruleset.query(candidates, query)` | query | `string` · `object` | `string` |
-| `ruleset.queryRich(candidates, query)` | candidates / query | `Buffer` / `string` (raw — no normalization) | — |
+| `ruleset.queryOutcomes(candidates, query)` | candidates / query | `Buffer` / `string` (raw — no normalization) | — |
 | `ruleset.queryAsync(candidates, query)` | candidates / query | `Buffer` / `string` (raw — no normalization) | — |
-| `ruleset.fromCanonical(rules)` | rules | `Buffer` (canonical JSON from `toJSON()`) | — |
+| `ruleset.fromCanonical(rules)` | rules | `Buffer` (canonical JSON from `toCanonical()`) | — |
 
 Any other type throws a `TypeError` from the wrapper. A `Buffer` passes
 through untouched (byte-faithful); a `string`/`object` is serialized by the
@@ -133,7 +133,7 @@ The query is a JSON object (or its string form):
   "spatial": { "predicate": "intersects" }, // required
   "where": { "active": true },                // optional property filter
   "excludeRuleIds": ["zone-b"],               // optional rule ids to ignore
-  "includeOverlap": true                       // optional, rich path only
+  "includeOverlap": true                       // optional, outcomes path only
 }
 ```
 
@@ -141,7 +141,7 @@ The query is a JSON object (or its string form):
   `covered_by`, `touches`, `overlaps` (DE-9IM; ADR-0008, ADR-0012). Required.
 - `where` — a Mongo-style filter over rule `properties` (see below). Optional.
 - `excludeRuleIds` — rule ids excluded from the evaluation. Optional.
-- `includeOverlap` — when `true`, matched candidates in the rich path also
+- `includeOverlap` — when `true`, matched candidates in the outcomes path also
   carry per-rule geodesic `overlapArea` (m²) / `overlapRatio` ([0, 1]). The
   mask ignores this flag. Optional.
 
@@ -166,15 +166,15 @@ input candidate order.
 
 | Method | Returns | Meaning |
 |---|---|---|
-| `toMask()` | `Uint8Array` | one byte per candidate: `0` no match, `1` matched, `2` invalid |
-| `toIndices()` | `Uint32Array` | positions where the mask is `1` (matched) |
+| `mask()` | `Uint8Array` | one byte per candidate: `0` no match, `1` matched, `2` invalid |
+| `indices()` | `Uint32Array` | positions where the mask is `1` (matched) |
 | `invalidIndices()` | `Uint32Array` | positions where the mask is `2` (invalid) |
 | `count()` | `number` | number of matched candidates |
 | `summary()` | `{ matched, notMatched, invalid }` | count breakdown |
 | `toGeoJson()` | `string` | matched candidates as a FeatureCollection; original properties preserved (unmatched and invalid are dropped) |
-| `toRichJson()` | `string` | per-candidate outcomes as a JSON array (lazy — one native call on first use) |
+| `toOutcomesJson()` | `string` | per-candidate outcomes as a JSON array (lazy — one native call on first use) |
 
-`toRichJson()` element shapes:
+`toOutcomesJson()` element shapes:
 
 ```jsonc
 { "outcome": "matched", "ruleIds": ["zone-a"],
@@ -189,11 +189,11 @@ Other methods:
 
 | Method | Returns | Meaning |
 |---|---|---|
-| `queryRich(candidates, query)` | `string` | the same rich JSON directly (Buffer/string inputs) |
+| `queryOutcomes(candidates, query)` | `string` | the same outcomes JSON directly (Buffer/string inputs) |
 | `queryAsync(candidates, query)` | `Promise<Uint8Array>` | the mask, computed off the main thread |
 | `replace(rules)` | `string` | JSON report `{ version, ruleCount, buildDurationMs, lastSwapTime }` |
 | `stats()` | `string` | the same report for the current ruleset |
-| `toJSON()` | `string` | the ruleset in canonical JSON form (array of rules) |
+| `toCanonical()` | `string` | the ruleset in canonical JSON form (array of rules) |
 | `fromCanonical(rules)` | `string` | replace from canonical JSON; returns a report (a failed load keeps the old ruleset) |
 
 ### Error codes
