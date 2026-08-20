@@ -104,7 +104,7 @@ const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicat
 assert.deepEqual(Array.from(excluding), [0, 0, 2]);
 
 // Per-candidate outcomes with original string rule ids.
-const rich = JSON.parse(ruleset.queryOutcomes(candidates, intersects));
+const rich = JSON.parse(ruleset.query(candidates, intersects).toOutcomesJson());
 assert.equal(rich.length, 3);
 assert.equal(rich[0].outcome, 'matched');
 // The first candidate intersects both zone-a and zone-c (multi-match).
@@ -114,9 +114,9 @@ assert.equal(rich[2].outcome, 'invalid');
 // No overlap payload unless requested.
 assert.ok(!('overlaps' in rich[0]));
 
-// queryOutcomes honors includeOverlap (ADR-0012): matched outcomes carry per-rule
+// toOutcomesJson honors includeOverlap (ADR-0012): matched outcomes carry per-rule
 // geodesic overlapArea/overlapRatio.
-const richOverlap = JSON.parse(ruleset.queryOutcomes(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, includeOverlap: true })));
+const richOverlap = JSON.parse(ruleset.query(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, includeOverlap: true })).toOutcomesJson());
 assert.equal(richOverlap[0].outcome, 'matched');
 assert.deepEqual(richOverlap[0].ruleIds, ['zone-a', 'zone-c']);
 assert.equal(richOverlap[0].overlaps.length, 2);
@@ -213,9 +213,13 @@ assert.throws(
 );
 assert.equal(JSON.parse(ruleset.stats()).version, 3);
 
-// Opt-in async query (ADR-0009 amendment): same mask as the sync path.
-const asyncMask = await ruleset.queryAsync(candidates, intersects);
-assert.deepEqual(Array.from(asyncMask), Array.from(ruleset.query(candidates, intersects).mask()));
+// Opt-in async query (ADR-0009 amendment): same mask as the sync path,
+// returned as a QueryResult so the chainable terminals work on it.
+const asyncResult = await ruleset.queryAsync(candidates, intersects);
+assert.deepEqual(
+  Array.from(asyncResult.mask()),
+  Array.from(ruleset.query(candidates, intersects).mask()),
+);
 
 // Same SR_* error model, surfaced as a Promise rejection.
 await assert.rejects(
@@ -245,7 +249,7 @@ const replacement2 = Buffer.from(
 const preMask = Array.from(ruleset.query(candidates, intersects).mask()); // [0,0,2]
 const inFlight = ruleset.queryAsync(candidates, intersects);
 ruleset.replace(replacement2); // "inside" now matches -> [1,0,2]
-const settled = Array.from(await inFlight);
+const settled = Array.from((await inFlight).mask());
 const postMask = Array.from(ruleset.query(candidates, intersects).mask());
 const matchesPre = settled.every((v, i) => v === preMask[i]);
 const matchesPost = settled.every((v, i) => v === postMask[i]);

@@ -324,24 +324,23 @@ export class SpatialRuleset {
   }
 
   /**
-   * Same mask as `query`, computed off the main thread.
-   * @param candidates - Candidate features as a Buffer.
-   * @param query - The query as a JSON string.
-   * @returns A promise of the mask (`0` no match, `1` matched, `2` invalid).
+   * Same evaluation as `query`, computed off the main thread (libuv
+   * threadpool). Returns the same chainable `QueryResult` as `query`, so
+   * every terminal view works on the result. Note: `toOutcomesJson()` on an
+   * async result makes a *synchronous* native rich call on first use (there
+   * is no async rich path); the cheap views (`mask`, `indices`, `summary`,
+   * `count`, `toGeoJson`) are pure JS derivations and stay off-thread.
+   * @param candidates - Candidate features: Buffer, GeoJSON string, or object.
+   * @param query - The query to run: JSON string or object.
+   * @returns A promise of a `QueryResult` (mask + terminals).
    */
-  async queryAsync(candidates: Buffer, query: string): Promise<Uint8Array> {
-    return callNativeAsync(() => this._native.queryAsync(candidates, query));
-  }
-
-  /**
-   * Per-candidate outcomes (original string rule ids, optional overlap
-   * metrics) as a JSON string.
-   * @param candidates - Candidate features as a Buffer.
-   * @param query - The query as a JSON string.
-   * @returns A JSON string of per-candidate outcomes.
-   */
-  queryOutcomes(candidates: Buffer, query: string): string {
-    return callNative(() => this._native.queryRich(candidates, query));
+  async queryAsync(candidates: GeoJsonInput, query: QueryInput): Promise<QueryResult> {
+    const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
+    const normalizedQuery = toQueryString(query);
+    const mask = await callNativeAsync(() =>
+      this._native.queryAsync(normalizedCandidates, normalizedQuery),
+    );
+    return new QueryResult(this._native, normalizedCandidates, normalizedQuery, mask);
   }
 
   /**

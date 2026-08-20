@@ -68,7 +68,7 @@ const excluding = ruleset.query(candidates, JSON.stringify({ spatial: { predicat
 assert.deepEqual(Array.from(excluding), [0, 0, 2]);
 
 // Per-candidate outcomes with original string rule ids.
-const rich = JSON.parse(ruleset.queryOutcomes(candidates, intersects));
+const rich = JSON.parse(ruleset.query(candidates, intersects).toOutcomesJson());
 assert.deepEqual(rich[0].ruleIds, ['zone-a']);
 assert.equal(rich[1].outcome, 'notMatched');
 assert.equal(rich[2].outcome, 'invalid');

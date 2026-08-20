@@ -109,8 +109,8 @@ console.log(ruleset.stats()); // same report shape for the current ruleset
 | `ruleset.replace(rules)` | rules | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
 | `ruleset.query(candidates, query)` | candidates | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
 | `ruleset.query(candidates, query)` | query | `string` · `object` | `string` |
-| `ruleset.queryOutcomes(candidates, query)` | candidates / query | `Buffer` / `string` (raw — no normalization) | — |
-| `ruleset.queryAsync(candidates, query)` | candidates / query | `Buffer` / `string` (raw — no normalization) | — |
+| `ruleset.queryAsync(candidates, query)` | candidates | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
+| `ruleset.queryAsync(candidates, query)` | query | `string` · `object` | `string` |
 | `ruleset.fromCanonical(rules)` | rules | `Buffer` (canonical JSON from `toCanonical()`) | — |
 
 Any other type throws a `TypeError` from the wrapper. A `Buffer` passes
@@ -189,8 +189,7 @@ Other methods:
 
 | Method | Returns | Meaning |
 |---|---|---|
-| `queryOutcomes(candidates, query)` | `string` | the same outcomes JSON directly (Buffer/string inputs) |
-| `queryAsync(candidates, query)` | `Promise<Uint8Array>` | the mask, computed off the main thread |
+| `queryAsync(candidates, query)` | `Promise<QueryResult>` | the same chainable result as `query()`, computed off the main thread |
 | `replace(rules)` | `string` | JSON report `{ version, ruleCount, buildDurationMs, lastSwapTime }` |
 | `stats()` | `string` | the same report for the current ruleset |
 | `toCanonical()` | `string` | the ruleset in canonical JSON form (array of rules) |
