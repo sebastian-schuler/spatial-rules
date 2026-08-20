@@ -94,7 +94,8 @@ jobs:
                 cargo zigbuild --release --target aarch64-unknown-linux-musl \
                 -p spatial-rules-node
               mkdir -p npm/linux-arm64-musl
-              cp target/aarch64-unknown-linux-musl/release/libspatial_rules_node.so \
+              # Cargo writes to the workspace-root target dir, not node/target.
+              cp ../target/aarch64-unknown-linux-musl/release/libspatial_rules_node.so \
                 npm/linux-arm64-musl/spatial-rules.linux-arm64-musl.node
               ;;
             x86_64-unknown-linux-musl)
