@@ -6,7 +6,7 @@
 // and copy it to `node/spatial_rules.node` (see the ticket Answer).
 
 import assert from 'node:assert/strict';
-import { SpatialRulesError, SpatialRuleset } from '../index.js';
+import { SpatialRulesError, SpatialRuleset } from '../index.ts';
 
 const rules = Buffer.from(
   JSON.stringify({

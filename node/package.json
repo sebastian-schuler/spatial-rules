@@ -3,7 +3,8 @@
     "version": "0.1.0",
     "description": "High-performance spatial rules/query engine (Rust core, Node/Bun binding)",
     "license": "MIT OR Apache-2.0",
-    "main": "index.js",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
     "type": "module",
     "napi": {
         "name": "spatial-rules",
@@ -20,14 +21,15 @@
         }
     },
     "files": [
-        "index.js",
+        "dist/",
         "npm/"
     ],
     "scripts": {
         "build": "napi build --platform --release",
         "build:debug": "napi build --platform",
         "artifacts": "napi artifacts",
-        "prepublishOnly": "napi prepublish -t npm",
+        "build:ts": "tsc -p tsconfig.build.json",
+        "prepublishOnly": "tsc -p tsconfig.build.json && napi prepublish -t npm",
         "typecheck": "tsc --noEmit",
         "test": "node test/smoke.mjs"
     },

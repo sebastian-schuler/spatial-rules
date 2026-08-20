@@ -23,7 +23,7 @@
 //     memory were leaked per replacement, last ≫ first; if bounded, they agree.
 
 import { readFileSync } from 'node:fs';
-import { SpatialRuleset } from '../node/index.js';
+import { SpatialRuleset } from '../node/index.ts';
 import { readConfig, parseFlags, resolveRepoPath, SPATIAL_QUERY } from '../shared/config.mjs';
 
 const config = readConfig();

@@ -1,0 +1,14 @@
+// Publish emit (Q18=a): compile `index.ts` to `dist/` (JS + declaration
+// types) with the dev-only settings (`noEmit`, `allowImportingTsExtensions`)
+// off. Separate from `tsconfig.json` because `.ts`-extension imports (tests)
+// cannot coexist with emit.
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "allowImportingTsExtensions": false,
+        "declaration": true,
+        "outDir": "dist"
+    },
+    "include": ["index.ts", "native.d.ts"]
+}

@@ -13,7 +13,7 @@ RUN cargo build --release -p spatial-rules-node
 FROM oven/bun:1.3.14
 WORKDIR /app
 COPY --from=build /app/target/release/libspatial_rules_node.so /app/node/spatial_rules.node
-COPY node/index.js /app/node/index.js
+COPY node/index.ts /app/node/index.ts
 COPY node/package.json /app/node/package.json
 COPY integration/server.mjs /app/integration/server.mjs
 COPY integration/memory.mjs /app/integration/memory.mjs

@@ -1,4 +1,4 @@
-// Thin JS wrapper over the native addon (ADR-0005, ADR-0006).
+// Thin TS wrapper over the native addon (ADR-0005, ADR-0006).
 //
 // Defines `SpatialRulesError extends Error` with a `.code` property, and
 // re-throws native errors (which carry `SR_*` codes) as that class.
@@ -6,17 +6,47 @@
 // The native binary resolves from the per-platform optionalDependency package
 // (`spatial-rules-<triple>`) when installed from npm, and falls back to a
 // locally built `spatial_rules.node` during development.
+//
+// Erasable-only TS (spec constraint): these sources run under both Node
+// (type stripping) and Bun (native TS), and are compiled to `dist/` for
+// publish.
 
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SpatialRuleset as NativeRuleset } from './native.js';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
+/** GeoJSON input accepted for rules and candidates: Buffer | string | object. */
+export type GeoJsonInput = Buffer | string | Record<string, unknown>;
+
+/** Query input: JSON string or object. */
+export type QueryInput = string | Record<string, unknown>;
+
+/** Count breakdown of a batch evaluation. */
+export interface QuerySummary {
+  matched: number;
+  notMatched: number;
+  invalid: number;
+}
+
+/**
+ * Structural slice of the native ruleset that `QueryResult` needs. Local (not
+ * from `native.d.ts`) so the emitted `dist/index.d.ts` never references the
+ * addon's module path.
+ */
+interface RichQuerySource {
+  queryRich(candidates: Buffer, query: string): string;
+}
+
+/** The addon module shape as loaded by the require() calls below. */
+type NativeModule = { SpatialRuleset: typeof NativeRuleset };
+
 // Map this process to a published per-platform package (ADR-0006: win32 +
 // linux x64/arm64, gnu/musl).
-function platformPackage() {
+function platformPackage(): string | null {
   const { platform, arch } = process;
   if (platform === 'win32') {
     return arch === 'arm64' ? 'spatial-rules-win32-arm64-msvc' : 'spatial-rules-win32-x64-msvc';
@@ -25,7 +55,9 @@ function platformPackage() {
     const cpu = arch === 'arm64' ? 'arm64' : 'x64';
     let isMusl = false;
     try {
-      const report = process.report?.getReport?.();
+      const report = process.report?.getReport?.() as
+        | { header?: { glibcVersionRuntime?: string } }
+        | undefined;
       isMusl = !report?.header?.glibcVersionRuntime;
     } catch {
       isMusl = false;
@@ -35,35 +67,40 @@ function platformPackage() {
   return null;
 }
 
-let native = null;
-const pkg = platformPackage();
-if (pkg) {
-  try {
-    native = require(pkg);
-  } catch {
-    native = null;
+function loadNative(): NativeModule {
+  const pkg = platformPackage();
+  if (pkg) {
+    try {
+      return require(pkg) as NativeModule;
+    } catch {
+      // Platform package present in `optionalDependencies` but not installed
+      // (or failed to load) — fall back to a local build below.
+    }
   }
-}
-if (!native) {
-  native = require(join(here, 'spatial_rules.node'));
+  return require(join(here, 'spatial_rules.node')) as NativeModule;
 }
 
+const native = loadNative();
+
 export class SpatialRulesError extends Error {
-  constructor(message, code) {
+  code: string;
+
+  constructor(message: string, code: string) {
     super(message);
     this.name = 'SpatialRulesError';
     this.code = code;
   }
 }
 
-function rethrow(err) {
-  if (err && typeof err.code === 'string' && err.code.startsWith('SR_')) {
-    throw new SpatialRulesError(err.message, err.code);
+function rethrow(err: unknown): never {
+  const maybe = err as { code?: unknown; message?: unknown } | null | undefined;
+  if (maybe && typeof maybe.code === 'string' && maybe.code.startsWith('SR_')) {
+    throw new SpatialRulesError(maybe.message as string, maybe.code);
   }
   // Async rejections cannot carry a custom `SR_*` in `.code` (napi forces a
   // Status enum code), so the addon embeds the code in the message instead.
-  if (err && typeof err.message === 'string') {
-    const match = /^(SR_[A-Z0-9_]+): ([\s\S]*)$/.exec(err.message);
+  if (maybe && typeof maybe.message === 'string') {
+    const match = /^(SR_[A-Z0-9_]+): ([\s\S]*)$/.exec(maybe.message);
     if (match) {
       throw new SpatialRulesError(match[2], match[1]);
     }
@@ -76,7 +113,7 @@ function rethrow(err) {
 // GeoJSON object for candidates and rules, and string | object for the query.
 // A Buffer fast-path passes through untouched (byte-faithful); anything else
 // throws a clear TypeError before the native crossing.
-function toGeoJsonBuffer(value, what) {
+function toGeoJsonBuffer(value: GeoJsonInput, what: string): Buffer {
   if (Buffer.isBuffer(value)) return value;
   if (typeof value === 'string') return Buffer.from(value);
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -85,7 +122,7 @@ function toGeoJsonBuffer(value, what) {
   throw new TypeError(`${what} must be a Buffer, a GeoJSON string, or a GeoJSON object`);
 }
 
-function toQueryString(value) {
+function toQueryString(value: QueryInput): string {
   if (typeof value === 'string') return value;
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     return JSON.stringify(value);
@@ -100,7 +137,13 @@ function toQueryString(value) {
 // candidate); the heavy views (`toGeoJson`/`toRichJson`) are one-shot and
 // never cached, so results stay lean for giant lists.
 export class QueryResult {
-  constructor(native, candidates, query, mask) {
+  private _native: RichQuerySource;
+  private _candidates: Buffer;
+  private _query: string;
+  private _mask: Uint8Array;
+  private _rich: string | null;
+
+  constructor(native: RichQuerySource, candidates: Buffer, query: string, mask: Uint8Array) {
     this._native = native;
     this._candidates = candidates;
     this._query = query;
@@ -110,26 +153,26 @@ export class QueryResult {
 
   // The primitive: a Uint8Array mask aligned to the input candidates
   // (0 = no match, 1 = matched, 2 = invalid).
-  toMask() {
+  toMask(): Uint8Array {
     return this._mask;
   }
 
   // Indices of matched candidates (mask === 1), ascending, aligned to input.
   // Exactly sized — no oversized transient buffer (memory-lean for giant
   // lists).
-  toIndices() {
+  toIndices(): Uint32Array {
     return this._indicesWhere((value) => value === 1);
   }
 
   // Indices of invalid candidates (mask === 2), ascending — the positions a
   // caller should skip rather than treat as filtered out.
-  invalidIndices() {
+  invalidIndices(): Uint32Array {
     return this._indicesWhere((value) => value === 2);
   }
 
   // A count breakdown of the batch: matched / notMatched / invalid. Cheap —
   // prefer this before materialising a heavy view (toGeoJson/toRichJson).
-  summary() {
+  summary(): QuerySummary {
     let matched = 0;
     let notMatched = 0;
     let invalid = 0;
@@ -142,7 +185,7 @@ export class QueryResult {
   }
 
   // Exact-size index array for the positions whose mask value passes `test`.
-  _indicesWhere(test) {
+  private _indicesWhere(test: (value: number) => boolean): Uint32Array {
     let n = 0;
     for (let i = 0; i < this._mask.length; i += 1) if (test(this._mask[i])) n += 1;
     const indices = new Uint32Array(n);
@@ -152,7 +195,7 @@ export class QueryResult {
   }
 
   // Number of matched candidates.
-  count() {
+  count(): number {
     let n = 0;
     for (let i = 0; i < this._mask.length; i += 1) if (this._mask[i] === 1) n += 1;
     return n;
@@ -162,7 +205,7 @@ export class QueryResult {
   // order, with every original property preserved (kept from the original
   // payload — no lossy round-trip through the engine's parsed candidates).
   // Unmatched and invalid candidates are dropped.
-  toGeoJson() {
+  toGeoJson(): string {
     const raw = Buffer.isBuffer(this._candidates)
       ? this._candidates.toString('utf8')
       : String(this._candidates);
@@ -180,7 +223,7 @@ export class QueryResult {
   // cached (ADR-0012). Unlike the mask (captured at query time), this is
   // evaluated against the ruleset current at first call — a replace() between
   // `query()` and `toRichJson()` can make the two disagree; the mask wins.
-  toRichJson() {
+  toRichJson(): string {
     if (this._rich === null) {
       try {
         this._rich = this._native.queryRich(this._candidates, this._query);
@@ -193,7 +236,9 @@ export class QueryResult {
 }
 
 export class SpatialRuleset {
-  constructor(rules) {
+  private _native: NativeRuleset;
+
+  constructor(rules: GeoJsonInput) {
     const normalized = toGeoJsonBuffer(rules, 'rules');
     try {
       this._native = new native.SpatialRuleset(normalized);
@@ -202,7 +247,7 @@ export class SpatialRuleset {
     }
   }
 
-  query(candidates, query) {
+  query(candidates: GeoJsonInput, query: QueryInput): QueryResult {
     const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
     const normalizedQuery = toQueryString(query);
     try {
@@ -213,7 +258,7 @@ export class SpatialRuleset {
     }
   }
 
-  async queryAsync(candidates, query) {
+  async queryAsync(candidates: Buffer, query: string): Promise<Uint8Array> {
     try {
       return await this._native.queryAsync(candidates, query);
     } catch (err) {
@@ -221,7 +266,7 @@ export class SpatialRuleset {
     }
   }
 
-  queryRich(candidates, query) {
+  queryRich(candidates: Buffer, query: string): string {
     try {
       return this._native.queryRich(candidates, query);
     } catch (err) {
@@ -229,7 +274,7 @@ export class SpatialRuleset {
     }
   }
 
-  replace(rules) {
+  replace(rules: GeoJsonInput): string {
     const normalized = toGeoJsonBuffer(rules, 'rules');
     try {
       return this._native.replace(normalized);
@@ -238,7 +283,7 @@ export class SpatialRuleset {
     }
   }
 
-  toJSON() {
+  toJSON(): string {
     try {
       return this._native.toJSON();
     } catch (err) {
@@ -246,7 +291,7 @@ export class SpatialRuleset {
     }
   }
 
-  fromCanonical(rules) {
+  fromCanonical(rules: Buffer): string {
     try {
       return this._native.fromCanonical(rules);
     } catch (err) {
@@ -254,7 +299,7 @@ export class SpatialRuleset {
     }
   }
 
-  stats() {
+  stats(): string {
     try {
       return this._native.stats();
     } catch (err) {
