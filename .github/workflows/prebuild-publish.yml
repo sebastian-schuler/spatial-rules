@@ -27,12 +27,16 @@ jobs:
         run: npm install
       - name: Build all platform addons
         working-directory: node
-        # napi build --platform cross-compiles every configured triple via zig
-        # (x86_64/aarch64, linux gnu/musl, windows msvc) and stages each .node
-        # into node/npm/<platform>/. This replaces the hand-rolled cargo/cross
-        # matrix, which failed to build cdylibs for the musl targets and lacked
-        # an aarch64 cross-linker on the x86_64 host.
-        run: npm run build
+        # napi build --target cross-compiles each triple explicitly via zig and
+        # stages the .node into node/npm/<platform>/. (--platform alone builds
+        # only the host triple, leaving the other platform packages empty.)
+        run: |
+          npx napi build --target x86_64-unknown-linux-gnu --release
+          npx napi build --target x86_64-unknown-linux-musl --release
+          npx napi build --target aarch64-unknown-linux-gnu --release
+          npx napi build --target aarch64-unknown-linux-musl --release
+          npx napi build --target x86_64-pc-windows-msvc --release
+          npx napi build --target aarch64-pc-windows-msvc --release
       - uses: actions/upload-artifact@v4
         with:
           name: platforms
