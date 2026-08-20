@@ -17,3 +17,6 @@ docs/internal/
 # source code). Fetch with: bun run bench data
 benchmarks/data/countries.geojson
 benchmarks/data/deu.geojson
+
+# Environment variables (local development only)
+.env
