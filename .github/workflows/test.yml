@@ -93,6 +93,7 @@ jobs:
       - name: Pack root + platform tarballs
         run: |
           set -euxo pipefail
+          mkdir -p /tmp/root /tmp/platform
           (cd node && npm pack --pack-destination /tmp/root)
           (cd node/npm/linux-x64-gnu && npm pack --pack-destination /tmp/platform)
       - name: Install and run clean-install smoke
