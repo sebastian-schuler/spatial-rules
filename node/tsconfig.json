@@ -1,0 +1,16 @@
+{
+    "compilerOptions": {
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "target": "es2022",
+        "strict": true,
+        "erasableSyntaxOnly": true,
+        "noEmit": true,
+        "allowImportingTsExtensions": true,
+        "types": ["node"],
+        "paths": {
+            "spatial-rules": ["./index.ts"]
+        }
+    },
+    "include": ["index.ts", "native.d.ts", "test/*.ts"]
+}

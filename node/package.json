@@ -28,10 +28,13 @@
         "build:debug": "napi build --platform",
         "artifacts": "napi artifacts",
         "prepublishOnly": "napi prepublish -t npm",
+        "typecheck": "tsc --noEmit",
         "test": "node test/smoke.mjs"
     },
     "devDependencies": {
-        "@napi-rs/cli": "^2.18.4"
+        "@napi-rs/cli": "^2.18.4",
+        "@types/node": "^24.0.0",
+        "typescript": "^5.9.0"
     },
     "optionalDependencies": {
         "spatial-rules-win32-x64-msvc": "0.1.0",
