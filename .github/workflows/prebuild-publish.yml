@@ -118,10 +118,16 @@ jobs:
             cp "$dir"/*.node "node/npm/$platform/"
           done
       - name: Publish platform packages
-        working-directory: node/npm
+        working-directory: node
         run: |
-          for dir in */; do
-            (cd "$dir" && npm publish --access public)
+          VERSION="$(node -p "require('./package.json').version")"
+          for dir in npm/*/; do
+            name="$(basename "$dir")"
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "skip $name@$VERSION (already published)"
+            else
+              (cd "$dir" && npm publish --access public)
+            fi
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
