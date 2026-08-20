@@ -84,9 +84,19 @@ function loadNative(): NativeModule {
 
 const native = loadNative();
 
+/**
+ * Error thrown by the wrapper for any native failure carrying an `SR_*`
+ * code. Extends the built-in `Error` and adds a `code` property so callers
+ * can branch on the specific failure without parsing messages.
+ */
 export class SpatialRulesError extends Error {
+  /** Machine-readable `SR_*` error code identifying the failure. */
   code: string;
 
+  /**
+   * @param message - Human-readable description of the failure.
+   * @param code - Machine-readable `SR_*` error code.
+   */
   constructor(message: string, code: string) {
     super(message);
     this.name = 'SpatialRulesError';
@@ -152,12 +162,14 @@ function toQueryString(value: QueryInput): string {
   throw new TypeError('query must be a JSON string or an object');
 }
 
-// A chainable evaluation result (filtering-scale ticket 03): one native query
-// call computes the mask; every terminal derives from it without another
-// crossing, except `toRichJson()`, which lazily makes one native rich call on
-// first use (ADR-0012). Memory: the mask is the minimal primitive (1 byte per
-// candidate); the heavy views (`toGeoJson`/`toRichJson`) are one-shot and
-// never cached, so results stay lean for giant lists.
+/**
+ * A chainable evaluation result from one native query call. Every terminal
+ * view is derived from a single computed mask without another native
+ * crossing, except `toRichJson()`, which lazily makes one native rich call on
+ * first use (ADR-0012). Memory: the mask is the minimal primitive (1 byte per
+ * candidate); the heavy views (`toGeoJson`/`toRichJson`) are one-shot and
+ * never cached, so results stay lean for giant lists.
+ */
 export class QueryResult {
   private _native: RichQuerySource;
   private _candidates: Buffer;
@@ -165,6 +177,10 @@ export class QueryResult {
   private _mask: Uint8Array;
   private _rich: string | null;
 
+  /**
+   * Construct a result from a native query call. You generally won't call
+   * this directly — obtain one via `SpatialRuleset.query()`.
+   */
   constructor(native: RichQuerySource, candidates: Buffer, query: string, mask: Uint8Array) {
     this._native = native;
     this._candidates = candidates;
@@ -173,27 +189,39 @@ export class QueryResult {
     this._rich = null;
   }
 
-  // The primitive: a Uint8Array mask aligned to the input candidates
-  // (0 = no match, 1 = matched, 2 = invalid).
+  /**
+   * The primitive result: a `Uint8Array` mask aligned to the input
+   * candidates (`0` = no match, `1` = matched, `2` = invalid).
+   * @returns The raw mask, one byte per candidate.
+   */
   toMask(): Uint8Array {
     return this._mask;
   }
 
-  // Indices of matched candidates (mask === 1), ascending, aligned to input.
-  // Exactly sized — no oversized transient buffer (memory-lean for giant
-  // lists).
+  /**
+   * Indices of matched candidates (mask `=== 1`), ascending, aligned to
+   * input. Exactly sized — no oversized transient buffer (memory-lean for
+   * giant lists).
+   * @returns Sorted indices of the matched candidates.
+   */
   toIndices(): Uint32Array {
     return this._indicesWhere((value) => value === 1);
   }
 
-  // Indices of invalid candidates (mask === 2), ascending — the positions a
-  // caller should skip rather than treat as filtered out.
+  /**
+   * Indices of invalid candidates (mask `=== 2`), ascending — the positions
+   * a caller should skip rather than treat as filtered out.
+   * @returns Sorted indices of the invalid candidates.
+   */
   invalidIndices(): Uint32Array {
     return this._indicesWhere((value) => value === 2);
   }
 
-  // A count breakdown of the batch: matched / notMatched / invalid. Cheap —
-  // prefer this before materialising a heavy view (toGeoJson/toRichJson).
+  /**
+   * A count breakdown of the batch: matched / notMatched / invalid. Cheap —
+   * prefer this before materialising a heavy view (`toGeoJson`/`toRichJson`).
+   * @returns The matched, notMatched, and invalid counts.
+   */
   summary(): QuerySummary {
     let matched = 0;
     let notMatched = 0;
@@ -216,17 +244,23 @@ export class QueryResult {
     return indices;
   }
 
-  // Number of matched candidates.
+  /**
+   * Number of matched candidates.
+   * @returns The count of candidates whose mask value is `1`.
+   */
   count(): number {
     let n = 0;
     for (let i = 0; i < this._mask.length; i += 1) if (this._mask[i] === 1) n += 1;
     return n;
   }
 
-  // The matched candidates as a GeoJSON FeatureCollection string, in input
-  // order, with every original property preserved (kept from the original
-  // payload — no lossy round-trip through the engine's parsed candidates).
-  // Unmatched and invalid candidates are dropped.
+  /**
+   * The matched candidates as a GeoJSON FeatureCollection string, in input
+   * order, with every original property preserved (kept from the original
+   * payload — no lossy round-trip through the engine's parsed candidates).
+   * Unmatched and invalid candidates are dropped.
+   * @returns A GeoJSON `FeatureCollection` string of the matched features.
+   */
   toGeoJson(): string {
     const raw = Buffer.isBuffer(this._candidates)
       ? this._candidates.toString('utf8')
@@ -240,11 +274,15 @@ export class QueryResult {
     return JSON.stringify({ type: 'FeatureCollection', features: kept });
   }
 
-  // Per-candidate rich outcomes (original string rule ids, optional overlap
-  // metrics) as a JSON string. Lazy: one native call on first use, then
-  // cached (ADR-0012). Unlike the mask (captured at query time), this is
-  // evaluated against the ruleset current at first call — a replace() between
-  // `query()` and `toRichJson()` can make the two disagree; the mask wins.
+  /**
+   * Per-candidate rich outcomes (original string rule ids, optional overlap
+   * metrics) as a JSON string. Lazy: one native call on first use, then
+   * cached (ADR-0012). Unlike the mask (captured at query time), this is
+   * evaluated against the ruleset current at first call — a `replace()`
+   * between `query()` and `toRichJson()` can make the two disagree; the mask
+   * wins.
+   * @returns A JSON string of per-candidate rich outcomes.
+   */
   toRichJson(): string {
     if (this._rich === null) {
       this._rich = callNative(() => this._native.queryRich(this._candidates, this._query));
@@ -253,14 +291,31 @@ export class QueryResult {
   }
 }
 
+/**
+ * A compiled spatial ruleset. Build one from GeoJSON rules, then query
+ * candidate features against it. All JSON-returning methods return strings
+ * (serialized in Rust). Every method re-throws native failures as
+ * `SpatialRulesError` with an `SR_*` code.
+ */
 export class SpatialRuleset {
   private _native: NativeRuleset;
 
+  /**
+   * @param rules - The rules to compile, as a Buffer, GeoJSON string, or
+   *   GeoJSON object (e.g. a FeatureCollection of rule features).
+   */
   constructor(rules: GeoJsonInput) {
     const normalized = toGeoJsonBuffer(rules, 'rules');
     this._native = callNative(() => new native.SpatialRuleset(normalized));
   }
 
+  /**
+   * Evaluate `query` against `candidates` and return a chainable `QueryResult`.
+   * @param candidates - Candidate features: Buffer, GeoJSON string, or object.
+   * @param query - The query to run: JSON string or object.
+   * @returns A `QueryResult` whose terminals expose the match mask, indices,
+   *   counts, GeoJSON, or rich outcomes.
+   */
   query(candidates: GeoJsonInput, query: QueryInput): QueryResult {
     const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
     const normalizedQuery = toQueryString(query);
@@ -268,27 +323,60 @@ export class SpatialRuleset {
     return new QueryResult(this._native, normalizedCandidates, normalizedQuery, mask);
   }
 
+  /**
+   * Same mask as `query`, computed off the main thread.
+   * @param candidates - Candidate features as a Buffer.
+   * @param query - The query as a JSON string.
+   * @returns A promise of the mask (`0` no match, `1` matched, `2` invalid).
+   */
   async queryAsync(candidates: Buffer, query: string): Promise<Uint8Array> {
     return callNativeAsync(() => this._native.queryAsync(candidates, query));
   }
 
+  /**
+   * Per-candidate rich outcomes (original string rule ids, optional overlap
+   * metrics) as a JSON string.
+   * @param candidates - Candidate features as a Buffer.
+   * @param query - The query as a JSON string.
+   * @returns A JSON string of per-candidate rich outcomes.
+   */
   queryRich(candidates: Buffer, query: string): string {
     return callNative(() => this._native.queryRich(candidates, query));
   }
 
+  /**
+   * Atomically swap the ruleset. Returns the ADR-0007 observability report
+   * as JSON.
+   * @param rules - The replacement rules: Buffer, GeoJSON string, or object.
+   * @returns The observability report as a JSON string.
+   */
   replace(rules: GeoJsonInput): string {
     const normalized = toGeoJsonBuffer(rules, 'rules');
     return callNative(() => this._native.replace(normalized));
   }
 
+  /**
+   * Canonical (validated) ruleset serialization (ADR-0013).
+   * @returns The canonical ruleset as a JSON string.
+   */
   toJSON(): string {
     return callNative(() => this._native.toJSON());
   }
 
+  /**
+   * Atomic replace from canonical JSON; returns the observability report as
+   * JSON.
+   * @param rules - Canonical ruleset serialization as a Buffer.
+   * @returns The observability report as a JSON string.
+   */
   fromCanonical(rules: Buffer): string {
     return callNative(() => this._native.fromCanonical(rules));
   }
 
+  /**
+   * Observability for the current ruleset as JSON.
+   * @returns The observability report as a JSON string.
+   */
   stats(): string {
     return callNative(() => this._native.stats());
   }
