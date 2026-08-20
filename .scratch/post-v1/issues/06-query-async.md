@@ -34,3 +34,7 @@ Add an **opt-in** asynchronous query to the napi surface, off the JS thread. Syn
 - Note the async costs in docs/benchmarks.md §3b or the README: per-query dispatch + promise overhead, buffer memcpy, threadpool contention, N thread-local prepared caches, concurrent in-flight memory multiplier.
 
 Run: `cargo test --workspace` / `cargo clippy --workspace --all-targets`, node + Bun smoke, `bun run bench load` — green before commit.
+
+## Comments
+
+2026-08-21: wrapper shape changed (commit `431d2b5`) — the TS `SpatialRuleset.queryAsync` now returns `Promise<QueryResult>` (same chainable result as `query()`) and accepts broadened inputs, while the **native** napi `queryAsync` above remains `Promise<Uint8Array>` (mask). `toOutcomesJson()` on an async result makes a sync rich call (no native async rich path — `queryRichAsync` still out of scope). See ADR-0009/ADR-0014 amendments.

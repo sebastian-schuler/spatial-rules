@@ -44,8 +44,8 @@ Crossover levels added to `benchmarks.json` + `docs/benchmarks.md` §5:
   investment; unlocks point-based filtering / geofencing-style checks).
 - `issues/02-whole-clause-negation.md` — top-level `$nor` / whole-clause
   negation on `where` (exemption logic engine-side).
-- `issues/03-filter-return-shapes.md` — chainable `QueryResult` (toMask /
-  toIndices / invalidIndices / count / summary / toGeoJson / toRichJson).
+- `issues/03-filter-return-shapes.md` — chainable `QueryResult` (mask /
+  indices / invalidIndices / count / summary / toGeoJson / toOutcomesJson).
 - `issues/04-npm-publish.md` — registry publish of the prebuilt per-platform
   packages (the remaining operational step).
 - `issues/05-dynamic-input.md` — dynamic input types (Buffer / GeoJSON string /
