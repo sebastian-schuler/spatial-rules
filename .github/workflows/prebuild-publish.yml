@@ -7,69 +7,36 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            platform: linux-x64-gnu
-            artifact: spatial-rules.linux-x64-gnu.node
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            platform: linux-x64-musl
-            artifact: spatial-rules.linux-x64-musl.node
-            cross: true
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            platform: linux-arm64-gnu
-            artifact: spatial-rules.linux-arm64-gnu.node
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            platform: linux-arm64-musl
-            artifact: spatial-rules.linux-arm64-musl.node
-            cross: true
-          - host: windows-latest
-            target: x86_64-pc-windows-msvc
-            platform: win32-x64-msvc
-            artifact: spatial-rules.win32-x64-msvc.node
-          - host: windows-latest
-            target: aarch64-pc-windows-msvc
-            platform: win32-arm64-msvc
-            artifact: spatial-rules.win32-arm64-msvc.node
-
-    runs-on: ${{ matrix.host }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
-      - name: Install cross (musl)
-        if: matrix.cross
-        run: cargo install cross --locked
-      - name: Build addon
-        shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release -p spatial-rules-node --target ${{ matrix.target }}
-          else
-            cargo build --release -p spatial-rules-node --target ${{ matrix.target }}
-          fi
-      - name: Stage artifact
-        shell: bash
-        run: |
-          set -euxo pipefail
-          if [[ "${{ matrix.host }}" == windows-* ]]; then
-            src="target/${{ matrix.target }}/release/spatial_rules_node.dll"
-          else
-            src="target/${{ matrix.target }}/release/libspatial_rules_node.so"
-          fi
-          mkdir -p "node/npm/${{ matrix.platform }}"
-          cp "$src" "node/npm/${{ matrix.platform }}/${{ matrix.artifact }}"
+          targets: |
+            x86_64-unknown-linux-gnu
+            x86_64-unknown-linux-musl
+            aarch64-unknown-linux-gnu
+            aarch64-unknown-linux-musl
+            x86_64-pc-windows-msvc
+            aarch64-pc-windows-msvc
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        working-directory: node
+        run: npm install
+      - name: Build all platform addons
+        working-directory: node
+        # napi build --platform cross-compiles every configured triple via zig
+        # (x86_64/aarch64, linux gnu/musl, windows msvc) and stages each .node
+        # into node/npm/<platform>/. This replaces the hand-rolled cargo/cross
+        # matrix, which failed to build cdylibs for the musl targets and lacked
+        # an aarch64 cross-linker on the x86_64 host.
+        run: npm run build
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}
-          path: node/npm/${{ matrix.platform }}
+          name: platforms
+          path: node/npm
 
   publish:
     needs: build
@@ -81,16 +48,15 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - name: Install dev dependencies
+        # Needed so the root package's prepack (tsc emit to dist/) works during
+        # npm publish.
+        working-directory: node
+        run: npm install
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      - name: Restore platform binaries
-        run: |
-          for dir in artifacts/*/; do
-            platform="$(basename "$dir")"
-            mkdir -p "node/npm/$platform"
-            cp "$dir"/*.node "node/npm/$platform/"
-          done
+          name: platforms
+          path: node/npm
       - name: Publish platform packages
         working-directory: node/npm
         run: |
