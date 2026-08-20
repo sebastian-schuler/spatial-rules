@@ -27,17 +27,11 @@ Make the `node/` package TS-ready:
 - `node` typecheck passes: `tsc --noEmit` in `node/` is clean.
 - `cargo build` untouched; `npm` install resolves `typescript`.
 - No wrapper/test file changed yet.
+
 ## Answer
 
-- 
-ode/tsconfig.json: nodenext/nodenext, es2022, strict, erasableSyntaxOnly, 
-oEmit, llowImportingTsExtensions (tests import ../index.ts), 	ypes: ["node"], and a paths mapping spatial-rules -> ./index.ts so 	est/clean-install.ts typechecks in-repo against the wrapper source.
-- 
-ode/native.d.ts: hand-written addon surface (all 8 methods + constructor) mirroring 
-ode/src/lib.rs. Type-only — never emitted or shipped.
-- 
-ode/package.json: 	ypescript ^5.9 + @types/node ^24 devDependencies; 	ypecheck script (	sc --noEmit).
-- 	sc --noEmit clean; 
-pm install resolves; no wrapper/test file touched. include adds 
-ative.d.ts alongside the ticket's list so the program has inputs before index.ts exists (stage 01).
+- `node/tsconfig.json`: nodenext/nodenext, es2022, strict, `erasableSyntaxOnly`, `noEmit`, `allowImportingTsExtensions` (tests import `../index.ts`), `types: ["node"]`, and a `paths` mapping `spatial-rules -> ./index.ts` so `test/clean-install.ts` typechecks in-repo against the wrapper source.
+- `node/native.d.ts`: hand-written addon surface (all 8 methods + constructor) mirroring `node/src/lib.rs`. Type-only â€” never emitted or shipped. The module shape (named `SpatialRuleset` export) is the file itself; `index.ts` derives its `NativeModule` type from the file's namespace (`import type * as` + `typeof`), so the shape lives in one place only.
+- `node/package.json`: `typescript` ^5.9 + `@types/node` ^24 devDependencies; `typecheck` script (`tsc --noEmit`).
+- `tsc --noEmit` clean; `npm install` resolves; no wrapper/test file touched. `include` adds `native.d.ts` alongside the ticket's list so the program has inputs before `index.ts` exists (stage 01).
 

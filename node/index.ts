@@ -14,7 +14,12 @@
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The addon module shape (ticket 01: declared by `native.d.ts` itself) —
+// derived from that file's namespace, so the shape lives in one place only.
+import type * as nativeModule from './native.js';
 import type { SpatialRuleset as NativeRuleset } from './native.js';
+
+type NativeModule = typeof nativeModule;
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -40,9 +45,6 @@ export interface QuerySummary {
 interface RichQuerySource {
   queryRich(candidates: Buffer, query: string): string;
 }
-
-/** The addon module shape as loaded by the require() calls below. */
-type NativeModule = { SpatialRuleset: typeof NativeRuleset };
 
 // Map this process to a published per-platform package (ADR-0006: win32 +
 // linux x64/arm64, gnu/musl).
@@ -106,6 +108,26 @@ function rethrow(err: unknown): never {
     }
   }
   throw err;
+}
+
+// Run one native crossing, re-throwing any error through `rethrow` as a
+// `SpatialRulesError` — a single guard instead of a try/catch per call site.
+function callNative<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    rethrow(err);
+  }
+}
+
+// Async variant: the rejection must be awaited *inside* the guard, or it
+// escapes as a plain rejected promise without the SpatialRulesError mapping.
+async function callNativeAsync<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    rethrow(err);
+  }
 }
 
 // Input normalization (filtering-scale ticket 05): the native boundary stays
@@ -225,11 +247,7 @@ export class QueryResult {
   // `query()` and `toRichJson()` can make the two disagree; the mask wins.
   toRichJson(): string {
     if (this._rich === null) {
-      try {
-        this._rich = this._native.queryRich(this._candidates, this._query);
-      } catch (err) {
-        rethrow(err);
-      }
+      this._rich = callNative(() => this._native.queryRich(this._candidates, this._query));
     }
     return this._rich;
   }
@@ -240,70 +258,38 @@ export class SpatialRuleset {
 
   constructor(rules: GeoJsonInput) {
     const normalized = toGeoJsonBuffer(rules, 'rules');
-    try {
-      this._native = new native.SpatialRuleset(normalized);
-    } catch (err) {
-      rethrow(err);
-    }
+    this._native = callNative(() => new native.SpatialRuleset(normalized));
   }
 
   query(candidates: GeoJsonInput, query: QueryInput): QueryResult {
     const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
     const normalizedQuery = toQueryString(query);
-    try {
-      const mask = this._native.query(normalizedCandidates, normalizedQuery);
-      return new QueryResult(this._native, normalizedCandidates, normalizedQuery, mask);
-    } catch (err) {
-      rethrow(err);
-    }
+    const mask = callNative(() => this._native.query(normalizedCandidates, normalizedQuery));
+    return new QueryResult(this._native, normalizedCandidates, normalizedQuery, mask);
   }
 
   async queryAsync(candidates: Buffer, query: string): Promise<Uint8Array> {
-    try {
-      return await this._native.queryAsync(candidates, query);
-    } catch (err) {
-      rethrow(err);
-    }
+    return callNativeAsync(() => this._native.queryAsync(candidates, query));
   }
 
   queryRich(candidates: Buffer, query: string): string {
-    try {
-      return this._native.queryRich(candidates, query);
-    } catch (err) {
-      rethrow(err);
-    }
+    return callNative(() => this._native.queryRich(candidates, query));
   }
 
   replace(rules: GeoJsonInput): string {
     const normalized = toGeoJsonBuffer(rules, 'rules');
-    try {
-      return this._native.replace(normalized);
-    } catch (err) {
-      rethrow(err);
-    }
+    return callNative(() => this._native.replace(normalized));
   }
 
   toJSON(): string {
-    try {
-      return this._native.toJSON();
-    } catch (err) {
-      rethrow(err);
-    }
+    return callNative(() => this._native.toJSON());
   }
 
   fromCanonical(rules: Buffer): string {
-    try {
-      return this._native.fromCanonical(rules);
-    } catch (err) {
-      rethrow(err);
-    }
+    return callNative(() => this._native.fromCanonical(rules));
   }
 
   stats(): string {
-    try {
-      return this._native.stats();
-    } catch (err) {
-      rethrow(err);
-    }
+    return callNative(() => this._native.stats());
   }
 }
