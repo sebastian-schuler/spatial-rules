@@ -62,13 +62,17 @@ jobs:
       - name: Install aarch64 glibc cross-gcc
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Install aarch64 musl cross-gcc
+      - name: Install zig (aarch64 musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           set -euxo pipefail
-          curl -fsSL -o /tmp/musl.tgz https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar -C /tmp -xf /tmp/musl.tgz
-          echo "/tmp/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o /tmp/zig.tar.xz \
+            https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+          tar -C /tmp -xf /tmp/zig.tar.xz
+          echo "/tmp/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
+      - name: Install cargo-zigbuild (aarch64 musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cargo install cargo-zigbuild --locked
       - name: Install dependencies
         working-directory: node
         run: npm install
@@ -84,10 +88,14 @@ jobs:
                 npx napi build --target ${{ matrix.target }} --release
               ;;
             aarch64-unknown-linux-musl)
-              # musl cdylib needs a dynamic crt; musl.cc gcc links it.
+              # musl.cc is unreliable; build with cargo-zigbuild (zig handles
+              # the aarch64 linker flag that napi --zig passes through raw).
               RUSTFLAGS="-C target-feature=-crt-static" \
-              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
-                npx napi build --target ${{ matrix.target }} --release
+                cargo zigbuild --release --target aarch64-unknown-linux-musl \
+                -p spatial-rules-node
+              mkdir -p npm/linux-arm64-musl
+              cp target/aarch64-unknown-linux-musl/release/libspatial_rules_node.so \
+                npm/linux-arm64-musl/spatial-rules.linux-arm64-musl.node
               ;;
             x86_64-unknown-linux-musl)
               RUSTFLAGS="-C target-feature=-crt-static" \
