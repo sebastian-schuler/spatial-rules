@@ -9,13 +9,17 @@
 mod candidate;
 mod engine;
 mod error;
+mod evaluate;
 mod ingestion;
+mod prepared_cache;
 mod properties;
 mod property_index;
 mod query;
 mod rule;
 mod ruleset;
 mod spatial_index;
+#[cfg(test)]
+mod test_support;
 mod validation;
 mod where_expr;
 

@@ -81,16 +81,16 @@ mod tests {
         .unwrap();
         let query = Query::new(SpatialPredicate::Intersects);
 
-        let before = crate::validation::classify_call_count();
+        let before = crate::test_support::classify_call_count();
         let candidate = Candidate::new("c".to_string(), geometry);
         // Classification ran exactly once, at intake.
-        assert_eq!(crate::validation::classify_call_count(), before + 1);
+        assert_eq!(crate::test_support::classify_call_count(), before + 1);
 
         // Re-querying the same classified candidate never re-runs validation.
         for _ in 0..100 {
             let _ = ruleset.query(std::slice::from_ref(&candidate), &query);
         }
-        assert_eq!(crate::validation::classify_call_count(), before + 1);
+        assert_eq!(crate::test_support::classify_call_count(), before + 1);
     }
 
     #[test]

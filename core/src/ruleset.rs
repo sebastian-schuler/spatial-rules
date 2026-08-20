@@ -1,38 +1,20 @@
 //! Immutable `Ruleset` compilation and the batch query engine
 //! (ADR-0001/0002/0003/0004/0005).
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use geo::{BooleanOps, BoundingRect, GeodesicArea, Geometry, PreparedGeometry, Rect, Relate};
+use geo::{BoundingRect, Geometry, PreparedGeometry, Rect};
 
-use crate::candidate::{Candidate, CandidateClass};
+use crate::candidate::Candidate;
+pub use crate::evaluate::PreparedQuery;
 use crate::error::{ErrorCode, SpatialError};
+use crate::prepared_cache::{get_or_prepare, next_ruleset_id, PreparedGeometries};
 use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
-use crate::query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
+use crate::query::{CandidateOutcome, Query};
 use crate::rule::{Rule, RuleId};
 use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
 use crate::validation::validate_rule_geometry;
-use crate::where_expr::WhereExpr;
-
-/// Owned prepared geometries for one ruleset, shared per thread via `Rc`
-/// (`PreparedGeometry` is `!Send`; see ADR-0010).
-type PreparedGeometries = Rc<Vec<PreparedGeometry<'static, Geometry<f64>>>>;
-
-/// Assigns each [`Ruleset`] a unique identity, used as the per-thread
-/// prepared-geometry cache key (ADR-0010).
-static NEXT_RULESET_ID: AtomicU64 = AtomicU64::new(1);
-
-// Per-thread cache of owned prepared geometries for the most recent ruleset.
-// `PreparedGeometry` is `!Send` in geo 0.33, so it is cached per thread (as
-// owned clones, prepared once per ruleset) rather than in the shared
-// `Arc<Ruleset>`.
-thread_local! {
-    static PREPARED_CACHE: RefCell<Option<(u64, PreparedGeometries)>> = const { RefCell::new(None) };
-}
 
 /// An immutable, query-optimized collection of rules (CONTEXT.md §6).
 ///
@@ -57,75 +39,6 @@ impl std::fmt::Debug for Ruleset {
             .field("rule_count", &self.rules.len())
             .field("rule_ids", &ids)
             .finish()
-    }
-}
-
-/// Answer a spatial predicate from a DE-9IM matrix between a candidate and a
-/// rule (ADR-0008, ADR-0012). `contains`/`within`/`covers`/`covered_by` are
-/// directional: the matrix is `candidate` relates to `rule`.
-fn spatial_predicate_holds(
-    predicate: SpatialPredicate,
-    matrix: geo::algorithm::relate::IntersectionMatrix,
-) -> bool {
-    match predicate {
-        SpatialPredicate::Intersects => matrix.is_intersects(),
-        SpatialPredicate::Contains => matrix.is_contains(),
-        SpatialPredicate::Within => matrix.is_within(),
-        SpatialPredicate::Covers => matrix.is_covers(),
-        SpatialPredicate::CoveredBy => matrix.is_coveredby(),
-        SpatialPredicate::Touches => matrix.is_touches(),
-        SpatialPredicate::Overlaps => matrix.is_overlaps(),
-    }
-}
-
-/// A candidate verdict before the `Matched` ids are attached (ADR-0004).
-/// `query` and `query_mask` share the same evaluation but differ in whether
-/// they collect the matching rule ids.
-enum Verdict {
-    Matched,
-    NotMatched,
-    Invalid { reason: String },
-}
-
-/// Geodesic overlap metrics for a matched candidate→rule pair (ADR-0012).
-///
-/// The intersection is computed with [`BooleanOps`] and measured with
-/// [`GeodesicArea`] (spherical), so lon/lat is never treated as planar
-/// (Initial-plan §14). Polygon/MultiPolygon candidates are guaranteed valid by
-/// the upstream gates; a Point/MultiPoint candidate has zero area, so its
-/// overlap area and ratio are both `0` (filtering-scale ticket 01).
-///
-/// `geodesic_area_signed().abs()` is used (not `geodesic_area_unsigned`) so the
-/// measure is robust to exterior-ring winding: `_unsigned` assumes a
-/// counter-clockwise exterior per the Simple Features convention and reports
-/// the Earth-complement area for a clockwise exterior, while the signed
-/// magnitude is correct for any winding of a polygon smaller than half the
-/// Earth (always true for rules/candidates).
-fn overlap_metric(candidate: &Geometry<f64>, rule: &Geometry<f64>) -> OverlapMetric {
-    // A point has zero area: there is no polygon intersection to measure.
-    if matches!(candidate, Geometry::Point(_) | Geometry::MultiPoint(_)) {
-        return OverlapMetric {
-            overlap_area: 0.0,
-            overlap_ratio: 0.0,
-        };
-    }
-    let intersection = match (candidate, rule) {
-        (Geometry::Polygon(c), Geometry::Polygon(r)) => c.intersection(r),
-        (Geometry::Polygon(c), Geometry::MultiPolygon(r)) => c.intersection(r),
-        (Geometry::MultiPolygon(c), Geometry::Polygon(r)) => c.intersection(r),
-        (Geometry::MultiPolygon(c), Geometry::MultiPolygon(r)) => c.intersection(r),
-        _ => unreachable!("overlap metrics require Polygon/MultiPolygon candidates and rules"),
-    };
-    let overlap_area = intersection.geodesic_area_signed().abs();
-    let candidate_area = candidate.geodesic_area_signed().abs();
-    let overlap_ratio = if candidate_area > 0.0 {
-        overlap_area / candidate_area
-    } else {
-        0.0
-    };
-    OverlapMetric {
-        overlap_area,
-        overlap_ratio,
     }
 }
 
@@ -182,7 +95,7 @@ impl Ruleset {
         let property_index: Box<dyn PropertyIndex> = Box::new(EqualityIndex::build(&rules));
 
         Ok(Ruleset {
-            id: NEXT_RULESET_ID.fetch_add(1, Ordering::Relaxed),
+            id: next_ruleset_id(),
             rules,
             ids,
             envelopes,
@@ -281,7 +194,7 @@ impl Ruleset {
     /// (architecture-hardening 04). Cloning the handle is cheap (`Rc`).
     pub fn prepared(&self) -> PreparedRuleGeometries {
         PreparedRuleGeometries {
-            inner: self.cached_prepared(),
+            inner: get_or_prepare(&self.rules, self.id),
         }
     }
 
@@ -320,48 +233,12 @@ impl Ruleset {
             .iter()
             .filter_map(|id| self.rule_id(id))
             .collect();
-        let prepared = self.cached_prepared();
+        let prepared = get_or_prepare(&self.rules, self.id);
         let where_filter = query
             .where_clause
             .as_ref()
             .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
-        PreparedQuery {
-            ruleset: self,
-            spatial: query.spatial,
-            where_clause: query.where_clause.clone(),
-            excluded,
-            prepared,
-            where_filter,
-            include_overlap: query.include_overlap,
-            scratch: RefCell::new(Vec::new()),
-        }
-    }
-
-    /// The rule geometries prepared for DE-9IM, cached per thread per ruleset
-    /// (ADR-0010). `PreparedGeometry` is `!Send` in geo 0.33, so the owned form
-    /// (cloned once per ruleset) lives in a thread-local keyed by ruleset
-    /// identity rather than in the shared `Arc<Ruleset>`.
-    fn cached_prepared(&self) -> PreparedGeometries {
-        PREPARED_CACHE.with(|cache| {
-            {
-                let cached = cache.borrow();
-                if let Some((id, prepared)) = cached.as_ref() {
-                    if *id == self.id {
-                        return prepared.clone();
-                    }
-                }
-            }
-            // Cache miss or stale entry: clone the rule geometries once per
-            // thread per ruleset, prepare them (owned), and cache for reuse.
-            let prepared: PreparedGeometries = Rc::new(
-                self.rules
-                    .iter()
-                    .map(|rule| PreparedGeometry::from(rule.geometry.clone()))
-                    .collect(),
-            );
-            *cache.borrow_mut() = Some((self.id, prepared.clone()));
-            prepared
-        })
+        PreparedQuery::new(self, query, excluded, prepared, where_filter)
     }
 }
 
@@ -410,123 +287,6 @@ impl PreparedRuleGeometries {
     /// Whether the prepared geometry set is empty.
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
-    }
-}
-
-/// A query compiled against a ruleset: the preparation that both `query` and
-/// `query_mask` share (ADR-0003/0004). Owns the excluded ids, the prepared
-/// rule geometries (cached per thread, ADR-0010), and the indexable `where`
-/// set; evaluates each candidate through the fixed pipeline
-/// (bbox → property → DE-9IM).
-pub struct PreparedQuery<'a> {
-    ruleset: &'a Ruleset,
-    spatial: SpatialPredicate,
-    where_clause: Option<WhereExpr>,
-    excluded: HashSet<RuleId>,
-    prepared: PreparedGeometries,
-    where_filter: Option<HashSet<RuleId>>,
-    include_overlap: bool,
-    /// Reused across the batch so the spatial-index result is filled into one
-    /// buffer instead of allocated per candidate (architecture-hardening 03).
-    scratch: RefCell<Vec<RuleId>>,
-}
-
-impl<'a> PreparedQuery<'a> {
-    /// Evaluate one candidate, collecting matching rule ids (ADR-0004) and,
-    /// when the query requested it, per-rule overlap metrics (ADR-0012).
-    pub fn evaluate(&self, candidate: &Candidate) -> CandidateOutcome {
-        match self.evaluate_verdict(candidate, true) {
-            (Verdict::Matched, matched, overlaps) => CandidateOutcome::Matched {
-                rule_ids: matched,
-                overlaps,
-            },
-            (Verdict::NotMatched, _, _) => CandidateOutcome::NotMatched,
-            (Verdict::Invalid { reason }, _, _) => CandidateOutcome::Invalid { reason },
-        }
-    }
-
-    /// Evaluate one candidate to the compact `0/1/2` mask (ADR-0004), without
-    /// materialising matching rule ids or overlap metrics.
-    pub fn evaluate_mask(&self, candidate: &Candidate) -> u8 {
-        match self.evaluate_verdict(candidate, false).0 {
-            Verdict::Matched => 1,
-            Verdict::NotMatched => 0,
-            Verdict::Invalid { .. } => 2,
-        }
-    }
-
-    fn evaluate_verdict(
-        &self,
-        candidate: &Candidate,
-        collect_ids: bool,
-    ) -> (Verdict, Vec<RuleId>, Option<Vec<OverlapMetric>>) {
-        // Candidate-level gate (ADR-0005): the classification was computed at
-        // intake (architecture-hardening 01), so the hot path reads the cached
-        // envelope or surfaces the recorded invalid reason — never a batch
-        // failure.
-        let bbox = match candidate.class() {
-            CandidateClass::Valid { envelope } => *envelope,
-            CandidateClass::Invalid { reason } => {
-                return (Verdict::Invalid {
-                    reason: reason.clone(),
-                }, Vec::new(), None);
-            }
-        };
-
-        // Fixed pipeline: spatial bbox filter -> property predicate -> exact
-        // DE-9IM relate against prepared rule geometries (§15, research 03).
-        // A compile-time equality/`$in` index answers the property step when
-        // the clause is indexable (ADR-0003); otherwise fall back to eval.
-        let compute_overlaps = collect_ids && self.include_overlap;
-        let mut matched: Vec<RuleId> = Vec::new();
-        let mut overlaps: Vec<OverlapMetric> = Vec::new();
-        let mut any_match = false;
-        let mut scratch = self.scratch.borrow_mut();
-        self.ruleset.query_envelope_into(&bbox, &mut scratch);
-        for &rule_id in scratch.iter() {
-            if self.excluded.contains(&rule_id) {
-                continue;
-            }
-            match &self.where_filter {
-                Some(filter) => {
-                    if !filter.contains(&rule_id) {
-                        continue;
-                    }
-                }
-                None => {
-                    if let Some(where_clause) = &self.where_clause {
-                        if !where_clause.eval(self.ruleset.properties(rule_id)) {
-                            continue;
-                        }
-                    }
-                }
-            }
-            let matrix = candidate.geometry.relate(&self.prepared[rule_id.0 as usize]);
-            if spatial_predicate_holds(self.spatial, matrix) {
-                any_match = true;
-                if collect_ids {
-                    matched.push(rule_id);
-                    if compute_overlaps {
-                        overlaps.push(overlap_metric(
-                            &candidate.geometry,
-                            self.ruleset.geometry(rule_id),
-                        ));
-                    }
-                }
-            }
-        }
-        drop(scratch);
-
-        let overlaps = if compute_overlaps {
-            Some(overlaps)
-        } else {
-            None
-        };
-        if any_match {
-            (Verdict::Matched, matched, overlaps)
-        } else {
-            (Verdict::NotMatched, matched, overlaps)
-        }
     }
 }
 
