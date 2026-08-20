@@ -1,4 +1,8 @@
-# spatial-rules-engine
+# spatial-rules
+
+[![npm version](https://img.shields.io/npm/v/spatial-rules)](https://www.npmjs.com/package/spatial-rules)
+[![license](https://img.shields.io/github/license/sebastian-schuler/spatial-rules)](LICENSE-MIT)
+[![CI](https://img.shields.io/github/actions/workflow/status/sebastian-schuler/spatial-rules/test.yml?branch=main)](https://github.com/sebastian-schuler/spatial-rules/actions/workflows/test.yml)
 
 A high-performance spatial rules/query engine: evaluate batches of candidate
 GeoJSON geometries against an indexed, attribute-bearing ruleset, with a Rust
@@ -10,7 +14,7 @@ knows nothing about any specific application domain.
 
 **One number:** ~20 ms to evaluate 1,000 candidates × 30 rules — about **52×
 faster** than the equivalent turf.js check (~1.1 s). See
-[`docs/benchmarks.md`](docs/benchmarks.md).
+[docs/benchmarks.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md).
 
 ## What it does
 
@@ -39,8 +43,9 @@ npm install spatial-rules
 ```
 
 > Not yet published to npm — the prebuilt-distribution pipeline (per-platform
-> optional dependencies + CI matrix) is in place; registry publish is the
-> remaining operational step. Until then, build the addon from source (below).
+> optional dependencies + CI matrix + release-please) is in place; pushing a
+> `v*` tag triggers the publish. Until then, build the addon from source (see
+> [DEVELOPMENT.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/DEVELOPMENT.md)).
 
 ## Usage
 
@@ -210,58 +215,27 @@ Construction and query errors throw a `SpatialRulesError` with a stable `.code`:
 Invalid *candidates* never fail the batch — they produce a `2` in the mask /
 an `invalid` outcome with a reason.
 
-## Repository layout
+## Requirements
 
-```
-core/        pure-Rust engine (Ruleset, Engine, query pipeline, indexes)
-node/        napi-rs addon + JS wrapper + per-platform npm packages
-benchmarks/  criterion algorithm ladder + turf.js baseline + dataset
-integration/ Bun + Express app + Docker image + memory harness
-docs/        CONTEXT.md, Initial-plan.md, benchmarks.md, adr/
-```
+- Node.js **>= 18** (Bun is also supported via the same prebuilt binaries).
 
-## Development
+## Changelog
 
-```bash
-# Rust core + binding
-cargo test --workspace
-cargo clippy --workspace --all-targets
+See [CHANGELOG.md](CHANGELOG.md).
 
-# Node/Bun binding smoke (build the addon first)
-cargo build -p spatial-rules-node
-# Windows: copy target/release/spatial_rules_node.dll -> node/spatial_rules.node
-# Linux:   copy target/release/libspatial_rules_node.so -> node/spatial_rules.node
-cd node && npm install && npm run typecheck
-node --experimental-strip-types test/smoke.ts   # flag needed on Node 22.6+, default-on later
-bun  test/smoke.ts
+## Contributing
 
-# Benchmarks + integration — one dispatcher at the repo root
-bun install                        # once: harness deps (turf, rbush, express)
-bun run bench                      # list every command
-bun run bench build                # build binding (+ copy) + cross_check binary
-bun run bench cross-check && bun run bench perf
-bun run bench all                  # full battery
+See [CONTRIBUTING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/CONTRIBUTING.md)
+for how to report issues and submit changes, and
+[DEVELOPMENT.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/DEVELOPMENT.md)
+for building and testing locally.
 
-# Docker integration (server + memory measurement)
-docker build -f integration/Dockerfile -t spatial-rules .
-docker run --rm --memory=128m -p 3000:3000 spatial-rules
-```
+## Releasing
 
-### Configuration
+See [RELEASING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/RELEASING.md)
+for the release process (release-please →
+prebuilt platform binaries → npm publish).
 
-The benchmark and integration harnesses read all configuration from the single
-committed `benchmarks.json` at the repo root; per-run tweaks are `--flag=value`
-arguments (e.g. `bun run bench crossover --sizes=20,200,1000,5000`). There are
-**no environment variables and no `.env` files** — every knob is either in
-`benchmarks.json` or passed as a flag. See
-[`docs/benchmarks.md`](docs/benchmarks.md) for the full key → flag map.
+## License
 
-The core engine and the `node/` addon read no configuration at all; their
-input travels through the API only.
-
-## Docs
-
-- [`CONTEXT.md`](CONTEXT.md) — domain glossary (single source of vocabulary).
-- [`docs/Initial-plan.md`](docs/Initial-plan.md) — implementation spec.
-- [`docs/adr/`](docs/adr/) — architecture decision records.
-- [`docs/benchmarks.md`](docs/benchmarks.md) — perf and memory evidence.
+Dual-licensed under [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE).

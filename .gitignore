@@ -3,6 +3,13 @@ node_modules/
 *.node
 node/dist/
 
+# Generated at `npm pack` time by node/scripts/sync-docs.mjs (canonical copies
+# live at the repo root as the GitHub-facing docs).
+node/README.md
+node/LICENSE-MIT
+node/LICENSE-APACHE
+node/CHANGELOG.md
+
 # Internal-only docs (application concepts that must not go public).
 docs/internal/
 

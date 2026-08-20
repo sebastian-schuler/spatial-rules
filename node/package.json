@@ -3,8 +3,36 @@
     "version": "0.1.0",
     "description": "High-performance spatial rules/query engine (Rust core, Node/Bun binding)",
     "license": "MIT OR Apache-2.0",
+    "author": "Sebastian Schuler",
+    "homepage": "https://github.com/sebastian-schuler/spatial-rules#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/sebastian-schuler/spatial-rules.git"
+    },
+    "bugs": {
+        "url": "https://github.com/sebastian-schuler/spatial-rules/issues"
+    },
+    "keywords": [
+        "geojson",
+        "spatial",
+        "gis",
+        "rules-engine",
+        "query",
+        "r-tree",
+        "napi"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "sideEffects": false,
     "type": "module",
     "napi": {
         "name": "spatial-rules",
@@ -22,14 +50,18 @@
     },
     "files": [
         "dist/",
-        "npm/"
+        "npm/",
+        "README.md",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "CHANGELOG.md"
     ],
     "scripts": {
         "build": "napi build --platform --release",
         "build:debug": "napi build --platform",
         "artifacts": "napi artifacts",
         "build:ts": "tsc -p tsconfig.build.json",
-        "prepack": "npm run build:ts",
+        "prepack": "node scripts/sync-docs.mjs && npm run build:ts",
         "prepublishOnly": "napi prepublish -t npm",
         "typecheck": "tsc --noEmit",
         "test": "node --experimental-strip-types test/smoke.ts"
