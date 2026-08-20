@@ -7,40 +7,70 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64-gnu
+            zig: false
+            musl: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            platform: linux-x64-musl
+            zig: true
+            musl: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64-gnu
+            zig: true
+            musl: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            platform: linux-arm64-musl
+            zig: true
+            musl: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32-x64-msvc
+            zig: false
+            musl: false
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            platform: win32-arm64-msvc
+            zig: false
+            musl: false
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: |
-            x86_64-unknown-linux-gnu
-            x86_64-unknown-linux-musl
-            aarch64-unknown-linux-gnu
-            aarch64-unknown-linux-musl
-            x86_64-pc-windows-msvc
-            aarch64-pc-windows-msvc
+          targets: ${{ matrix.target }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install zig (for cross-compile)
+        if: matrix.zig
+        uses: mlugg/setup-zig@v1
       - name: Install dependencies
         working-directory: node
         run: npm install
-      - name: Build all platform addons
+      - name: Build addon
+        shell: bash
         working-directory: node
-        # napi build --target cross-compiles each triple explicitly via zig and
-        # stages the .node into node/npm/<platform>/. (--platform alone builds
-        # only the host triple, leaving the other platform packages empty.)
         run: |
-          npx napi build --target x86_64-unknown-linux-gnu --release
-          npx napi build --target x86_64-unknown-linux-musl --release
-          npx napi build --target aarch64-unknown-linux-gnu --release
-          npx napi build --target aarch64-unknown-linux-musl --release
-          npx napi build --target x86_64-pc-windows-msvc --release
-          npx napi build --target aarch64-pc-windows-msvc --release
+          ZIG=""
+          [ "${{ matrix.zig }}" = "true" ] && ZIG="--zig"
+          RUSTFLAGS=""
+          # musl cdylib needs a dynamic crt (napi-rs FAQ); glibc builds must not.
+          [ "${{ matrix.musl }}" = "true" ] && RUSTFLAGS="-C target-feature=-crt-static"
+          RUSTFLAGS="$RUSTFLAGS" npx napi build --target ${{ matrix.target }} --release $ZIG
       - uses: actions/upload-artifact@v4
         with:
-          name: platforms
-          path: node/npm
+          name: ${{ matrix.platform }}
+          path: node/npm/${{ matrix.platform }}
 
   publish:
     needs: build
@@ -59,8 +89,14 @@ jobs:
         run: npm install
       - uses: actions/download-artifact@v4
         with:
-          name: platforms
-          path: node/npm
+          path: artifacts
+      - name: Restore platform binaries
+        run: |
+          for dir in artifacts/*/; do
+            platform="$(basename "$dir")"
+            mkdir -p "node/npm/$platform"
+            cp "$dir"/*.node "node/npm/$platform/"
+          done
       - name: Publish platform packages
         working-directory: node/npm
         run: |
