@@ -43,9 +43,17 @@ jobs:
         run: |
           cargo build --release -p spatial-rules-node
           Copy-Item target\release\spatial_rules_node.dll node\spatial_rules.node -Force
+      - name: Install dev dependencies
+        working-directory: node
+        run: npm install
+      - name: Typecheck (tsc --noEmit)
+        working-directory: node
+        run: npm run typecheck
+      # Type stripping: default-on from Node 23.6; --experimental-strip-types is
+      # accepted across the whole 22.6+/24/26 matrix, so pin it everywhere.
       - name: Smoke test (Node)
         working-directory: node
-        run: node test/smoke.mjs
+        run: node --experimental-strip-types test/smoke.ts
 
   bun:
     runs-on: ubuntu-latest
@@ -61,7 +69,7 @@ jobs:
           cp target/release/libspatial_rules_node.so node/spatial_rules.node
       - name: Smoke test (Bun)
         working-directory: node
-        run: bun test/smoke.mjs
+        run: bun test/smoke.ts
 
   clean-install:
     # Zero-toolchain install path (ticket 18 / ticket 07): install the packed
@@ -78,6 +86,10 @@ jobs:
           cargo build --release -p spatial-rules-node
           mkdir -p node/npm/linux-x64-gnu
           cp target/release/libspatial_rules_node.so node/npm/linux-x64-gnu/spatial-rules.linux-x64-gnu.node
+      - name: Install dev dependencies
+        # `npm pack` runs the `prepack` tsc emit, which needs typescript.
+        working-directory: node
+        run: npm install
       - name: Pack root + platform tarballs
         run: |
           set -euxo pipefail
@@ -89,6 +101,9 @@ jobs:
           mkdir -p /tmp/ci-clean-install
           cd /tmp/ci-clean-install
           npm init -y >/dev/null
+          # A .ts entry file is ESM only when the nearest package.json says so
+          # (the old .mjs was implicitly ESM).
+          npm pkg set type=module
           npm install /tmp/root/*.tgz /tmp/platform/*.tgz >/dev/null
-          cp "$GITHUB_WORKSPACE/node/test/clean-install.mjs" .
-          node clean-install.mjs
+          cp "$GITHUB_WORKSPACE/node/test/clean-install.ts" .
+          node --experimental-strip-types clean-install.ts

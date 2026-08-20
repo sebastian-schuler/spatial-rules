@@ -231,8 +231,8 @@ cargo clippy --workspace --all-targets
 cargo build -p spatial-rules-node
 # Windows: copy target/release/spatial_rules_node.dll -> node/spatial_rules.node
 # Linux:   copy target/release/libspatial_rules_node.so -> node/spatial_rules.node
-node node/test/smoke.mjs
-bun  node/test/smoke.mjs
+node node/test/smoke.ts
+bun  node/test/smoke.ts
 
 # Benchmarks + integration — one dispatcher at the repo root
 bun install                        # once: harness deps (turf, rbush, express)

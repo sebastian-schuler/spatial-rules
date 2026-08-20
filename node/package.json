@@ -29,7 +29,8 @@
         "build:debug": "napi build --platform",
         "artifacts": "napi artifacts",
         "build:ts": "tsc -p tsconfig.build.json",
-        "prepublishOnly": "tsc -p tsconfig.build.json && napi prepublish -t npm",
+        "prepack": "npm run build:ts",
+        "prepublishOnly": "napi prepublish -t npm",
         "typecheck": "tsc --noEmit",
         "test": "node --experimental-strip-types test/smoke.ts"
     },
