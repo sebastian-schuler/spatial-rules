@@ -302,4 +302,39 @@ assert.throws(() => dynamicRuleset.query(candidates, []), TypeError);
 assert.throws(() => dynamicRuleset.replace(42), TypeError);
 assert.throws(() => dynamicRuleset.replace([]), TypeError);
 
+// SpatialRulesError is a real Error subclass carrying a stable code (ADR-0005).
+const directError = new SpatialRulesError('boom', 'SR_TEST');
+assert.ok(directError instanceof Error);
+assert.equal(directError.name, 'SpatialRulesError');
+assert.equal(directError.code, 'SR_TEST');
+assert.equal(directError.message, 'boom');
+
+// Empty candidate batch: every terminal derives from an empty mask.
+const emptyCandidates = Buffer.from(JSON.stringify({ type: 'FeatureCollection', features: [] }));
+const emptyResult = ruleset.query(emptyCandidates, intersects);
+assert.deepEqual(Array.from(emptyResult.toMask()), []);
+assert.deepEqual(Array.from(emptyResult.toIndices()), []);
+assert.deepEqual(Array.from(emptyResult.invalidIndices()), []);
+assert.equal(emptyResult.count(), 0);
+assert.deepEqual(emptyResult.summary(), { matched: 0, notMatched: 0, invalid: 0 });
+const emptyGeojson = JSON.parse(emptyResult.toGeoJson());
+assert.equal(emptyGeojson.type, 'FeatureCollection');
+assert.deepEqual(emptyGeojson.features, []);
+
+// A single Feature (not wrapped in a FeatureCollection) is accepted and
+// round-trips through toGeoJson (the wrapper's `[parsed]` branch).
+const singleFeature = Buffer.from(JSON.stringify({
+  type: 'Feature',
+  id: 'solo',
+  properties: { name: 'solo' },
+  geometry: { type: 'Polygon', coordinates: [[[2, 2], [2, 4], [4, 4], [4, 2], [2, 2]]] },
+}));
+const soloResult = ruleset.query(singleFeature, intersects);
+assert.deepEqual(Array.from(soloResult.toMask()), [1]);
+const soloGeojson = JSON.parse(soloResult.toGeoJson());
+assert.equal(soloGeojson.type, 'FeatureCollection');
+assert.equal(soloGeojson.features.length, 1);
+assert.equal(soloGeojson.features[0].id, 'solo');
+assert.equal(soloGeojson.features[0].properties.name, 'solo');
+
 console.log('smoke test passed');

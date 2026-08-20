@@ -21,7 +21,8 @@ below is unchanged; only the duplication moved into that module.
 | Error model | `core/src/error.rs` (unit), `core/tests/error_matrix.rs` | every `SR_*` code reachable by a documented input |
 | Edge/input matrix | `core/tests/edge_matrix.rs` | empty, missing id, BOM, NaN/Infinity, antimeridian, unsupported types, skipped property types |
 | Property invariants | `core/tests/proptest.rs` | DE-9IM identities, `WhereExpr` eval totality, batch alignment on random inputs |
-| Node binding | `node/test/smoke.mjs` | mask + rich + overlap + canonical + async + `SR_*` surfacing (Node + Bun) |
+| Public API surface (exported-name seam) | `core/tests/api_surface.rs` | pins every **exported** function directly (so a rename/drop loses coverage loudly); complements the area owners above: `rule_from_feature`/`candidate_from_feature`, numeric feature ids, `build_spatial_index` + concrete index builders + `query_envelope_into` dedup/reuse, `Query` builders, predicate string round-trips, `Engine::new`/`replace`/`query_mask`, `classify_candidate`, `SpatialError` constructors, prepared-geometry handle, `PropertyValue` ordering |
+| Node binding | `node/test/smoke.mjs` | mask + rich + overlap + canonical + async + `SR_*` surfacing + dynamic input types + empty batch + single-feature input + `SpatialRulesError` class (Node + Bun) |
 
 ## Definition of done
 
