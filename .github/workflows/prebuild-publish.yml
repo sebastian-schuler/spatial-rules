@@ -122,7 +122,7 @@ jobs:
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           for dir in npm/*/; do
-            name="$(basename "$dir")"
+            name="$(node -p "require('./${dir}package.json').name")"
             if npm view "$name@$VERSION" version >/dev/null 2>&1; then
               echo "skip $name@$VERSION (already published)"
             else
