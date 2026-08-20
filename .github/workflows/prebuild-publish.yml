@@ -24,12 +24,12 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64-gnu
-            zig: true
+            zig: false
             musl: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             platform: linux-arm64-musl
-            zig: true
+            zig: false
             musl: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install zig (for cross-compile)
+      - name: Install zig (x64 musl)
         if: matrix.zig
         run: |
           set -euxo pipefail
@@ -59,6 +59,16 @@ jobs:
             https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
           tar -C /tmp -xf /tmp/zig.tar.xz
           echo "/tmp/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
+      - name: Install aarch64 glibc cross-gcc
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install aarch64 musl cross-gcc
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o /tmp/musl.tgz https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar -C /tmp -xf /tmp/musl.tgz
+          echo "/tmp/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
         working-directory: node
         run: npm install
@@ -66,12 +76,27 @@ jobs:
         shell: bash
         working-directory: node
         run: |
-          ZIG=""
-          [ "${{ matrix.zig }}" = "true" ] && ZIG="--zig"
-          RUSTFLAGS=""
-          # musl cdylib needs a dynamic crt (napi-rs FAQ); glibc builds must not.
-          [ "${{ matrix.musl }}" = "true" ] && RUSTFLAGS="-C target-feature=-crt-static"
-          RUSTFLAGS="$RUSTFLAGS" npx napi build --target ${{ matrix.target }} --release $ZIG
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-gnu)
+              # zig rejects rustc's --fix-cortex-a53-843419; use a real glibc
+              # cross-gcc, which supports it.
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+                npx napi build --target ${{ matrix.target }} --release
+              ;;
+            aarch64-unknown-linux-musl)
+              # musl cdylib needs a dynamic crt; musl.cc gcc links it.
+              RUSTFLAGS="-C target-feature=-crt-static" \
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
+                npx napi build --target ${{ matrix.target }} --release
+              ;;
+            x86_64-unknown-linux-musl)
+              RUSTFLAGS="-C target-feature=-crt-static" \
+                npx napi build --target ${{ matrix.target }} --release --zig
+              ;;
+            *)
+              npx napi build --target ${{ matrix.target }} --release
+              ;;
+          esac
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
