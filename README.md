@@ -50,10 +50,12 @@ The short version:
   country), turf's bbox fast-reject dips under the addon's ~5 ms per-call
   floor (parse + FFI). Everywhere realistic, the engine wins — usually by
   10–1,000×.
-- **Memory**: the production container workload peaks at ~65 MB resident
-  (comfortably inside a 128 MB limit), repeated ruleset replacements leak
-  nothing, and footprint scales with **rule count**, not coordinate count —
-  ~1–3 kB/rule steady, so 100k rules ≈ 120–260 MiB.
+- **Memory**: the production 30-rule workload peaks at ~65 MB resident
+  (comfortably inside a 128 MB limit) and repeated ruleset replacements leak
+  nothing. Rulesets size by **rule count**, not coordinate count (~1–3 kB/rule
+  — 100k rules ≈ 120–260 MiB of ruleset); a serving process also holds a
+  per-thread prepared-geometry cache on top, which can multiply that several×
+  at high rule counts (deferred to the geo 0.34 upgrade).
 
 ## What it does
 

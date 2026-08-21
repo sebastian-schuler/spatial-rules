@@ -168,31 +168,46 @@ each grid cell in its own child process so peaks measure that cell alone.
 process, default grid, 20 atomic replacements, 20 × 1,000-candidate query
 batches):
 
-| rules × verts | total verts | build | steady delta | bytes/rule | bytes/1M verts | query rate* |
+| rules × verts | total verts | build | ruleset steady* | bytes/rule | after 1st query** | query rate*** |
 |---|---|---|---|---|---|---|
-| 1,000 × 10 | 10,000 | 1 ms | 1.9 MiB | 1.96 kB | 196 MB | 8.9 M cand/s |
-| 1,000 × 100 | 100,000 | 42 ms | 3.3 MiB | 3.50 kB | 35 MB | 7.8 M |
-| 1,000 × 1,000 | 1,000,000 | 3.9 s | 17.6 MiB | 18.4 kB | 18 MB | 3.9 M |
-| 10,000 × 10 | 100,000 | 13 ms | 13.3 MiB | 1.39 kB | 139 MB | 9.8 M |
-| 10,000 × 100 | 1,000,000 | 426 ms | 27.4 MiB | 2.87 kB | 29 MB | 7.3 M |
-| 100,000 × 10 | 1,000,000 | 138 ms | 117.8 MiB | 1.24 kB | 124 MB | 9.3 M |
-| 100,000 × 100 | 10,000,000 | 4.5 s | 260.1 MiB | 2.73 kB | 27 MB | 7.1 M |
+| 1,000 × 10 | 10,000 | 1 ms | 1.9 MiB | 1.96 kB | 8.9 MiB | 8.9 M cand/s |
+| 1,000 × 100 | 100,000 | 42 ms | 3.3 MiB | 3.50 kB | 23.6 MiB | 7.8 M |
+| 1,000 × 1,000 | 1,000,000 | 3.9 s | 17.6 MiB | 18.4 kB | 164 MiB | 3.9 M |
+| 10,000 × 10 | 100,000 | 13 ms | 13.3 MiB | 1.39 kB | 41.7 MiB | 9.8 M |
+| 10,000 × 100 | 1,000,000 | 426 ms | 27.4 MiB | 2.87 kB | 185 MiB | 7.3 M |
+| 100,000 × 10 | 1,000,000 | 138 ms | 117.8 MiB | 1.24 kB | 359 MiB | 9.3 M |
+| 100,000 × 100 | 10,000,000 | 4.5 s | 260.1 MiB | 2.73 kB | **1.78 GiB** | 7.1 M |
 
-\* steady-state candidates/sec across the 20 timed batches (cold first batch
-excluded, ADR-0010 prepare is warmed).
+\* ruleset-only steady state (post-build, pre-query; the 1,000 fixed candidates
+are a small constant). \*\* resident right after the cold query — ruleset +
+the per-thread **prepared-geometry cache** (ADR-0010), which a serving process
+holds for the ruleset's lifetime. \*\*\* steady-state candidates/sec across the
+20 timed batches (cold first batch excluded, ADR-0010 prepare is warmed).
 
 **Findings:**
 
-- **Memory tracks rule count, not coordinate count.** The same 1M vertices
-  cost ~7× more resident when spread across 100k tiny 10-vertex rules
-  (124 MB/1M verts) than across 1k 1,000-vertex rules (18 MB/1M). The steady
-  footprint is dominated by **per-rule fixed overhead** — envelope + R*-tree
-  entry + property-key table + prepared-geometry slot, ~1.2–2 kB/rule — plus
-  ~18 bytes per coordinate. So bytes/vertex *falls* as rings get complex
-  (196 → 35 → 18 B/vert at 10/100/1,000 verts), while bytes/rule grows only
-  1.2 → 18 kB. A national zoning dataset therefore sizes almost purely by rule
-  count: ~1.2–2.7 kB/rule steady (118–260 MiB at 100k rules) — fits a 256 MB
-  container for typical shapes.
+- **The ruleset sizes by rule count, not coordinate count.** The same 1M
+  vertices cost ~7× more resident as *rules* when spread across 100k tiny
+  10-vertex rules (124 MB/1M verts) than across 1k 1,000-vertex rules
+  (18 MB/1M). The steady ruleset footprint is dominated by **per-rule fixed
+  overhead** — envelope + R*-tree entry + property-key table, ~1.2–2 kB/rule —
+  plus ~18 bytes per coordinate. So bytes/vertex *falls* as rings get complex
+  (196 → 35 → 18 B/vert at 10/100/1,000 verts) while bytes/rule grows only
+  1.2 → 18 kB. A national zoning ruleset therefore sizes almost purely by rule
+  count: ~1.2–2.7 kB/rule steady (118–260 MiB for 100k rules) — but that is
+  the **data alone**, not what a serving process holds.
+- **Serving holds more than the ruleset: the prepared-geometry cache
+  (ADR-0010).** The first query on a thread clones every rule's geometry into
+  a prepared form (with an internal edge R-tree) and keeps it in a per-thread
+  cache for the ruleset's lifetime — measured on top of the ruleset:
+  ~2.4 kB/rule at 10-vertex rings, ~15 kB/rule at 100, ~142 kB/rule at 1,000
+  (≈ ×2–8 the ruleset, and several× at complex geometries). So after the first
+  query 100k rules is ~359 MiB resident at 10-vertex rings and **~1.8 GiB** at
+  100-vertex rings — not the 118–260 MiB ruleset alone — and that is **per
+  thread** (`queryAsync`'s threadpool holds one copy per worker). This is the
+  known geo 0.34 deferral (post-v1 ticket 05: owned per-thread clones →
+  borrowed `Arc`-shared prepared forms). At the production 30-rule shape the
+  cache is small and the container's ~65 MB peak stands.
 - **No per-replacement leak.** The 5%-tolerance `bounded` verdict is
   conservative on Windows: the allocator grows committed arenas during the
   first ~35 swaps (~100 MiB at 1k×1k) before plateauing, and 20 swaps (the
@@ -204,9 +219,11 @@ excluded, ADR-0010 prepare is warmed).
   stepwise-with-drops shape but run only 20 swaps, so no plateau is observed;
   no leak claim either way, pending a longer Linux run.
 - **queries/sec per GB of RAM** (the sizing metric) = steady-state
-  candidates/sec ÷ steady-state footprint: ~220 M cand/s/GB at 1k×1k
-  (3.9 M ÷ 18 MiB) down to ~28 M cand/s/GB at 100k×100 — per-rule overhead,
-  not throughput, is the binding constraint at high rule counts.
+  candidates/sec ÷ resident footprint. Against the *ruleset alone* that is
+  ~220 M cand/s/GB at 1k×1k (3.9 M ÷ 18 MiB) down to ~28 M cand/s/GB at
+  100k×100; against the *serving* footprint (incl. the prepared cache) it is
+  several× lower at high rule counts — per-rule overhead and the prepared
+  cache, not raw throughput, are the binding constraints at scale.
 - **Build is the other lever.** Strict validation is quadratic in ring
   vertices, so `1000×1000` builds in 3.9 s while the same 1M vertices as
   `100000×10` builds in 138 ms; the `10000×1000`/`100000×1000` corners are

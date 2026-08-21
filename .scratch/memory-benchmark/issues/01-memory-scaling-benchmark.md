@@ -55,12 +55,17 @@ Implemented (measurement code + docs, no behavior change).
   a ~120 s wall-time budget (`capped_replacements`), with live progress so a
   long cell never looks stuck.
 - **Results recorded in `docs/benchmarks.md` §Memory**: 7-cell scaling table
-  (build, steady-state delta, bytes/rule, bytes/1M verts, query rate) +
-  findings. Headline: memory tracks **rule count, not coordinate count**
-  (~1.2–2.7 kB/rule steady; 100k rules ≈ 118–260 MiB), and the 50-swap probe
-  proves **no per-replacement leak** (RSS plateaus flat at 270.7 MiB; the
-  `bounded: false` verdicts on Windows reflect allocator arena warmup, not a
-  leak). Queries/sec per GB of RAM reported as the sizing metric.
+  (build, ruleset steady-state delta, serving footprint after the first query,
+  bytes/rule, query rate) + findings. Headline: the ruleset tracks **rule
+  count, not coordinate count** (~1.2–2.7 kB/rule steady; 100k rules ≈
+  118–260 MiB of ruleset), and the 50-swap probe proves **no per-replacement
+  leak** (RSS plateaus flat at 270.7 MiB; the `bounded: false` verdicts on
+  Windows reflect allocator arena warmup, not a leak). Queries/sec per GB of
+  RAM reported as the sizing metric. **Serving footprint** measured too: the
+  per-thread prepared-geometry cache (ADR-0010) adds ~2.4/15/142 kB per rule
+  at 10/100/1,000 vertices on top of the ruleset — ~359 MiB (100k×10) to
+  ~1.8 GiB (100k×100) resident after the first query, the geo 0.34 deferral
+  (post-v1 ticket 05).
 - **Caveats**: the `10000×1000`/`100000×1000` corners are excluded from the
   default grid (hours per build); the big cells' plateau is unobserved within
   20 swaps, so no leak claim either way until a longer Linux run.
