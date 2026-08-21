@@ -9,7 +9,7 @@ contribution process see [CONTRIBUTING.md](CONTRIBUTING.md).
 ```
 core/        pure-Rust engine (Ruleset, Engine, query pipeline, indexes)
 node/        napi-rs addon + JS wrapper + per-platform npm packages
-benchmarks/  criterion algorithm ladder + turf.js baseline + dataset
+benchmarks/  criterion algorithm ladder + turf.js baseline + dataset + memory scaling harness
 integration/ Bun + Express app + Docker image + memory harness
 docs/        CONTEXT.md, Initial-plan.md, benchmarks.md, adr/
 ```
@@ -34,6 +34,7 @@ bun install                        # once: harness deps (turf, rbush, express)
 bun run bench                      # list every command
 bun run bench build                # build binding (+ copy) + cross_check binary
 bun run bench cross-check && bun run bench perf
+bun run bench memory-scale            # scaling & lifecycle memory grid
 bun run bench all                  # full battery
 
 # Docker integration (server + memory measurement)

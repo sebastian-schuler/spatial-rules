@@ -51,8 +51,9 @@ The short version:
   floor (parse + FFI). Everywhere realistic, the engine wins — usually by
   10–1,000×.
 - **Memory**: the production container workload peaks at ~65 MB resident
-  (comfortably inside a 128 MB limit) and repeated ruleset replacements leak
-  nothing.
+  (comfortably inside a 128 MB limit), repeated ruleset replacements leak
+  nothing, and footprint scales with **rule count**, not coordinate count —
+  ~1–3 kB/rule steady, so 100k rules ≈ 120–260 MiB.
 
 ## What it does
 

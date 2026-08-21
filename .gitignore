@@ -20,3 +20,6 @@ benchmarks/data/deu.geojson
 
 # Environment variables (local development only)
 .env
+
+# Throwaway local scratch/benchmark output (never part of the source).
+tmp/

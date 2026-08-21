@@ -38,12 +38,13 @@ hardest design problem on the roadmap and every P1 feature (and the Postgres
 value proposition) presupposes an answer. It should be settled as an ADR
 before code.
 
-## P0 — Memory benchmark
+## P0 — Memory benchmark (shipped)
 
-Fast and cheap; produces facts later decisions cite. See
-`.scratch/memory-benchmark/issues/01-memory-scaling-benchmark.md`. Extends the
-peak-RSS method already recorded in `docs/benchmarks.md` §Memory
-(architecture-hardening issue 09).
+Produced the facts later decisions cite. Harness + results in
+`docs/benchmarks.md` §Memory (memory-benchmark ticket 01, resolved): memory
+tracks **rule count, not coordinate count** (~1.2–2.7 kB/rule steady; 100k
+rules ≈ 118–260 MiB), no per-replacement leak, ~65 MB peak in the production
+container against a 128 MB bound.
 
 ## P1 — From matches to decisions
 
