@@ -14,6 +14,7 @@
 //   smoke        integration smoke (server must be running)
 //   memory       container memory harness [--replacements-only]
 //   memory-scale memory scaling & lifecycle benchmark (rules × vertices grid)
+//   memory-turf  engine vs turf.js memory footprint (same synthetic rules)
 //   smoke:node   node package smoke test
 //   crit         criterion algorithm ladder
 //   all          full battery (build + gen if needed; then cross-check/scale/fair/complex/crossover/perf/http/memory)
@@ -45,6 +46,7 @@ const SERVER_BENCH = join(REPO_ROOT, 'benchmarks', 'js', 'server-bench.mjs');
 const CROSS_CHECK = join(REPO_ROOT, 'benchmarks', 'js', 'cross_check.mjs');
 const MEMORY = join(REPO_ROOT, 'integration', 'memory.mjs');
 const MEMORY_SCALE_BIN = join(REPO_ROOT, 'target', 'release', `memory_scaling${process.platform === 'win32' ? '.exe' : ''}`);
+const MEMORY_TURF = join(REPO_ROOT, 'benchmarks', 'js', 'memory-turf.mjs');
 const SERVER = join(REPO_ROOT, 'integration', 'server.mjs');
 const SMOKE = join(REPO_ROOT, 'integration', 'smoke.mjs');
 const NODE_SMOKE = join(REPO_ROOT, 'node', 'test', 'smoke.ts');
@@ -223,6 +225,7 @@ usage: bun run bench <cmd> [flags]
   smoke         integration smoke (server must be running)
   memory        container memory harness  [--replacements-only]
   memory-scale  memory scaling & lifecycle benchmark [--cells= --rules= --vertices= --candidates= --query-batches= --replacements=]
+  memory-turf   engine vs turf.js memory footprint, same synthetic rules [--cells=]
   smoke:node    node package smoke test
   crit          criterion algorithm ladder (cargo bench)
   all           full battery (build + gen if needed)
@@ -260,6 +263,7 @@ switch (cmd) {
   case 'smoke': run('bun', [SMOKE, ...args]); break;
   case 'memory': ensureNodeBinding(); run('bun', [MEMORY, ...args]); break;
   case 'memory-scale': cmdMemoryScale(args); break;
+  case 'memory-turf': run('bun', [MEMORY_TURF, ...args]); break;
   case 'smoke:node': ensureNodeBinding(); run('bun', [NODE_SMOKE, ...args]); break;
   case 'crit': cmdCrit(args); break;
   case 'all': await cmdAll(); break;

@@ -53,9 +53,10 @@ The short version:
 - **Memory**: the production 30-rule workload peaks at ~65 MB resident
   (comfortably inside a 128 MB limit) and repeated ruleset replacements leak
   nothing. Rulesets size by **rule count**, not coordinate count (~1–3 kB/rule
-  — 100k rules ≈ 120–260 MiB of ruleset); a serving process also holds a
-  per-thread prepared-geometry cache on top, which can multiply that several×
-  at high rule counts (deferred to the geo 0.34 upgrade).
+  — 100k rules ≈ 120–260 MiB of ruleset), and are ~2–5× smaller than a turf.js
+  baseline holding the same data; a serving process also holds a per-thread
+  prepared-geometry cache on top, which can multiply that several× at high
+  rule counts (deferred to the geo 0.34 upgrade).
 
 ## What it does
 

@@ -65,7 +65,10 @@ Implemented (measurement code + docs, no behavior change).
   per-thread prepared-geometry cache (ADR-0010) adds ~2.4/15/142 kB per rule
   at 10/100/1,000 vertices on top of the ruleset — ~359 MiB (100k×10) to
   ~1.8 GiB (100k×100) resident after the first query, the geo 0.34 deferral
-  (post-v1 ticket 05).
+  (post-v1 ticket 05). **turf comparison** (`bun run bench memory-turf`): the
+  engine's ruleset is ~2–5× smaller than the turf baseline's pre-parsed form
+  at typical shapes, and turf beats only the engine's *serving* footprint
+  (i.e. the prepared cache is the outlier, not the data).
 - **Caveats**: the `10000×1000`/`100000×1000` corners are excluded from the
   default grid (hours per build); the big cells' plateau is unobserved within
   20 swaps, so no leak claim either way until a longer Linux run.

@@ -147,7 +147,8 @@ rule counts × vertices per polygon, measures build vs steady-state vs
 query-time resident footprint separately, and checks the lifecycle
 (20 atomic replacements) for retention. Ground truth is process-level RSS
 (`/proc/self/status` VmRSS/VmHWM on Linux, working-set counters on Windows),
-each grid cell in its own child process so peaks measure that cell alone.
+each grid cell in its own child process so peaks measure that cell alone. The
+turf-side footprint comparison (`bun run bench memory-turf`) is below.
 
 - **The default grid is bounded.** The default cell list is
   `1000x10, 1000x100, 1000x1000, 10000x10, 10000x100, 100000x10, 100000x100`
@@ -228,6 +229,44 @@ holds for the ruleset's lifetime. \*\*\* steady-state candidates/sec across the
   vertices, so `1000×1000` builds in 3.9 s while the same 1M vertices as
   `100000×10` builds in 138 ms; the `10000×1000`/`100000×1000` corners are
   excluded from the default grid for this reason (hours per build).
+
+### Engine vs turf memory footprint (`bun run bench memory-turf`)
+
+The same synthetic rules measured in each stack: the engine's indexed ruleset
+and serving footprint (via the `memory_scaling` binary) vs the **turf
+baseline's pre-parsed form** — feature objects + precomputed bboxes, the exact
+representation the timed turf harness holds. The turf side runs each cell in a
+fresh child process and reports a post-forced-GC RSS delta (process-level
+ground truth; Bun's `heapUsed` under-reports nested coordinate arrays):
+
+| rules × verts | engine ruleset | engine serving* | turf baseline | turf / ruleset |
+|---|---|---|---|---|
+| 1,000 × 10 | 1.9 MiB | 4.6 MiB | 3.4 MiB | 1.8× |
+| 1,000 × 100 | 3.4 MiB | 19.1 MiB | 15.9 MiB | 4.7× |
+| 1,000 × 1,000 | 17.6 MiB | 159.5 MiB | 85.7 MiB | 4.9× |
+| 10,000 × 10 | 13.3 MiB | 37.4 MiB | 21.9 MiB | 1.6× |
+| 10,000 × 100 | 27.4 MiB | 180.4 MiB | 89.0 MiB | 3.2× |
+| 100,000 × 10 | 117.8 MiB | 354.5 MiB | 133.8 MiB | 1.1× |
+| 100,000 × 100 | 260.3 MiB | 1.78 GiB | 639.4 MiB | 2.5× |
+
+\* serving = ruleset + per-thread prepared-geometry cache (ADR-0010), after the
+first query.
+
+- **The engine's ruleset is the memory win.** At typical zoning shapes (100
+  and 1,000 vertices/ring) turf needs **~2.5–5×** the memory to *hold* the
+  same data: ~50–90 bytes per coordinate as pre-parsed JS vs ~18–27 B/coord
+  (+~1.2 kB/rule fixed) in the indexed ruleset. Turf never beats the ruleset
+  at any cell.
+- **The gap narrows for tiny rules.** At 10-vertex rings turf is only ~1–2×
+  the ruleset — per-rule index overhead dominates both sides when the geometry
+  itself is trivial (the engine's fixed ~1.2 kB/rule is real).
+- **The one place turf wins is the engine's *serving* footprint.** The
+  per-thread prepared-geometry cache (2.4–142 kB/rule) dwarfs both the ruleset
+  and the turf baseline at complex geometries, so a serving engine holds more
+  than turf holding the same data would. This is the known geo 0.34 deferral
+  (post-v1 ticket 05) — owned per-thread clones → borrowed `Arc`-shared
+  prepared forms — and it is what the *data* comparison above shows the cache
+  costs.
 
 Measured inside the `spatial-rules` Docker image (oven/bun:1.3.14 — pinned to
 CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates:
@@ -547,6 +586,7 @@ bun run bench smoke          # integration smoke (server must be running)
 bun run bench memory         # container memory (§24/§25)
 bun run bench memory --replacements-only   # isolate replacement peak
 bun run bench memory-scale   # scaling & lifecycle grid [--cells= --rules= --vertices=]
+bun run bench memory-turf    # engine vs turf.js memory footprint [--cells=]
 bun run bench smoke:node     # node package smoke test
 bun run bench crit           # criterion ladder
 bun run bench all            # full battery (build + gen if needed)
