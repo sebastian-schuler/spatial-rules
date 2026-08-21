@@ -138,6 +138,80 @@ because the application runs in constrained containers". Harness:
 `bun run bench memory` (or `bun run bench memory --replacements-only` to
 isolate the replacement peak).
 
+### Memory scaling & lifecycle (`bun run bench memory-scale`)
+
+The scaling picture beyond the single container baseline (memory-benchmark
+ticket 01): `benchmarks/src/memory_scaling.rs` + the `memory_scaling` binary.
+Answers **does memory track rule count or coordinate count** across a grid of
+rule counts × vertices per polygon, measures build vs steady-state vs
+query-time resident footprint separately, and checks the lifecycle
+(20 atomic replacements) for retention. Ground truth is process-level RSS
+(`/proc/self/status` VmRSS/VmHWM on Linux, working-set counters on Windows),
+each grid cell in its own child process so peaks measure that cell alone.
+
+- **The default grid is bounded.** The default cell list is
+  `1000x10, 1000x100, 1000x1000, 10000x10, 10000x100, 100000x10, 100000x100`
+  (`--cells=rules1xverts1,...` in `benchmarks.json`), which completes in ~5–8
+  minutes. Strict validation is quadratic in per-ring vertex count (the
+  `10000×1000` cell builds in ~45 s, `100000×1000` in ~8 min per build), so the
+  full `--rules × --vertices` cross product would take hours — pass those flags
+  explicitly only when you want the full grid. The aggregate harness also
+  **caps each cell's replacement count** to a ~120 s wall-time budget
+  (`capped_replacements`), so even an over-large request never looks stuck.
+- Cell progress streams live to stderr (parent buffers stdout for the JSON
+  report only), so long cells never appear frozen.
+- Headline output: **bytes per million vertices** and **bytes per rule** in the
+  steady-state delta (memory to size a container for a national dataset), plus
+  the lifecycle `bounded` verdict and per-swap RSS/commit traces.
+
+**Results** (release profile, Windows, 2026-08-22; each cell in a fresh child
+process, default grid, 20 atomic replacements, 20 × 1,000-candidate query
+batches):
+
+| rules × verts | total verts | build | steady delta | bytes/rule | bytes/1M verts | query rate* |
+|---|---|---|---|---|---|---|
+| 1,000 × 10 | 10,000 | 1 ms | 1.9 MiB | 1.96 kB | 196 MB | 8.9 M cand/s |
+| 1,000 × 100 | 100,000 | 42 ms | 3.3 MiB | 3.50 kB | 35 MB | 7.8 M |
+| 1,000 × 1,000 | 1,000,000 | 3.9 s | 17.6 MiB | 18.4 kB | 18 MB | 3.9 M |
+| 10,000 × 10 | 100,000 | 13 ms | 13.3 MiB | 1.39 kB | 139 MB | 9.8 M |
+| 10,000 × 100 | 1,000,000 | 426 ms | 27.4 MiB | 2.87 kB | 29 MB | 7.3 M |
+| 100,000 × 10 | 1,000,000 | 138 ms | 117.8 MiB | 1.24 kB | 124 MB | 9.3 M |
+| 100,000 × 100 | 10,000,000 | 4.5 s | 260.1 MiB | 2.73 kB | 27 MB | 7.1 M |
+
+\* steady-state candidates/sec across the 20 timed batches (cold first batch
+excluded, ADR-0010 prepare is warmed).
+
+**Findings:**
+
+- **Memory tracks rule count, not coordinate count.** The same 1M vertices
+  cost ~7× more resident when spread across 100k tiny 10-vertex rules
+  (124 MB/1M verts) than across 1k 1,000-vertex rules (18 MB/1M). The steady
+  footprint is dominated by **per-rule fixed overhead** — envelope + R*-tree
+  entry + property-key table + prepared-geometry slot, ~1.2–2 kB/rule — plus
+  ~18 bytes per coordinate. So bytes/vertex *falls* as rings get complex
+  (196 → 35 → 18 B/vert at 10/100/1,000 verts), while bytes/rule grows only
+  1.2 → 18 kB. A national zoning dataset therefore sizes almost purely by rule
+  count: ~1.2–2.7 kB/rule steady (118–260 MiB at 100k rules) — fits a 256 MB
+  container for typical shapes.
+- **No per-replacement leak.** The 5%-tolerance `bounded` verdict is
+  conservative on Windows: the allocator grows committed arenas during the
+  first ~35 swaps (~100 MiB at 1k×1k) before plateauing, and 20 swaps (the
+  budget-capped default) can sit inside that warmup, so several cells report
+  `bounded: false`. The traces rule out a leak: RSS climbs in **steps with
+  drops** and tracks commit, and a 50-swap probe at 1k×1k **plateaus flat at
+  270.7 MiB** (swaps 36–50 constant to ±0.1 MiB) rather than climbing
+  linearly — a leak keeps climbing. The big cells (100k×100) show the same
+  stepwise-with-drops shape but run only 20 swaps, so no plateau is observed;
+  no leak claim either way, pending a longer Linux run.
+- **queries/sec per GB of RAM** (the sizing metric) = steady-state
+  candidates/sec ÷ steady-state footprint: ~220 M cand/s/GB at 1k×1k
+  (3.9 M ÷ 18 MiB) down to ~28 M cand/s/GB at 100k×100 — per-rule overhead,
+  not throughput, is the binding constraint at high rule counts.
+- **Build is the other lever.** Strict validation is quadratic in ring
+  vertices, so `1000×1000` builds in 3.9 s while the same 1M vertices as
+  `100000×10` builds in 138 ms; the `10000×1000`/`100000×1000` corners are
+  excluded from the default grid for this reason (hours per build).
+
 Measured inside the `spatial-rules` Docker image (oven/bun:1.3.14 — pinned to
 CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates:
 
@@ -455,6 +529,7 @@ bun run bench server         # start the integration server
 bun run bench smoke          # integration smoke (server must be running)
 bun run bench memory         # container memory (§24/§25)
 bun run bench memory --replacements-only   # isolate replacement peak
+bun run bench memory-scale   # scaling & lifecycle grid [--cells= --rules= --vertices=]
 bun run bench smoke:node     # node package smoke test
 bun run bench crit           # criterion ladder
 bun run bench all            # full battery (build + gen if needed)
@@ -485,6 +560,7 @@ the harnesses read, with the flag that overrides it:
 | `http` | `iters` | `--iters` | `10` |
 | `load` | `endpoint` `concurrency` `duration` | `--endpoint` `--concurrency` `--duration` | `json` `25` `10000` |
 | `memory` | `queryBatches` `replacements` `replacementsOnly` | `--query-batches` `--replacements` `--replacements-only` | `20` `10` `false` |
+| `memoryScale` | `cells` `rules` `vertices` `candidates` `queryBatches` `replacements` | `--cells` `--rules` `--vertices` `--candidates` `--query-batches` `--replacements` | `1000x10,…,100000x100` `1000,10000,100000` `10,100,1000` `1000` `20` `20` |
 
 `rulesFile: null` means synthetic mode; set it (or pass `--rules-file=…`) to run
 against a real GeoJSON boundary file. Paths are repo-root-relative. There are no
