@@ -54,5 +54,13 @@
         "queryBatches": 20,
         "replacements": 10,
         "replacementsOnly": false
+    },
+    "memoryScale": {
+        "cells": "1000x10,1000x100,1000x1000,10000x10,10000x100,100000x10,100000x100",
+        "rules": "1000,10000,100000",
+        "vertices": "10,100,1000",
+        "candidates": 1000,
+        "queryBatches": 20,
+        "replacements": 20
     }
 }

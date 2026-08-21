@@ -25,14 +25,14 @@ const CLASSIFICATIONS: [&str; 5] = [
 ];
 
 /// A tiny deterministic LCG — no external RNG dependency.
-struct Rng(u64);
+pub struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub fn new(seed: u64) -> Self {
         Rng(seed)
     }
 
-    fn next_u64(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         self.0 = self
             .0
             .wrapping_mul(6_364_136_223_846_793_005)
@@ -40,7 +40,7 @@ impl Rng {
         self.0
     }
 
-    fn f64(&mut self) -> f64 {
+    pub fn f64(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
     }
 

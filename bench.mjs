@@ -13,6 +13,7 @@
 //   server       start the integration server
 //   smoke        integration smoke (server must be running)
 //   memory       container memory harness [--replacements-only]
+//   memory-scale memory scaling & lifecycle benchmark (rules × vertices grid)
 //   smoke:node   node package smoke test
 //   crit         criterion algorithm ladder
 //   all          full battery (build + gen if needed; then cross-check/scale/fair/complex/crossover/perf/http/memory)
@@ -43,6 +44,7 @@ const SWEEPS = join(REPO_ROOT, 'benchmarks', 'js', 'sweeps.mjs');
 const SERVER_BENCH = join(REPO_ROOT, 'benchmarks', 'js', 'server-bench.mjs');
 const CROSS_CHECK = join(REPO_ROOT, 'benchmarks', 'js', 'cross_check.mjs');
 const MEMORY = join(REPO_ROOT, 'integration', 'memory.mjs');
+const MEMORY_SCALE_BIN = join(REPO_ROOT, 'target', 'release', `memory_scaling${process.platform === 'win32' ? '.exe' : ''}`);
 const SERVER = join(REPO_ROOT, 'integration', 'server.mjs');
 const SMOKE = join(REPO_ROOT, 'integration', 'smoke.mjs');
 const NODE_SMOKE = join(REPO_ROOT, 'node', 'test', 'smoke.ts');
@@ -169,6 +171,38 @@ async function cmdAll() {
   console.log('\n`load` (concurrency) needs a running server — `bun run bench server`, then `bun run bench load`.');
 }
 
+function cmdMemoryScale(args) {
+  if (!existsSync(MEMORY_SCALE_BIN)) {
+    console.log('memory_scaling binary missing — building (release)...');
+    run('cargo', ['build', '--release', '-p', 'spatial-rules-benchmarks', '--bin', 'memory_scaling']);
+  }
+  const section = CONFIG.memoryScale ?? {};
+  // Explicit cells win over the rules × vertices cross product. `--cells` is
+  // the default grid (bounded so a default run always finishes); pass
+  // `--rules= --vertices=` to run a full cross product instead.
+  const overridden = new Set(args.map((arg) => arg.split('=')[0]));
+  const defaults = [];
+  if (
+    section.cells &&
+    !overridden.has('--cells') &&
+    !overridden.has('--rules') &&
+    !overridden.has('--vertices')
+  ) {
+    defaults.push(`--cells=${section.cells}`);
+  } else {
+    defaults.push(`--rules=${section.rules ?? '1000,10000,100000'}`);
+    defaults.push(`--vertices=${section.vertices ?? '10,100,1000'}`);
+  }
+  for (const [key, value] of [
+    ['--candidates', section.candidates ?? 1000],
+    ['--query-batches', section.queryBatches ?? 20],
+    ['--replacements', section.replacements ?? 20],
+  ]) {
+    if (!overridden.has(key)) defaults.push(`${key}=${value}`);
+  }
+  run(MEMORY_SCALE_BIN, [...defaults, ...args]);
+}
+
 function printHelp() {
   console.log(`spatial-rules benchmark & integration harness
 
@@ -188,6 +222,7 @@ usage: bun run bench <cmd> [flags]
   server        start the integration server
   smoke         integration smoke (server must be running)
   memory        container memory harness  [--replacements-only]
+  memory-scale  memory scaling & lifecycle benchmark [--cells= --rules= --vertices= --candidates= --query-batches= --replacements=]
   smoke:node    node package smoke test
   crit          criterion algorithm ladder (cargo bench)
   all           full battery (build + gen if needed)
@@ -224,6 +259,7 @@ switch (cmd) {
   case 'server': ensureNodeBinding(); run('bun', [SERVER, ...args]); break;
   case 'smoke': run('bun', [SMOKE, ...args]); break;
   case 'memory': ensureNodeBinding(); run('bun', [MEMORY, ...args]); break;
+  case 'memory-scale': cmdMemoryScale(args); break;
   case 'smoke:node': ensureNodeBinding(); run('bun', [NODE_SMOKE, ...args]); break;
   case 'crit': cmdCrit(args); break;
   case 'all': await cmdAll(); break;

@@ -1257,6 +1257,7 @@ dependencies = [
  "criterion",
  "geo",
  "geojson",
+ "serde",
  "serde_json",
  "spatial-rules-core",
 ]

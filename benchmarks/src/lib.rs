@@ -2,3 +2,5 @@
 //! the algorithm ladder (ticket 12).
 
 pub mod dataset;
+pub mod memory_scaling;
+pub mod rss;
