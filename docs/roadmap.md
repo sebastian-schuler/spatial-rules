@@ -46,7 +46,9 @@ track **rule count, not coordinate count** (~1.2–2.7 kB/rule steady; 100k
 rules ≈ 118–260 MiB of ruleset; serving adds a per-thread prepared-geometry
 cache — the geo 0.34 deferral), the ruleset is ~2–5× smaller than a turf.js
 baseline holding the same data, no per-replacement leak, ~65 MB peak for the
-30-rule production workload against a 128 MB bound.
+30-rule production workload against a 128 MB bound. Follow-up (ticket 02):
+**lazy per-rule prepared geometries**, making serving memory proportional to
+the rules candidates actually touch.
 
 ## P1 — From matches to decisions
 
