@@ -8,7 +8,7 @@ use geo::{BoundingRect, Geometry, PreparedGeometry, Rect};
 use crate::candidate::Candidate;
 pub use crate::evaluate::PreparedQuery;
 use crate::error::{ErrorCode, SpatialError};
-use crate::prepared_cache::{get_or_prepare, next_ruleset_id, PreparedGeometries};
+use crate::prepared_cache::{lazy_slots, next_ruleset_id, prepare_all, PreparedGeometries};
 use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
 use crate::query::{CandidateOutcome, Query};
@@ -188,13 +188,24 @@ impl Ruleset {
         }
     }
 
-    /// The prepared rule geometries for this ruleset, cached per thread
-    /// (ADR-0010). A handle indexed by opaque [`RuleId`], so callers (the
+    /// The raw rule slice — crate-internal seam for the lazy prepared-geometry
+    /// memo (ADR-0010), which must reach the geometries it prepares.
+    pub(crate) fn rules_slice(&self) -> &[Rule] {
+        &self.rules
+    }
+
+    /// The prepared rule geometries for this ruleset (ADR-0010). A **dense**
+    /// handle indexed by opaque [`RuleId`] — `len()` is the rule count, `get`
+    /// is valid for any id, `iter` walks ruleset order — so callers (the
     /// benchmark ladder) never reconstruct a positional id-to-index map
     /// (architecture-hardening 04). Cloning the handle is cheap (`Rc`).
+    ///
+    /// This is the eager seam: calling it force-prepares every rule. The
+    /// query path instead prepares lazily, per rule on first touch
+    /// (memory-benchmark ticket 02).
     pub fn prepared(&self) -> PreparedRuleGeometries {
         PreparedRuleGeometries {
-            inner: get_or_prepare(&self.rules, self.id),
+            inner: prepare_all(&self.rules, self.id),
         }
     }
 
@@ -202,43 +213,45 @@ impl Ruleset {
     /// per candidate in input order (ADR-0004). Invalid candidates produce an
     /// [`CandidateOutcome::Invalid`] outcome without failing the batch
     /// (ADR-0005).
+    ///
+    /// Rule geometries are prepared lazily (ADR-0010, memory-benchmark 02):
+    /// the per-thread memo fills per rule on first touch, so serving memory
+    /// stays proportional to the rules candidates actually relate against.
+    /// The relate loop checks a predicted `None` slot per touched rule and
+    /// defers the few first-touch unprepared ones (see `evaluate.rs` — a
+    /// batch-level pre-pass was measured and rejected for regressing
+    /// sparse-touch throughput).
     pub fn query(&self, candidates: &[Candidate], query: &Query) -> Vec<CandidateOutcome> {
-        let prepared = self.prepare(query);
-        candidates
-            .iter()
-            .map(|candidate| prepared.evaluate(candidate))
-            .collect()
+        self.prepare(query).evaluate_all(candidates)
     }
 
     /// Evaluate a batch and return the compact mask (`0` no match, `1`
     /// matched, `2` invalid), without materialising per-match rule ids
-    /// (ADR-0004).
+    /// (ADR-0004). Preparation is lazy per rule on first touch, as in
+    /// [`Ruleset::query`].
     pub fn query_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
-        let prepared = self.prepare(query);
-        candidates
-            .iter()
-            .map(|candidate| prepared.evaluate_mask(candidate))
-            .collect()
+        self.prepare(query).evaluate_mask_all(candidates)
     }
 
-    /// Compile a query into a reusable [`PreparedQuery`] holding the preparation:
-    /// excluded ids, prepared rule geometries (cached per thread, ADR-0010), and
-    /// the indexable `where` set. [`PreparedQuery::evaluate`] and
-    /// [`PreparedQuery::evaluate_mask`] share this one preparation across the
-    /// whole candidate batch. This is the planner hook ADR-0003 reserves — a
-    /// cost-based planner would return a differently-shaped query here.
+    /// Compile a query into a reusable [`PreparedQuery`] holding the planning:
+    /// excluded ids, this thread's lazy prepared-geometry memo (populated on
+    /// first touch, ADR-0010), and the indexable `where` set.
+    /// [`PreparedQuery::evaluate`] and [`PreparedQuery::evaluate_mask`] share
+    /// this one preparation across the whole candidate batch. This is the
+    /// planner hook ADR-0003 reserves — a cost-based planner would return a
+    /// differently-shaped query here.
     pub fn prepare<'a>(&'a self, query: &Query) -> PreparedQuery<'a> {
         let excluded: HashSet<RuleId> = query
             .exclude_rule_ids
             .iter()
             .filter_map(|id| self.rule_id(id))
             .collect();
-        let prepared = get_or_prepare(&self.rules, self.id);
+        let slots = lazy_slots(&self.rules, self.id);
         let where_filter = query
             .where_clause
             .as_ref()
             .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
-        PreparedQuery::new(self, query, excluded, prepared, where_filter)
+        PreparedQuery::new(self, query, excluded, slots, where_filter)
     }
 }
 
@@ -293,6 +306,8 @@ impl PreparedRuleGeometries {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::candidate::Candidate;
+    use crate::prepared_cache;
     use geo::LineString;
 
     fn sample_rules() -> Vec<Rule> {
@@ -317,5 +332,121 @@ mod tests {
         // Two loads from the same bytes are also distinct instances.
         let loaded_again = Ruleset::from_canonical(&bytes).unwrap();
         assert_ne!(loaded.id, loaded_again.id);
+    }
+
+    fn far_apart_rules() -> Vec<Rule> {
+        let square = |x: f64, y: f64| {
+            Geometry::Polygon(geo::Polygon::new(
+                LineString::from(vec![
+                    (x, y),
+                    (x, y + 1.0),
+                    (x + 1.0, y + 1.0),
+                    (x + 1.0, y),
+                    (x, y),
+                ]),
+                vec![],
+            ))
+        };
+        vec![
+            Rule {
+                id: "zone-a".to_string(),
+                properties: BTreeMap::new(),
+                geometry: square(0.0, 0.0),
+            },
+            Rule {
+                id: "zone-b".to_string(),
+                properties: BTreeMap::new(),
+                geometry: square(100.0, 100.0),
+            },
+        ]
+    }
+
+    fn candidate_at(x: f64, y: f64) -> Candidate {
+        Candidate::new(
+            "c".to_string(),
+            Geometry::Polygon(geo::Polygon::new(
+                LineString::from(vec![
+                    (x - 0.5, y - 0.5),
+                    (x - 0.5, y + 0.5),
+                    (x + 0.5, y + 0.5),
+                    (x + 0.5, y - 0.5),
+                    (x - 0.5, y - 0.5),
+                ]),
+                vec![],
+            )),
+        )
+    }
+
+    /// Pins the lazy semantics (memory-benchmark ticket 02): a query whose
+    /// candidates touch a subset of the rules prepares only that subset.
+    #[test]
+    fn query_prepares_only_the_touched_rules() {
+        let ruleset = Ruleset::build(far_apart_rules()).unwrap();
+        let candidate = candidate_at(0.5, 0.5); // touches zone-a only
+        let query = Query::new(crate::query::SpatialPredicate::Intersects);
+
+        let outcomes = ruleset.query(std::slice::from_ref(&candidate), &query);
+        assert!(matches!(
+            &outcomes[0],
+            CandidateOutcome::Matched { rule_ids, .. } if rule_ids == &vec![RuleId(0)]
+        ));
+
+        assert!(prepared_cache::slot_is_prepared(ruleset.id, 0));
+        assert!(!prepared_cache::slot_is_prepared(ruleset.id, 1));
+    }
+
+    /// Worst case is unchanged (memory-benchmark ticket 02): a workload whose
+    /// candidates touch every rule prepares everything.
+    #[test]
+    fn query_touching_every_rule_prepares_all_rules() {
+        let mut rules = far_apart_rules();
+        rules.push(Rule {
+            id: "zone-c".to_string(),
+            properties: BTreeMap::new(),
+            geometry: Geometry::Polygon(geo::Polygon::new(
+                LineString::from(vec![(-50.0, -50.0), (-50.0, 150.0), (150.0, 150.0), (150.0, -50.0), (-50.0, -50.0)]),
+                vec![],
+            )),
+        });
+        let ruleset = Ruleset::build(rules).unwrap();
+        // A candidate whose envelope intersects all three rules.
+        let candidate = Candidate::new(
+            "c".to_string(),
+            Geometry::Polygon(geo::Polygon::new(
+                LineString::from(vec![
+                    (-10.0, -10.0),
+                    (-10.0, 120.0),
+                    (120.0, 120.0),
+                    (120.0, -10.0),
+                    (-10.0, -10.0),
+                ]),
+                vec![],
+            )),
+        );
+        let query = Query::new(crate::query::SpatialPredicate::Intersects);
+
+        let outcomes = ruleset.query(std::slice::from_ref(&candidate), &query);
+        assert_eq!(outcomes.len(), 1);
+
+        for index in 0..3 {
+            assert!(
+                prepared_cache::slot_is_prepared(ruleset.id, index),
+                "rule {index} must be prepared after a touch-all query"
+            );
+        }
+    }
+
+    /// The eager seam keeps its dense contract and force-prepares everything
+    /// even when no query has touched anything yet.
+    #[test]
+    fn prepared_seam_force_prepares_every_rule() {
+        let ruleset = Ruleset::build(far_apart_rules()).unwrap();
+
+        let prepared = ruleset.prepared();
+        assert_eq!(prepared.len(), 2);
+        assert!(prepared.get(RuleId(0)).bounding_rect().is_some());
+        assert!(prepared.iter().count() == 2);
+        assert!(prepared_cache::slot_is_prepared(ruleset.id, 0));
+        assert!(prepared_cache::slot_is_prepared(ruleset.id, 1));
     }
 }

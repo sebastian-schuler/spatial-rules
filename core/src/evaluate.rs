@@ -3,10 +3,11 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-use geo::{BooleanOps, GeodesicArea, Geometry, Relate};
+use geo::algorithm::relate::IntersectionMatrix;
+use geo::{BooleanOps, GeodesicArea, Geometry, PreparedGeometry, Relate};
 
 use crate::candidate::{Candidate, CandidateClass};
-use crate::prepared_cache::PreparedGeometries;
+use crate::prepared_cache::{ensure_prepared, PreparedSlots};
 use crate::query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
 use crate::rule::RuleId;
 use crate::ruleset::Ruleset;
@@ -17,7 +18,7 @@ use crate::where_expr::WhereExpr;
 /// directional: the matrix is `candidate` relates to `rule`.
 fn spatial_predicate_holds(
     predicate: SpatialPredicate,
-    matrix: geo::algorithm::relate::IntersectionMatrix,
+    matrix: &IntersectionMatrix,
 ) -> bool {
     match predicate {
         SpatialPredicate::Intersects => matrix.is_intersects(),
@@ -84,7 +85,9 @@ pub struct PreparedQuery<'a> {
     spatial: SpatialPredicate,
     where_clause: Option<WhereExpr>,
     excluded: HashSet<RuleId>,
-    prepared: PreparedGeometries,
+    /// This thread's per-rule prepared-geometry memo for the ruleset
+    /// (ADR-0010): slots fill lazily, on first touch (memory-benchmark 02).
+    slots: PreparedSlots,
     where_filter: Option<HashSet<RuleId>>,
     include_overlap: bool,
     /// Reused across the batch so the spatial-index result is filled into one
@@ -97,7 +100,7 @@ impl<'a> PreparedQuery<'a> {
         ruleset: &'a Ruleset,
         query: &Query,
         excluded: HashSet<RuleId>,
-        prepared: PreparedGeometries,
+        slots: PreparedSlots,
         where_filter: Option<HashSet<RuleId>>,
     ) -> Self {
         PreparedQuery {
@@ -105,10 +108,47 @@ impl<'a> PreparedQuery<'a> {
             spatial: query.spatial,
             where_clause: query.where_clause.clone(),
             excluded,
-            prepared,
+            slots,
             where_filter,
             include_overlap: query.include_overlap,
             scratch: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Evaluate a whole batch with **per-rule lazy preparation** (ADR-0010,
+    /// memory-benchmark ticket 02). The memo persists across the batch (and
+    /// across batches, until `replace`), so a candidate only pays the missing
+    /// slot check on rules the batch touches for the first time.
+    ///
+    /// A batch-level pre-pass that collects the union of touched ids up front
+    /// was measured and rejected: it runs the envelope filter a second time per
+    /// candidate, which regresses sparse-touch workloads (the memory-scale
+    /// `queries_per_sec` cell) by ~30% because that workload is index-traversal
+    /// bound. The per-candidate check is the ticket's sanctioned fallback.
+    pub(crate) fn evaluate_all(&self, candidates: &[Candidate]) -> Vec<CandidateOutcome> {
+        candidates.iter().map(|c| self.evaluate(c)).collect()
+    }
+
+    /// Batch form of [`PreparedQuery::evaluate_mask`] — same lazy-preparation
+    /// contract as [`PreparedQuery::evaluate_all`].
+    pub(crate) fn evaluate_mask_all(&self, candidates: &[Candidate]) -> Vec<u8> {
+        candidates.iter().map(|c| self.evaluate_mask(c)).collect()
+    }
+
+    /// Whether a candidate-touching rule reaches the exact DE-9IM step:
+    /// not excluded and admitted by the property filter (ADR-0003 pipeline).
+    fn reaches_relate(&self, rule_id: RuleId) -> bool {
+        if self.excluded.contains(&rule_id) {
+            return false;
+        }
+        match &self.where_filter {
+            Some(filter) => filter.contains(&rule_id),
+            None => match &self.where_clause {
+                Some(where_clause) => {
+                    where_clause.eval(self.ruleset.properties(rule_id))
+                }
+                None => true,
+            },
         }
     }
 
@@ -157,27 +197,7 @@ impl<'a> PreparedQuery<'a> {
         let mut matched: Vec<RuleId> = Vec::new();
         let mut overlaps: Vec<OverlapMetric> = Vec::new();
         let mut any_match = false;
-        let mut scratch = self.scratch.borrow_mut();
-        self.ruleset.query_envelope_into(&bbox, &mut scratch);
-        for &rule_id in scratch.iter() {
-            if self.excluded.contains(&rule_id) {
-                continue;
-            }
-            match &self.where_filter {
-                Some(filter) => {
-                    if !filter.contains(&rule_id) {
-                        continue;
-                    }
-                }
-                None => {
-                    if let Some(where_clause) = &self.where_clause {
-                        if !where_clause.eval(self.ruleset.properties(rule_id)) {
-                            continue;
-                        }
-                    }
-                }
-            }
-            let matrix = candidate.geometry.relate(&self.prepared[rule_id.0 as usize]);
+        let mut record_match = |rule_id: RuleId, matrix: &IntersectionMatrix| {
             if spatial_predicate_holds(self.spatial, matrix) {
                 any_match = true;
                 if collect_ids {
@@ -190,8 +210,46 @@ impl<'a> PreparedQuery<'a> {
                     }
                 }
             }
+        };
+        let mut relate_and_record =
+            |rule_id: RuleId, prepared: &PreparedGeometry<'_, Geometry<f64>>| {
+                let matrix = candidate.geometry.relate(prepared);
+                record_match(rule_id, &matrix);
+            };
+
+        // Lazy preparation (ADR-0010, memory-benchmark 02): relate against
+        // prepared rules immediately; defer the few touched-but-unprepared
+        // rules (first touch on this thread) until their slots are filled.
+        // Warm batches find everything prepared, so this is a predicted `None`
+        // check per touched rule and one `late` fill only while the memo is
+        // still cold.
+        let mut late: Vec<RuleId> = Vec::new();
+        let slots = self.slots.borrow();
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(&bbox, &mut scratch);
+        for &rule_id in scratch.iter() {
+            if !self.reaches_relate(rule_id) {
+                continue;
+            }
+            match slots[rule_id.index()].as_ref() {
+                Some(prepared) => relate_and_record(rule_id, prepared),
+                None => late.push(rule_id),
+            }
         }
+        drop(slots);
         drop(scratch);
+
+        if !late.is_empty() {
+            ensure_prepared(&self.slots, self.ruleset.rules_slice(), &late);
+            let slots = self.slots.borrow();
+            for &rule_id in late.iter() {
+                relate_and_record(
+                    rule_id,
+                    slots[rule_id.index()].as_ref().expect("deferred rules were just prepared"),
+                );
+            }
+            drop(slots);
+        }
 
         EvalResult {
             matched: any_match,

@@ -41,14 +41,16 @@ before code.
 ## P0 — Memory benchmark (shipped)
 
 Produced the facts later decisions cite. Harness + results in
-`docs/benchmarks.md` §Memory (memory-benchmark ticket 01, resolved): rulesets
-track **rule count, not coordinate count** (~1.2–2.7 kB/rule steady; 100k
-rules ≈ 118–260 MiB of ruleset; serving adds a per-thread prepared-geometry
-cache — the geo 0.34 deferral), the ruleset is ~2–5× smaller than a turf.js
+`docs/benchmarks.md` §Memory (memory-benchmark tickets 01 + 02, resolved):
+rulesets track **rule count, not coordinate count** (~1.2–2.7 kB/rule steady;
+100k rules ≈ 118–260 MiB of ruleset; serving adds a per-thread prepared-geometry
+memo — the geo 0.34 deferral), the ruleset is ~2–5× smaller than a turf.js
 baseline holding the same data, no per-replacement leak, ~65 MB peak for the
-30-rule production workload against a 128 MB bound. Follow-up (ticket 02):
-**lazy per-rule prepared geometries**, making serving memory proportional to
-the rules candidates actually touch.
+30-rule production workload against a 128 MB bound. Ticket 02 made serving
+memory **lazy and workload-proportional** (per-rule prepare on first touch):
+the 100k×100 serving footprint dropped from ~1.8 GiB to ~286 MiB at 1,000
+candidates, the cold-batch prepare spike (~1.9 s) collapsed to ~2 ms, and warm
+throughput is unchanged — the serving footprint now beats turf at every cell.
 
 ## P1 — From matches to decisions
 

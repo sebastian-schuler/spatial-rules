@@ -14,6 +14,13 @@ use crate::properties::PropertyValue;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) u32);
 
+impl RuleId {
+    /// The positional index this id was assigned from (crate-internal).
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// A geometry-bearing rule with queryable properties (CONTEXT.md §4.1).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rule {

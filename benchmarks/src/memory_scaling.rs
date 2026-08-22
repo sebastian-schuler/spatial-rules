@@ -13,7 +13,7 @@
 //!   coordinate count.
 //! - **Lifecycle check**: repeated atomic replacement through
 //!   [`spatial_rules_core::Engine`] (ADR-0007 swap path), one query per swap
-//!   to exercise the per-thread prepared-geometry cache (ADR-0010); RSS after
+//!   to exercise the per-thread prepared-geometry memo (ADR-0010); RSS after
 //!   the first vs the last replacement detects retention.
 //! - **Ground truth is process-level RSS**, not allocator or heap numbers —
 //!   VmRSS/VmHWM from `/proc/self/status` on Linux, working-set counters from
@@ -219,8 +219,9 @@ pub struct CellReport {
 /// Allocation behavior under repeated batch queries.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct QueryTimeReport {
-    /// Time of the first (cold) batch — includes prepared-geometry build
-    /// for this thread (ADR-0010).
+    /// Time of the first (cold) batch — includes the touched rules'
+    /// prepared-geometry fills for this thread (ADR-0010). Lazily prepared, so
+    /// it tracks the rules the candidates touch, not the whole ruleset.
     pub first_batch_ms: u128,
     pub batches: usize,
     pub candidates_per_batch: usize,
@@ -232,7 +233,7 @@ pub struct QueryTimeReport {
 }
 
 /// Retention across repeated atomic ruleset replacement (ADR-0007 swap path),
-/// one query per swap to exercise the per-thread prepared-geometry cache
+/// one query per swap to exercise the per-thread prepared-geometry memo
 /// eviction (ADR-0010).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LifecycleReport {
@@ -290,8 +291,9 @@ pub fn measure_cell(scale: Scale, opts: CellOptions) -> Result<CellReport, Spati
     ));
 
     // ---- query-time phase ----
-    // Cold batch first (builds this thread's prepared geometries), excluded
-    // from the steady-state timing like every other harness (ADR-0010).
+    // Cold batch first (fills this thread's touched-rule prepared geometries),
+    // excluded from the steady-state timing like every other harness
+    // (ADR-0010).
     let query = Query::new(SpatialPredicate::Intersects);
     let cold_started = Instant::now();
     let _mask = engine.query_mask(&candidates, &query);
@@ -329,7 +331,8 @@ pub fn measure_cell(scale: Scale, opts: CellOptions) -> Result<CellReport, Spati
         let fresh = generate_rules(scale);
         engine.replace(fresh)?;
         // One query per swap evicts the stale thread-local prepared set and
-        // builds the new one (ADR-0010) — retention would show up here.
+        // fills the new ruleset's touched rules (ADR-0010) — retention would
+        // show up here.
         let _mask = engine.query_mask(&candidates, &query);
         let snap = snapshot();
         rss_after_each.push(snap.rss);

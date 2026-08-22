@@ -1,7 +1,7 @@
 # 02 — Lazy per-rule prepared geometries (serving-memory follow-up)
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: None — can start immediately
 
 Origin: follow-up to memory-benchmark ticket 01. The scaling benchmark showed
@@ -46,25 +46,25 @@ query results or the API.
 
 ## Acceptance criteria
 
-- [ ] Serving memory proportional to touched rules: at the 100k×100 memory
+- [x] Serving memory proportional to touched rules: at the 100k×100 memory
       cell with 1,000 candidates (which touch ~1,000 of 100k rules) the
       post-query resident footprint drops from ~1.8 GiB toward ruleset + ~15 MB,
       verified via `bun run bench memory-scale` and `bun run bench memory-turf`
-- [ ] Steady-state throughput unchanged: warmed batches in the memory-scale /
+- [x] Steady-state throughput unchanged: warmed batches in the memory-scale /
       perf / scale harnesses report the same `queries_per_sec` (cold batch
       excluded) as before
-- [ ] Cold first batch not slower than today (expected: faster — no 100k-rule
+- [x] Cold first batch not slower than today (expected: faster — no 100k-rule
       prepare spike)
-- [ ] Worst case unchanged: a workload whose candidates touch every rule
+- [x] Worst case unchanged: a workload whose candidates touch every rule
       prepares everything, same memory and speed as today (covered by a test
       that touches all rules)
-- [ ] Behavior-identical results: existing core tests (`query.rs`, `engine.rs`,
+- [x] Behavior-identical results: existing core tests (`query.rs`, `engine.rs`,
       `complex.rs`, `api_surface.rs`, proptest) green, including the eager
       `prepared()` seam tests
-- [ ] A correctness test pins the lazy semantics: a query touching a subset of
+- [x] A correctness test pins the lazy semantics: a query touching a subset of
       rules only prepares that subset (observable via a counter or by checking
       the touched rules are prepared)
-- [ ] Docs updated: `docs/benchmarks.md` §Memory serving-footprint table and
+- [x] Docs updated: `docs/benchmarks.md` §Memory serving-footprint table and
       the "Engine vs turf footprint" comparison re-recorded, README memory
       bullet refreshed, ADR-0010 amended, results re-verified on a clean
       `bun run bench memory-scale` run
@@ -81,3 +81,45 @@ query results or the API.
   query coverage).
 - One-time prepare cost lands in the latency tail of the request that first
   touches a rule; amortized, and re-warmed per thread after each `replace`.
+
+## Answer
+
+Implemented (core change + benchmark re-verification + docs, no behavior change
+to query results or the public API).
+
+- **Design (per ticket).** Two paths split. The hot path
+  (`Ruleset::prepare`/`query`/`query_mask`) is **lazy**: the `thread_local!`
+  cache in `core/src/prepared_cache.rs` became a **per-rule memo**
+  (`Vec<Option<PreparedGeometry>>` behind `Rc<RefCell<…>>`), still keyed by the
+  ruleset's atomic id and invalidated wholesale on `replace`. The relate loop
+  (`core/src/evaluate.rs`) checks each touched rule's slot, defers the
+  first-touch unprepared ones, and prepares exactly those — so serving memory
+  is proportional to touched rules. The public eager seam `Ruleset::prepared()`
+  (`PreparedRuleGeometries`) keeps its dense contract (`len() == rule count`,
+  `get(id)` valid for any id, `iter()` in ruleset order) by force-preparing
+  every slot and snapshotting a dense `Vec` (PreparedGeometry is `Clone` in
+  geo 0.33); `api_surface.rs` and the ladder stay green unchanged.
+- **Batch pre-pass rejected by measurement.** A batch-level design that
+  collects the touched union up front and prepares once was implemented first;
+  it ran the envelope filter a second time per candidate and regressed the
+  sparse-touch `queries_per_sec` cell by ~30% (that workload is
+  index-traversal bound, relate is negligible). Reverted to the ticket's
+  sanctioned per-rule fallback, which measures at-or-better than the old eager
+  cache.
+- **New tests.** `prepared_cache.rs`: subset-only preparation, id-switch
+  wholesale reset, dense-vs-lazy relate equality, `prepare_all` order.
+  `ruleset.rs`: query touching a subset prepares only that subset; touch-all
+  query prepares every rule (worst case); eager seam force-prepares without
+  any query.
+- **Verified results** (release, Windows, default grid; full suite green
+  including proptest and `api_surface`): serving after the first query at
+  1,000 candidates dropped from 359 MiB → 143 MiB (100k×10), 1.78 GiB →
+  286 MiB (100k×100); the cold first batch at 100k×100 dropped 1,875 ms →
+  ~2 ms; warm `queries_per_sec` unchanged within run variance (7.1 M vs
+  7.1 M at 100k×100). The engine's serving footprint now **beats turf at every
+  cell** (100k×100: 282 MiB vs turf's 641 MiB). Lifecycle unchanged: no
+  per-replacement leak, same stepwise-with-drops Windows allocator warmup
+  (`bounded: false` cells unchanged).
+- **Docs:** `docs/benchmarks.md` §Memory scaling table + findings + turf
+  comparison re-recorded (2026-08-23), ADR-0010 amended (lazy addendum),
+  README memory bullet refreshed, roadmap P0 updated.

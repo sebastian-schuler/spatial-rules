@@ -4,7 +4,8 @@
 // each stack:
 //
 //   engine ruleset   the indexed/compiled ruleset (memory-scale steady-state)
-//   engine serving   ruleset + per-thread prepared-geometry cache (post-query)
+//   engine serving   ruleset + per-thread prepared-geometry memo (post-query;
+//                    lazy, so ~ruleset at the default 1,000 candidates)
 //   turf rss         the pre-parsed feature objects + precomputed bboxes the
 //                    timed turf baseline holds (fresh-process RSS delta)
 //
@@ -152,7 +153,7 @@ if (!existsSync(EXE)) {
 }
 
 console.log('rules x verts | engine ruleset | engine serving* | turf rss | turf kB/rule');
-console.log('             |                | (+prepared cache)|          |     (rss)');
+console.log('             |                | (+prepared memo)|          |     (rss)');
 for (const { rules, vertices } of cells) {
   const engine = engineFootprint(rules, vertices);
   const { status, stdout, stderr } = spawnSync(
@@ -171,4 +172,4 @@ for (const { rules, vertices } of cells) {
       `${mb(turf.rss).padStart(7)} MiB | ${(turf.rss / rules / 1024).toFixed(1)} kB`,
   );
 }
-console.log('\n* serving = ruleset + per-thread prepared-geometry cache (ADR-0010), after the first query.');
+console.log('\n* serving = ruleset + per-thread prepared-geometry memo (ADR-0010), lazily prepared per touched rule, after the first query.');

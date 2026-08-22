@@ -41,6 +41,14 @@ a national zoning dataset fits a 256 MB container.
 
 Implemented (measurement code + docs, no behavior change).
 
+## Comments
+
+> Superseded in part by ticket 02 (lazy prepared geometries): the "Serving
+> footprint" numbers in the serving-footprint paragraph below reflect the
+> eager cache measured by this ticket. Ticket 02 replaced it with per-rule
+> lazy preparation — serving after the first query is now ~ruleset + a small
+> margin (see `docs/benchmarks.md` §Memory, 2026-08-23).
+
 - **Harness**: `benchmarks/src/memory_scaling.rs` (library, unit-tested),
   `benchmarks/src/rss.rs` (process-level RSS/VmHWM/commit via
   `/proc/self/status` on Linux, `GetProcessMemoryInfo` on Windows), and the
