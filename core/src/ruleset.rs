@@ -395,6 +395,41 @@ mod tests {
         assert!(!prepared_cache::slot_is_prepared(ruleset.id, 1));
     }
 
+    /// Rule ids in a result must keep the eager path's deterministic envelope
+    /// (ascending) order even when the per-thread memo is only partially warm
+    /// (memory-benchmark ticket 02): a previously-prepared rule must not jump
+    /// ahead of a rule being prepared on first touch.
+    #[test]
+    fn rule_ids_stay_in_envelope_order_with_a_partially_warm_memo() {
+        let ruleset = Ruleset::build(far_apart_rules()).unwrap();
+        let query = Query::new(crate::query::SpatialPredicate::Intersects);
+
+        // First query touches zone-b only, preparing it in this thread's memo.
+        let b_only = candidate_at(100.5, 100.5);
+        let _ = ruleset.query(std::slice::from_ref(&b_only), &query);
+
+        // Second query touches both: zone-b is already prepared, zone-a is
+        // not — the relate loop would record zone-b first without a re-sort.
+        let both = Candidate::new(
+            "c".to_string(),
+            Geometry::Polygon(geo::Polygon::new(
+                LineString::from(vec![
+                    (-1.0, -1.0),
+                    (-1.0, 101.0),
+                    (101.0, 101.0),
+                    (101.0, -1.0),
+                    (-1.0, -1.0),
+                ]),
+                vec![],
+            )),
+        );
+        let outcomes = ruleset.query(std::slice::from_ref(&both), &query);
+        let CandidateOutcome::Matched { rule_ids, .. } = &outcomes[0] else {
+            panic!("expected a match");
+        };
+        assert_eq!(rule_ids, &vec![RuleId(0), RuleId(1)]);
+    }
+
     /// Worst case is unchanged (memory-benchmark ticket 02): a workload whose
     /// candidates touch every rule prepares everything.
     #[test]

@@ -251,6 +251,21 @@ impl<'a> PreparedQuery<'a> {
             drop(slots);
         }
 
+        // The relate loop records already-prepared rules before first-touch
+        // (deferred) ones, so a partially-warm memo would interleave them out
+        // of envelope order. Re-sort to restore the eager path's deterministic
+        // ascending order; `overlaps` stays aligned to `matched` (they were
+        // pushed together). Rule ids are unique per candidate, so the sort is
+        // total (ADR-0004, memory-benchmark ticket 02).
+        if matched.len() > 1 {
+            let mut order: Vec<usize> = (0..matched.len()).collect();
+            order.sort_unstable_by_key(|&i| matched[i]);
+            matched = order.iter().map(|&i| matched[i]).collect();
+            if compute_overlaps {
+                overlaps = order.iter().map(|&i| overlaps[i]).collect();
+            }
+        }
+
         EvalResult {
             matched: any_match,
             invalid: None,

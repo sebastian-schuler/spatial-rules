@@ -106,6 +106,12 @@ to query results or the public API).
   index-traversal bound, relate is negligible). Reverted to the ticket's
   sanctioned per-rule fallback, which measures at-or-better than the old eager
   cache.
+- **Result ordering kept deterministic.** The per-rule fallback records
+  already-prepared rules before first-touch (deferred) ones, which would
+  interleave `Matched.rule_ids` out of envelope order on a partially-warm
+  memo. `evaluate.rs` re-sorts `rule_ids` (and aligned overlap metrics)
+  ascending after the relate loops, restoring the eager path's deterministic
+  order — pinned by `rule_ids_stay_in_envelope_order_with_a_partially_warm_memo`.
 - **New tests.** `prepared_cache.rs`: subset-only preparation, id-switch
   wholesale reset, dense-vs-lazy relate equality, `prepare_all` order.
   `ruleset.rs`: query touching a subset prepares only that subset; touch-all
