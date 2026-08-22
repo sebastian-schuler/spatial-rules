@@ -54,25 +54,31 @@ inside the pinned container, plus two measurement bugs surfaced and fixed.
 
 - **Reproducible harness.** New `benchmarks/Dockerfile` builds the release
   `memory_scaling` binary + node addon for linux-gnu and runs under
-  `oven/bun:1.3.14`; `docs/benchmarks.md` §Memory documents the four run
-  commands. Fixes: `benchmarks/src/rss.rs` — the `/proc/self/status` parser
-  didn't skip the `:` after the field name, so every in-container RSS reading
-  silently read 0 (the Linux numbers were never measured before); a regression
-  test pins the format. `.dockerignore` — `*.node` didn't match nested addons,
-  so a stale Windows `spatial_rules.node` shadowed the Linux one; `**/*.node`.
-- **Full grid (Linux).** Ruleset/serving/qps within ~2–5% of Windows (Linux a
-  bit leaner/faster); serving at 100k×100 = **282 MiB** (vs 1.78 GiB eager);
-  cold first batch 7 ms (vs 1.9 s eager); warm qps unchanged. The `bounded`
-  verdict is a quarter-mean *heuristic*: 3 cells report `false` at 20 swaps,
-  and the traces explain each as either a one-time warmup plateau or a
-  **sawtooth up-slope** — not a leak.
+  `oven/bun:1.3.14`; `docs/benchmarks.md` §Memory documents the run commands.
+  Fixes: `benchmarks/src/rss.rs` — the `/proc/self/status` parser didn't skip
+  the `:` after the field name, so the Rust `snapshot()` (used by the
+  memory-scale and memory-turf harnesses) silently read 0 on Linux, meaning
+  those Linux numbers were never valid before; a regression test pins the
+  format. `.dockerignore` — `*.node` didn't match nested addons, so a stale
+  Windows `spatial_rules.node` shadowed the Linux one; `**/*.node`.
+- **Full grid (Linux).** Ruleset/serving/qps within ~±15% of Windows (Linux
+  heavier on the tiny 10-vertex rings, leaner at 1k-vertex rings; qps mostly
+  5–19% faster). Serving at 100k×100 = **282 MiB** (vs 1.78 GiB eager); cold
+  first batch 7 ms (vs 1.9 s eager); warm qps unchanged. Lifecycle `bounded`
+  verdicts per cell: 1000x10 / 1000x100 / 1000x1000 / 10000x100 `true`;
+  10000x10, 100000x10, 100000x100 `false`. The verdict is a quarter-mean
+  *heuristic* — the AC hypothesis that the Windows `false` cells would flip to
+  `true` on Linux was **refuted**: the traces show each `false` cell is either
+  a one-time warmup plateau (10000x10: 26→33 MiB then flat) or an up-slope of
+  a bounded sawtooth (the 100k cells), not a leak.
 - **50-swap probes settle the leak question.** 100k×100 oscillates between
   ~561 and ~774 MiB over 50 swaps, 100k×10 between ~286 and ~543 MiB — glibc
-  grows the arena ~21 MiB per swap and trims it back every ~11–18 swaps,
-  returning to the **same floor** each time (commit tracks RSS; a leak climbs
-  monotonically). Replacement peak is the capacity number: 100k×100 peaks
-  ~492 MiB above its floor (~774 MiB resident) while holding a ~258 MiB
-  ruleset.
+  grows the arena ~21 MiB per swap and trims it back to the same post-trim
+  floor every ~11–18 swaps (commit tracks RSS; a leak climbs monotonically).
+  So the "flat plateau" the AC predicted is actually a **bounded sawtooth** —
+  stronger than a plateau: it proves RSS returns to the same floor. Replacement
+  peak is the capacity number: 100k×100 peaks ~492 MiB above its pre-lifecycle
+  peak (~774 MiB resident total) while holding a ~258 MiB ruleset.
 - **Turf + container baseline re-recorded.** Engine serving beats turf at every
   cell except 100k×10 (within ~8%); 100k×100 serving 279 MiB vs turf 634 MiB.
   Production 30-rule workload: peak resident **~67 MB** (was ~65 MB) against

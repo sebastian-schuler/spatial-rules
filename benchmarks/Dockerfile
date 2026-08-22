@@ -7,16 +7,13 @@
 # (VmRSS/VmHWM) — the Linux ground truth the Windows runs could not sample.
 #
 #   docker build -f benchmarks/Dockerfile -t spatial-rules-bench .
-#   docker run --rm spatial-rules-bench memory-scale            # full default grid
-#   docker run --rm spatial-rules-bench memory-scale-probe      # 50-swap 100k x 100 probe
-#   docker run --rm spatial-rules-bench memory-turf             # engine vs turf footprint
-#   docker run --rm spatial-rules-bench memory                  # container baseline (65 MB / 128 MB)
-#
-# `memory-scale-probe` runs the binary directly (single-cell mode, which does
-# not apply the aggregate run's wall-time swap cap) with 50 replacements:
-#
+#   docker run --rm spatial-rules-bench bun bench.mjs memory-scale   # full grid
+#   docker run --rm spatial-rules-bench bun bench.mjs memory-turf    # engine vs turf
+#   docker run --rm spatial-rules-bench bun bench.mjs memory         # container baseline
 #   docker run --rm spatial-rules-bench target/release/memory_scaling \
 #       --cell=100000,100 --replacements=50 --candidates=1000 --query-batches=20
+#         (the 50-swap plateau probe: single-cell mode bypasses the aggregate
+#          run's wall-time swap cap)
 
 FROM rust:1.96-slim-bookworm AS build
 WORKDIR /app

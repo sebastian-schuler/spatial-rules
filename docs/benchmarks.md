@@ -204,9 +204,11 @@ the pinned `oven/bun:1.3.14` container via the reproducible
 | 100,000 × 100 | 10,000,000 | 4.0 s | 257.9 MiB | 2.64 kB | **282.0 MiB** | 7.6 M |
 
 The two platforms agree on the *shapes* and *ratios* — ruleset sizes by rule
-count, serving ≈ ruleset + touched-prepared margin, cold batch ~2–14 ms — with
-Linux ~2–5% leaner on ruleset bytes and ~5–10% faster warm qps (allocator and
-`proc`-accounting differences, not engine changes).
+count, serving ≈ ruleset + touched-prepared margin, cold first batch in the
+single-digit-ms range — with Linux within ~±15% of Windows on ruleset bytes
+(heavier on the tiny 10-vertex rings, where glibc's per-rule accounting
+dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
+(allocator and `proc`-accounting differences, not engine changes).
 
 **Findings:**
 
@@ -229,7 +231,7 @@ Linux ~2–5% leaner on ruleset bytes and ~5–10% faster warm qps (allocator an
   100-vertex rings, and a whole-rule touch by any candidate paid it. Now the
   per-thread memo fills **lazily, per rule on first touch**: with the default
   1,000 candidates (which touch ~1,000 of the rules), serving after the first
-  query is ruleset + a small margin — **143 MiB** at 100k×10 and **286 MiB** at
+  query is ruleset + a small margin — **~145 MiB** at 100k×10 and **~282 MiB** at
   100k×100 instead of 359 MiB / 1.78 GiB — and the per-thread `queryAsync`
   duplication scales with touched rules too. Two caveats: (1) worst case is
   unchanged — a workload whose candidates touch every rule still prepares
@@ -239,8 +241,8 @@ Linux ~2–5% leaner on ruleset bytes and ~5–10% faster warm qps (allocator an
   the memo is small and the container's ~67 MB peak stands.
 - **The first request no longer stalls on a prepare spike.** The cold batch
   (which used to prepare all 100k rules) drops from ~1.9 s to ~2 ms at 100k×100
-  — one-time prepare cost now lands only in the latency tail of requests that
-  first touch a rule.
+  on Windows (~7 ms on Linux) — one-time prepare cost now lands only in the
+  latency tail of requests that first touch a rule.
 - **No per-replacement leak — proven on Linux (memory-benchmark ticket 03).**
   The 5%-tolerance `bounded` verdict is a *heuristic*: it compares quarter
   means, so a short (20-swap, budget-capped) window that lands on an up-slope
@@ -253,14 +255,14 @@ Linux ~2–5% leaner on ruleset bytes and ~5–10% faster warm qps (allocator an
     glibc grows the arena ~21 MiB per swap (each replacement rebuilds the
     ruleset), then trims and returns the excess to the kernel every ~11–18
     swaps: 100k×100 swings between ~561 and ~774 MiB over 50 swaps, 100k×10
-    between ~286 and ~543 MiB — both returning to the **same floor** after
-    every trim (commit tracks RSS; a leak climbs monotonically and never comes
+    between ~286 and ~543 MiB — both returning to the **same post-trim floor**
+    every cycle (commit tracks RSS; a leak climbs monotonically and never comes
     back down). A 10000×10-style cell shows a one-time warmup plateau instead.
     So a long-lived serving process does **not** accumulate memory across
     replacements at any scale.
   - **Replacement peak is the capacity number.** Old + new rulesets coexist
-    during the build: the 100k×100 50-swap probe peaks ~492 MiB above its
-    pre-lifecycle floor (~774 MiB resident total) while holding a ~258 MiB
+    during the build: the 100k×100 50-swap probe's VmHWM peaks ~492 MiB above
+    its pre-lifecycle peak (~774 MiB resident total) while holding a ~258 MiB
     ruleset — the number to size a container for hot-reload at scale.
 - **queries/sec per GB of RAM** (the sizing metric) = steady-state
   candidates/sec ÷ resident footprint. On Linux against the *ruleset alone*
@@ -325,7 +327,9 @@ Windows (2026-08-23) was within a few MiB of every value:**
 
 \* serving = ruleset + per-thread lazy prepared-geometry memo (ADR-0010) after
 the first query at the default 1,000 candidates (touch ~1,000 of the rules) —
-workload-dependent, now close to the ruleset.
+workload-dependent, now close to the ruleset. Serving shows as 282 MiB in the
+memory-scale table (same-process, after 20 timed batches) and 279 MiB here
+(fresh child, after 1 batch): ~1% measurement variance.
 
 - **The engine's ruleset is the memory win.** At typical zoning shapes (100
   and 1,000 vertices/ring) turf needs **~2.5–5×** the memory to *hold* the
@@ -358,12 +362,12 @@ conclusions stand:
 |---|---|---|
 | Baseline (Bun + addon + ruleset built) | ~52 MB | ~52 MB |
 | Query load (20 × 1,000 batches) | ~64 MB sampled | **~67 MB** |
-| Replacement, isolated (10 swaps, no queries) | ~66 MB → ~66 MB | ~67 MB (≈ +0.5 MB over baseline) |
+| Replacement (10 swaps, 1 query each) | ~66 MB → ~66 MB | ~67 MB (no growth over the query phase) |
 | Boundedness | spread across 10 replacements ≈ −1 MB (no leak) | — |
 
-- **Peak resident ≈ 67 MB** on the production workload; replacement adds only
-  ~0.5 MB of peak on top of baseline (the old ruleset is dropped by the atomic
-  swap, and both coexist for only the ~18 ms build). `VmPeak` (~132 GB) is
+- **Peak resident ≈ 67 MB** on the production workload; replacement holds the
+  query-phase footprint (old ruleset dropped by the atomic swap, both coexist
+  for only the ~18 ms build) — it adds no growth on top. `VmPeak` (~132 GB) is
   Bun/JSC's virtual-address-space reservation, not resident memory.
 - **Bounded**: RSS does not climb across repeated replacements (first ≈ last),
   so there is no per-replacement leak.
