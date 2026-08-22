@@ -4,4 +4,4 @@ node_modules/
 .scratch/
 docs/
 .agents/
-*.node
+**/*.node

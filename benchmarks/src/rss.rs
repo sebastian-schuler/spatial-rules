@@ -31,13 +31,18 @@ pub struct Snapshot {
 mod imp {
     use std::fs;
 
-    fn status_field_kib(status: &str, name: &str) -> Option<u64> {
-        // No regex dependency: match the line prefix directly.
+    pub(crate) fn status_field_kib(status: &str, name: &str) -> Option<u64> {
+        // No regex dependency: match the line prefix directly. `/proc/self/status`
+        // lines are `FieldName:<tab><value> kB`, so the colon after the name is
+        // stripped too (memory-benchmark ticket 03) — otherwise `split_whitespace`
+        // yields `:` and the parse fails.
         for line in status.lines() {
             if let Some(rest) = line.strip_prefix(name) {
-                let rest = rest.trim_start();
-                if let Some(number) = rest.split_whitespace().next() {
-                    return number.parse::<u64>().ok().map(|kib| kib * 1024);
+                if let Some(rest) = rest.strip_prefix(':') {
+                    let rest = rest.trim_start();
+                    if let Some(number) = rest.split_whitespace().next() {
+                        return number.parse::<u64>().ok().map(|kib| kib * 1024);
+                    }
                 }
             }
         }
@@ -140,5 +145,23 @@ mod tests {
         let snap = snapshot().expect("supported platform must produce a snapshot");
         assert!(snap.rss > 0);
         assert!(snap.peak >= snap.rss);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn parses_proc_status_fields_with_unit_suffix() {
+        // `/proc/self/status` lines are `FieldName:<tab><value> kB` — the
+        // colon after the name must be skipped or `split_whitespace` yields
+        // `:` and the parse fails (memory-benchmark ticket 03: the Linux
+        // snapshot silently returned `None` -> zeros, invalidating every
+        // in-container RSS reading until a Linux run caught it).
+        let sample =
+            "Name:\ttest\nVmRSS:\t    1956 kB\nVmHWM:\t    3900 kB\nVmData:\t  123 kB\n";
+        assert_eq!(imp::status_field_kib(sample, "VmRSS"), Some(1956 * 1024));
+        assert_eq!(imp::status_field_kib(sample, "VmHWM"), Some(3900 * 1024));
+        assert_eq!(imp::status_field_kib(sample, "VmData"), Some(123 * 1024));
+        assert_eq!(imp::status_field_kib(sample, "Missing"), None);
+        // The name prefix must not match a longer field name.
+        assert_eq!(imp::status_field_kib("VmRSSFoo:\t1 kB\n", "VmRSS"), None);
     }
 }

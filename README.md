@@ -50,16 +50,17 @@ The short version:
   country), turf's bbox fast-reject dips under the addon's ~5 ms per-call
   floor (parse + FFI). Everywhere realistic, the engine wins — usually by
   10–1,000×.
-- **Memory**: the production 30-rule workload peaks at ~65 MB resident
-  (comfortably inside a 128 MB limit) and repeated ruleset replacements leak
-  nothing. Rulesets size by **rule count**, not coordinate count (~1–3 kB/rule
-  — 100k rules ≈ 120–260 MiB of ruleset), are ~2–5× smaller than a turf.js
-  baseline holding the same data, and prepare rule geometries **lazily on
-  first touch** — so a serving process's footprint is proportional to the
-  rules queries actually touch, not the whole ruleset (the 100k×100 serving
-  footprint dropped from ~1.8 GiB to ~286 MiB at 1,000 candidates). Worst case
-  (touch-everything workloads) and the per-thread duplication remain at the
-  pre-lazy ceiling (geo 0.34 deferral).
+- **Memory**: the production 30-rule workload peaks at ~67 MB resident
+  (Linux container, comfortably inside a 128 MB limit) and repeated ruleset
+  replacements leak nothing — proven to 50 swaps at 100k rules on Linux
+  (bounded sawtooth, not a leak). Rulesets size by **rule count**, not
+  coordinate count (~1–3 kB/rule — 100k rules ≈ 120–260 MiB of ruleset), are
+  ~2–5× smaller than a turf.js baseline holding the same data, and prepare
+  rule geometries **lazily on first touch** — so a serving process's footprint
+  is proportional to the rules queries actually touch, not the whole ruleset
+  (the 100k×100 serving footprint dropped from ~1.8 GiB to ~282 MiB at 1,000
+  candidates). Worst case (touch-everything workloads) and the per-thread
+  duplication remain at the pre-lazy ceiling (geo 0.34 deferral).
 
 ## What it does
 

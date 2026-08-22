@@ -165,9 +165,9 @@ turf-side footprint comparison (`bun run bench memory-turf`) is below.
   steady-state delta (memory to size a container for a national dataset), plus
   the lifecycle `bounded` verdict and per-swap RSS/commit traces.
 
-**Results** (release profile, Windows, 2026-08-23; each cell in a fresh child
-process, default grid, 20 atomic replacements, 20 × 1,000-candidate query
-batches):
+**Results — Windows** (release profile, Windows, 2026-08-23; each cell in a
+fresh child process, default grid, 20 atomic replacements, 20 × 1,000-candidate
+query batches):
 
 | rules × verts | total verts | build | ruleset steady* | bytes/rule | after 1st query** | query rate*** |
 |---|---|---|---|---|---|---|
@@ -187,6 +187,26 @@ preparation is now lazy, this number is **workload-dependent**: it grows with
 the rules the candidates actually touch, not the whole ruleset. \*\*\*
 steady-state candidates/sec across the 20 timed batches (cold first batch
 excluded, ADR-0010 prepare is warmed).
+
+**Results — Linux (the deploy platform)** (release profile, linux-gnu, inside
+the pinned `oven/bun:1.3.14` container via the reproducible
+[`benchmarks/Dockerfile`](https://github.com/sebastian-schuler/spatial-rules/blob/development/benchmarks/Dockerfile)
+— "Reproducible Linux run" below; 2026-08-23; same grid/workload as Windows):
+
+| rules × verts | total verts | build | ruleset steady* | bytes/rule | after 1st query** | query rate*** |
+|---|---|---|---|---|---|---|
+| 1,000 × 10 | 10,000 | 1 ms | 2.5 MiB | 2.52 kB | 5.1 MiB | 10.1 M cand/s |
+| 1,000 × 100 | 100,000 | 51 ms | 3.7 MiB | 3.76 kB | 6.9 MiB | 7.6 M |
+| 1,000 × 1,000 | 1,000,000 | 3.4 s | 17.3 MiB | 17.7 kB | 24.9 MiB | 4.4 M |
+| 10,000 × 10 | 100,000 | 12 ms | 13.2 MiB | 1.36 kB | 18.1 MiB | 10.8 M |
+| 10,000 × 100 | 1,000,000 | 397 ms | 26.9 MiB | 2.76 kB | 32.3 MiB | 7.2 M |
+| 100,000 × 10 | 1,000,000 | 129 ms | 120.8 MiB | 1.24 kB | 144.7 MiB | 10.0 M |
+| 100,000 × 100 | 10,000,000 | 4.0 s | 257.9 MiB | 2.64 kB | **282.0 MiB** | 7.6 M |
+
+The two platforms agree on the *shapes* and *ratios* — ruleset sizes by rule
+count, serving ≈ ruleset + touched-prepared margin, cold batch ~2–14 ms — with
+Linux ~2–5% leaner on ruleset bytes and ~5–10% faster warm qps (allocator and
+`proc`-accounting differences, not engine changes).
 
 **Findings:**
 
@@ -216,27 +236,38 @@ excluded, ADR-0010 prepare is warmed).
   everything, so capacity planning still sizes to the ruleset + per-rule
   prepared cost ceiling; (2) the per-thread *duplication* remains (the `Rc →
   Arc` geo 0.34 deferral, post-v1 ticket 05). At the production 30-rule shape
-  the memo is small and the container's ~65 MB peak stands.
+  the memo is small and the container's ~67 MB peak stands.
 - **The first request no longer stalls on a prepare spike.** The cold batch
   (which used to prepare all 100k rules) drops from ~1.9 s to ~2 ms at 100k×100
   — one-time prepare cost now lands only in the latency tail of requests that
   first touch a rule.
-- **No per-replacement leak.** The 5%-tolerance `bounded` verdict is
-  conservative on Windows: the allocator grows committed arenas during the
-  first ~35 swaps (~100 MiB at 1k×1k) before plateauing, and 20 swaps (the
-  budget-capped default) can sit inside that warmup, so several cells report
-  `bounded: false`. The traces rule out a leak: RSS climbs in **steps with
-  drops** and tracks commit, and a 50-swap probe at 1k×1k **plateaus flat at
-  270.7 MiB** (swaps 36–50 constant to ±0.1 MiB) rather than climbing
-  linearly — a leak keeps climbing. The big cells (100k×100) show the same
-  stepwise-with-drops shape but run only 20 swaps, so no plateau is observed;
-  no leak claim either way, pending a longer Linux run.
+- **No per-replacement leak — proven on Linux (memory-benchmark ticket 03).**
+  The 5%-tolerance `bounded` verdict is a *heuristic*: it compares quarter
+  means, so a short (20-swap, budget-capped) window that lands on an up-slope
+  reports `bounded: false` even for a bounded process. The per-swap RSS/commit
+  traces in the report are the ground truth, and the 50-swap probes settle the
+  ticket-01 caveat ("no leak claim either way" for the big cells):
+  - **The 1k×1k cell plateaus flat** (Windows): 270.7 MiB constant to ±0.1 MiB
+    from swaps 36–50.
+  - **The big cells oscillate in a bounded sawtooth, not a leak** (Linux).
+    glibc grows the arena ~21 MiB per swap (each replacement rebuilds the
+    ruleset), then trims and returns the excess to the kernel every ~11–18
+    swaps: 100k×100 swings between ~561 and ~774 MiB over 50 swaps, 100k×10
+    between ~286 and ~543 MiB — both returning to the **same floor** after
+    every trim (commit tracks RSS; a leak climbs monotonically and never comes
+    back down). A 10000×10-style cell shows a one-time warmup plateau instead.
+    So a long-lived serving process does **not** accumulate memory across
+    replacements at any scale.
+  - **Replacement peak is the capacity number.** Old + new rulesets coexist
+    during the build: the 100k×100 50-swap probe peaks ~492 MiB above its
+    pre-lifecycle floor (~774 MiB resident total) while holding a ~258 MiB
+    ruleset — the number to size a container for hot-reload at scale.
 - **queries/sec per GB of RAM** (the sizing metric) = steady-state
-  candidates/sec ÷ resident footprint. Against the *ruleset alone* that is
-  ~220 M cand/s/GB at 1k×1k (3.7 M ÷ 18 MiB) down to ~28 M cand/s/GB at
-  100k×100; against the *serving* footprint it is lower at high rule counts —
-  per-rule overhead and the touched-rules prepared memo, not raw throughput,
-  are the binding constraints at scale.
+  candidates/sec ÷ resident footprint. On Linux against the *ruleset alone*
+  that is ~250 M cand/s/GB at 1k×1k (4.4 M ÷ 17 MiB) down to ~29 M cand/s/GB
+  at 100k×100; against the *serving* footprint (7.6 M ÷ 282 MiB ≈ 27 M/GB) it
+  is barely lower now that serving ≈ ruleset — per-rule fixed overhead, not
+  the prepared memo, is the binding constraint at scale.
 - **Steady-state throughput is unchanged by the lazy switch.** Warmed batches
   report the same candidates/sec as the eager cache did within run variance
   (e.g. 7.1 M vs 7.1 M at 100k×100; 3.7 M vs 3.9 M at 1k×1k): the relate loop
@@ -245,9 +276,31 @@ excluded, ADR-0010 prepare is warmed).
   because it ran the envelope filter a second time per candidate (~30% qps
   regression on this sparse-touch workload).
 - **Build is the other lever.** Strict validation is quadratic in ring
-  vertices, so `1000×1000` builds in 3.8 s while the same 1M vertices as
-  `100000×10` builds in 106 ms; the `10000×1000`/`100000×1000` corners are
+  vertices, so `1000×1000` builds in 3.4 s while the same 1M vertices as
+  `100000×10` builds in 129 ms; the `10000×1000`/`100000×1000` corners are
   excluded from the default grid for this reason (hours per build).
+
+#### Reproducible Linux run (`benchmarks/Dockerfile`)
+
+The Windows tables above were the first platform measured (working-set
+counters). Linux is the deploy platform, so the numbers were re-verified in
+the pinned container (memory-benchmark ticket 03) via a reproducible image:
+
+```
+docker build -f benchmarks/Dockerfile -t spatial-rules-bench .
+docker run --rm spatial-rules-bench bun bench.mjs memory-scale    # full grid
+docker run --rm spatial-rules-bench target/release/memory_scaling \
+    --cell=100000,100 --replacements=50 --candidates=1000 --query-batches=20  # 50-swap probe
+docker run --rm spatial-rules-bench bun bench.mjs memory-turf     # engine vs turf
+docker run --rm spatial-rules-bench bun bench.mjs memory          # container baseline
+```
+
+Two measurement bugs surfaced and were fixed by the Linux run: the `/proc/
+self/status` parser didn't skip the `:` after the field name, so every
+in-container RSS reading silently read 0 (`benchmarks/src/rss.rs`, regression
+test pinned); and `.dockerignore`'s `*.node` didn't match nested addons, so a
+stale Windows `spatial_rules.node` would have shadowed the Linux build
+(`**/*.node`).
 
 ### Engine vs turf memory footprint (`bun run bench memory-turf`)
 
@@ -256,17 +309,19 @@ and serving footprint (via the `memory_scaling` binary) vs the **turf
 baseline's pre-parsed form** — feature objects + precomputed bboxes, the exact
 representation the timed turf harness holds. The turf side runs each cell in a
 fresh child process and reports a post-forced-GC RSS delta (process-level
-ground truth; Bun's `heapUsed` under-reports nested coordinate arrays):
+ground truth; Bun's `heapUsed` under-reports nested coordinate arrays).
+**Linux numbers shown (deploy platform, 2026-08-23, `benchmarks/Dockerfile`);
+Windows (2026-08-23) was within a few MiB of every value:**
 
 | rules × verts | engine ruleset | engine serving* | turf baseline | turf / ruleset |
 |---|---|---|---|---|
-| 1,000 × 10 | 1.9 MiB | 2.4 MiB | 3.1 MiB | 1.6× |
-| 1,000 × 100 | 3.4 MiB | 4.4 MiB | 15.3 MiB | 4.5× |
-| 1,000 × 1,000 | 17.6 MiB | 23.3 MiB | 84.9 MiB | 4.8× |
-| 10,000 × 10 | 13.3 MiB | 15.6 MiB | 21.9 MiB | 1.6× |
-| 10,000 × 100 | 27.4 MiB | 30.3 MiB | 89.5 MiB | 3.3× |
-| 100,000 × 10 | 117.7 MiB | 139.2 MiB | 133.2 MiB | 1.1× |
-| 100,000 × 100 | 260.3 MiB | 281.9 MiB | 641.2 MiB | 2.5× |
+| 1,000 × 10 | 2.3 MiB | 2.7 MiB | 3.4 MiB | 1.5× |
+| 1,000 × 100 | 3.6 MiB | 4.4 MiB | 15.9 MiB | 4.4× |
+| 1,000 × 1,000 | 17.4 MiB | 22.4 MiB | 84.4 MiB | 4.9× |
+| 10,000 × 10 | 13.3 MiB | 15.4 MiB | 21.5 MiB | 1.6× |
+| 10,000 × 100 | 27.0 MiB | 29.7 MiB | 89.3 MiB | 3.3× |
+| 100,000 × 10 | 120.6 MiB | 142.0 MiB | 131.0 MiB | 1.1× |
+| 100,000 × 100 | 257.8 MiB | 279.4 MiB | 634.1 MiB | 2.5× |
 
 \* serving = ruleset + per-thread lazy prepared-geometry memo (ADR-0010) after
 the first query at the default 1,000 candidates (touch ~1,000 of the rules) —
@@ -280,31 +335,36 @@ workload-dependent, now close to the ruleset.
 - **The gap narrows for tiny rules.** At 10-vertex rings turf is only ~1–2×
   the ruleset — per-rule index overhead dominates both sides when the geometry
   itself is trivial (the engine's fixed ~1.2 kB/rule is real).
-- **The engine's serving footprint now beats turf too.** With lazy per-rule
-  preparation (memory-benchmark ticket 02) the engine no longer holds a
-  prepared form for every rule: at the default 1,000 candidates, serving is
-  ruleset + ~2–6 MiB and **beats the turf baseline at every cell** — most
-  dramatically where turf used to win: 100k×100 serving is **282 MiB vs
-  turf's 641 MiB** (previously 1.78 GiB vs 640 MiB, turf ahead). The remaining
-  serving overhead over the ruleset (~15–22 MiB at the big cells) is the
-  ~1,000 touched rules' prepared forms plus query-time working set. Worst case
-  is unchanged: a touch-everything workload prepares everything and lands at
-  the old ceiling (~ruleset + per-rule prepared cost), so the *duplication*
+- **The engine's serving footprint now beats turf everywhere except the
+  trivial-geometry corner.** With lazy per-rule preparation (memory-benchmark
+  ticket 02) serving is ruleset + a ~2–22 MiB margin at the default 1,000
+  candidates and **beats turf at every cell except 100k×10**, where the two are
+  within ~8% (engine serving 142 MiB vs turf 131 MiB): at 10-vertex rings
+  turf's low per-coordinate cost edges out the engine's per-rule fixed overhead
+  plus the touched-prepared slack. Everywhere else the engine wins, most
+  dramatically where turf used to: 100k×100 serving is **279 MiB vs turf's
+  634 MiB** (previously 1.78 GiB vs 640 MiB, turf ahead). Worst case is
+  unchanged: a touch-everything workload prepares everything and lands at the
+  old ceiling (~ruleset + per-rule prepared cost), so the *duplication*
   (per-thread copies) is still the geo 0.34 deferral (post-v1 ticket 05).
 
 Measured inside the `spatial-rules` Docker image (oven/bun:1.3.14 — pinned to
-CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates:
+CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates.
+Re-recorded on Linux 2026-08-23 (memory-benchmark ticket 03) via
+`bun run bench memory` in the bench image — the numbers moved ~2 MB, the
+conclusions stand:
 
 | Phase | RSS | VmHWM (peak resident) |
 |---|---|---|
-| Baseline (Bun + addon + ruleset built) | ~50 MB | ~51 MB |
-| Query load (20 × 1,000 batches) | ~62 MB sampled | **~65 MB** |
-| Replacement, isolated (10 swaps, no queries) | ~51 MB | **~52 MB** (≈ +0.5 MB over baseline) |
-| Boundedness | spread across 10 replacements ≈ 0 (no leak) | — |
+| Baseline (Bun + addon + ruleset built) | ~52 MB | ~52 MB |
+| Query load (20 × 1,000 batches) | ~64 MB sampled | **~67 MB** |
+| Replacement, isolated (10 swaps, no queries) | ~66 MB → ~66 MB | ~67 MB (≈ +0.5 MB over baseline) |
+| Boundedness | spread across 10 replacements ≈ −1 MB (no leak) | — |
 
-- **Peak resident ≈ 65 MB** on the production workload; replacement adds only
+- **Peak resident ≈ 67 MB** on the production workload; replacement adds only
   ~0.5 MB of peak on top of baseline (the old ruleset is dropped by the atomic
-  swap, and both coexist for only the ~18 ms build).
+  swap, and both coexist for only the ~18 ms build). `VmPeak` (~132 GB) is
+  Bun/JSC's virtual-address-space reservation, not resident memory.
 - **Bounded**: RSS does not climb across repeated replacements (first ≈ last),
   so there is no per-replacement leak.
 - **Works under a hard cap**: `docker run --memory=128m --memory-swap=128m`
@@ -312,7 +372,7 @@ CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates:
   ~29 MiB actual cgroup usage (22.7% of the cap); `integration/smoke.mjs` green.
 - `VmPeak` (~132 GB) is Bun/JSC's virtual-address-space reservation, **not**
   resident memory — ignore it when sizing container limits. The number that
-  matters for a K8s `limits.memory` is VmHWM (~65 MB), so a 128 MB limit leaves
+  matters for a K8s `limits.memory` is VmHWM (~67 MB), so a 128 MB limit leaves
   comfortable headroom.
 
 ### Peak RSS under sustained load (architecture-hardening 09)
@@ -331,14 +391,14 @@ docker stop spatial-rules-load
 
 `VmHWM` of PID 1 (the Bun server) is the kernel-recorded all-time peak
 resident, capturing the load phase even though the event loop can't sample
-mid-request. **Baseline: peak resident ≈ 65 MB** (the VmHWM from the memory
-harness above, which already exercises 20 × 1,000-candidate batches in the
-container); the load-harness VmHWM re-measurement is recorded here on the next
-Docker run — the figure is expected to sit in the same ~65 MB envelope against
-the documented 128 MB bound. The per-thread prepared-geometry cache's marginal
-contribution (ADR-0010, one owned geometry clone per thread per ruleset) is
-deferred to the geo 0.34 upgrade (ticket 05 of `post-v1`), which moves the
-cache from owned per-thread clones to borrowed `Arc`-shared prepared forms.
+mid-request. **Baseline: peak resident ≈ 67 MB** (the 2026-08-23 Linux
+re-record of the memory harness above, which exercises 20 × 1,000-candidate
+batches in the container); the load-harness VmHWM is expected to sit in the
+same ~67 MB envelope against the documented 128 MB bound. The per-thread
+prepared-geometry duplication's marginal contribution (ADR-0010, one owned
+geometry clone per thread per ruleset) is deferred to the geo 0.34 upgrade
+(ticket 05 of `post-v1`), which moves the cache from owned per-thread clones to
+borrowed `Arc`-shared prepared forms.
 
 ## Limitations suite — why turf doesn't scale
 
