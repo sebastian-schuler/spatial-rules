@@ -7,10 +7,12 @@
 //! changes (`replace`, ADR-0007). The public eager seam
 //! (`Ruleset::prepared`) force-fills every slot and snapshots a dense handle.
 //!
-//! [`PreparedMemo`] is the whole seam: it bundles the ruleset identity, the
-//! rule slice it prepares from, and the shared slots — callers never see the
-//! raw storage or a bare `&[Rule]` (the `(slots, rules)` clump that earlier
-//! iterations leaked into `Ruleset`).
+//! [`PreparedMemo`] is the whole seam: it owns the keying (ruleset identity),
+//! the rule slice it prepares from, and the shared slots. The query path never
+//! sees a bare `&[Rule]` (the `(slots, rules)` clump earlier iterations leaked
+//! into `Ruleset`); it prepares via [`PreparedMemo::ensure`] and relates
+//! through a borrowed slots view ([`PreparedMemo::slots`]) so the hot loop
+//! takes one immutable borrow per candidate rather than a per-rule borrow.
 
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;

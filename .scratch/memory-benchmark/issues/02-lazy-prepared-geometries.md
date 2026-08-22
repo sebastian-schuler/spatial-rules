@@ -106,16 +106,12 @@ to query results or the public API).
   index-traversal bound, relate is negligible). Reverted to the ticket's
   sanctioned per-rule fallback, which measures at-or-better than the old eager
   cache.
-- **Result ordering kept deterministic.** The relate loop collects each
-  candidate's envelope-filtered rule ids in index order, prepares exactly the
-  missing ones, then relates in that order — so `Matched.rule_ids` keeps the
-  eager path's deterministic ascending order whether or not the memo was
-  already warm. Pinned by `rule_ids_stay_in_envelope_order_with_a_partially_warm_memo`.
-- **The memo is a deep module.** `prepared_cache.rs` exposes one
-  `PreparedMemo` seam bundling ruleset identity, the rule slice, and the shared
-  slots — `Ruleset` and the relate loop never see the raw storage (removes the
-  `(slots, rules)` clump and the leaked `rules_slice()` accessor that an early
-  review flagged).
+- **Result ordering kept deterministic.** The relate loop filters each
+  candidate's envelope results to the rules it will relate against, prepares
+  exactly the missing ones, then relates in envelope order — so
+  `Matched.rule_ids` keeps the eager path's deterministic ascending order
+  whether or not the memo was already warm. Pinned by
+  `rule_ids_stay_in_envelope_order_with_a_partially_warm_memo`.
 - **New tests.** `prepared_cache.rs`: subset-only preparation, id-switch
   wholesale reset, dense-vs-lazy relate equality, `prepare_all` order.
   `ruleset.rs`: query touching a subset prepares only that subset; touch-all
@@ -133,3 +129,15 @@ to query results or the public API).
 - **Docs:** `docs/benchmarks.md` §Memory scaling table + findings + turf
   comparison re-recorded (2026-08-23), ADR-0010 amended (lazy addendum),
   README memory bullet refreshed, roadmap P0 updated.
+
+## Comments
+
+- 2026-08-23 (post-review): the memo was deepened into a single `PreparedMemo`
+  seam in `prepared_cache.rs` (bundling ruleset identity, the rule slice, and
+  the shared slots) — removing a leaked `rules_slice()` accessor on `Ruleset`
+  and the `(slots, rules)` data clump a review flagged — and the relate loop
+  was unified to filter the envelope results in place, `ensure` the missing
+  slots, then relate in envelope order (one loop, no post-hoc `rule_ids`
+  re-sort; ordering is deterministic by construction). Verified: full suite +
+  clippy + node smoke green; memory-scale 100k×100 qps 6.9–7.1 M (within the
+  6.0–7.6 M run-variance band), serving footprint unchanged.

@@ -91,11 +91,9 @@ pub struct PreparedQuery<'a> {
     where_filter: Option<HashSet<RuleId>>,
     include_overlap: bool,
     /// Reused across the batch so the spatial-index result is filled into one
-    /// buffer instead of allocated per candidate.
+    /// buffer instead of allocated per candidate; then filtered in place to
+    /// the rules the candidate will relate against (envelope order).
     scratch: RefCell<Vec<RuleId>>,
-    /// Reused across the batch: the envelope-filtered rules one candidate will
-    /// relate against, in envelope order.
-    touched: RefCell<Vec<RuleId>>,
 }
 
 impl<'a> PreparedQuery<'a> {
@@ -115,7 +113,6 @@ impl<'a> PreparedQuery<'a> {
             where_filter,
             include_overlap: query.include_overlap,
             scratch: RefCell::new(Vec::new()),
-            touched: RefCell::new(Vec::new()),
         }
     }
 
@@ -216,25 +213,20 @@ impl<'a> PreparedQuery<'a> {
             }
         };
 
-        // Lazy preparation (ADR-0010, memory-benchmark 02): collect the rules
-        // this candidate reaches (envelope order), prepare exactly the missing
-        // ones, then relate in that order — so `rule_ids` stays in the eager
-        // path's deterministic envelope (ascending) order whether or not the
-        // memo was already warm. Warm batches find everything prepared, so
-        // `ensure` is a no-op scan and the loop adds one predicted `None`
-        // check per touched rule.
-        {
-            let mut scratch = self.scratch.borrow_mut();
-            let mut touched = self.touched.borrow_mut();
-            self.ruleset.query_envelope_into(&bbox, &mut scratch);
-            touched.clear();
-            touched.extend(scratch.iter().copied().filter(|&id| self.reaches_relate(id)));
-        }
-        let touched_ref = self.touched.borrow();
-        if !touched_ref.is_empty() {
-            self.memo.ensure(&touched_ref);
+        // Lazy preparation (ADR-0010, memory-benchmark 02): filter the
+        // envelope results to the rules this candidate will relate against,
+        // prepare exactly the missing ones, then relate in envelope order — so
+        // `rule_ids` stays in the eager path's deterministic ascending order
+        // whether or not the memo was already warm. Warm batches find
+        // everything prepared: `ensure` skips every slot fill and the loop
+        // adds one predicted `None` check per touched rule.
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(&bbox, &mut scratch);
+        scratch.retain(|&rule_id| self.reaches_relate(rule_id));
+        if !scratch.is_empty() {
+            self.memo.ensure(&scratch);
             let slots = self.memo.slots();
-            for &rule_id in touched_ref.iter() {
+            for &rule_id in scratch.iter() {
                 let prepared = slots[rule_id.index()]
                     .as_ref()
                     .expect("touched rules are prepared");
@@ -242,7 +234,7 @@ impl<'a> PreparedQuery<'a> {
                 record_match(rule_id, &matrix);
             }
         }
-        drop(touched_ref);
+        drop(scratch);
 
         EvalResult {
             matched: any_match,
