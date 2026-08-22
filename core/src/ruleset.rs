@@ -8,7 +8,7 @@ use geo::{BoundingRect, Geometry, PreparedGeometry, Rect};
 use crate::candidate::Candidate;
 pub use crate::evaluate::PreparedQuery;
 use crate::error::{ErrorCode, SpatialError};
-use crate::prepared_cache::{lazy_slots, next_ruleset_id, prepare_all, PreparedGeometries};
+use crate::prepared_cache::{next_ruleset_id, PreparedGeometries, PreparedMemo};
 use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
 use crate::query::{CandidateOutcome, Query};
@@ -188,12 +188,6 @@ impl Ruleset {
         }
     }
 
-    /// The raw rule slice — crate-internal seam for the lazy prepared-geometry
-    /// memo (ADR-0010), which must reach the geometries it prepares.
-    pub(crate) fn rules_slice(&self) -> &[Rule] {
-        &self.rules
-    }
-
     /// The prepared rule geometries for this ruleset (ADR-0010). A **dense**
     /// handle indexed by opaque [`RuleId`] — `len()` is the rule count, `get`
     /// is valid for any id, `iter` walks ruleset order — so callers (the
@@ -205,7 +199,7 @@ impl Ruleset {
     /// (memory-benchmark ticket 02).
     pub fn prepared(&self) -> PreparedRuleGeometries {
         PreparedRuleGeometries {
-            inner: prepare_all(&self.rules, self.id),
+            inner: PreparedMemo::for_ruleset(&self.rules, self.id).snapshot_all(),
         }
     }
 
@@ -246,12 +240,12 @@ impl Ruleset {
             .iter()
             .filter_map(|id| self.rule_id(id))
             .collect();
-        let slots = lazy_slots(&self.rules, self.id);
+        let memo = PreparedMemo::for_ruleset(&self.rules, self.id);
         let where_filter = query
             .where_clause
             .as_ref()
             .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
-        PreparedQuery::new(self, query, excluded, slots, where_filter)
+        PreparedQuery::new(self, query, excluded, memo, where_filter)
     }
 }
 
