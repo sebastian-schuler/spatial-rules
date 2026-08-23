@@ -12,11 +12,18 @@ use crate::properties::PropertyValue;
 use crate::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
 use crate::rule::RuleId;
 use crate::ruleset::Ruleset;
+use crate::temporal::TemporalInstant;
 use crate::where_expr::WhereExpr;
+
+/// Mean Earth radius used by geo's haversine measure (GRS80 mean radius,
+/// IUGG/Moritz 2000) — the same model the exact admission uses, so the
+/// pre-filter's degree expansion is conservative relative to it (ADR-0016).
+const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
 
 /// Answer a spatial predicate from a DE-9IM matrix between a candidate and a
 /// rule (ADR-0008, ADR-0012). `contains`/`within`/`covers`/`covered_by` are
-/// directional: the matrix is `candidate` relates to `rule`.
+/// directional: the matrix is `candidate` relates to `rule`. `WithinDistance`
+/// is a metric predicate evaluated by the distance path, never here.
 fn spatial_predicate_holds(
     predicate: SpatialPredicate,
     matrix: &IntersectionMatrix,
@@ -29,6 +36,9 @@ fn spatial_predicate_holds(
         SpatialPredicate::CoveredBy => matrix.is_coveredby(),
         SpatialPredicate::Touches => matrix.is_touches(),
         SpatialPredicate::Overlaps => matrix.is_overlaps(),
+        SpatialPredicate::WithinDistance => {
+            unreachable!("withinDistance is evaluated by the distance admission path")
+        }
     }
 }
 
@@ -91,6 +101,59 @@ fn envelope_or_invalid(candidate: &Candidate) -> Result<Rect<f64>, String> {
     }
 }
 
+/// Whether `withinDistance` supports the candidate type (ADR-0016): a point
+/// (or multipoint) candidate has a well-defined minimum distance to a rule.
+/// Polygon/MultiPolygon candidates are reported invalid for this predicate.
+fn within_distance_supported(candidate: &Candidate) -> bool {
+    matches!(candidate.geometry, Geometry::Point(_) | Geometry::MultiPoint(_))
+}
+
+/// The minimum haversine distance from a point candidate to a rule, in meters
+/// (ADR-0016): 0 when the point is inside the rule, else the distance to the
+/// rule's closest point. geo's haversine is antimeridian-safe, so the result
+/// is well-defined across ±180. Polygon candidates (unreachable via the
+/// admission guards) would be `INFINITY`.
+fn min_haversine_distance(candidate: &Geometry<f64>, rule: &Geometry<f64>) -> f64 {
+    use geo::Distance;
+    use geo::HaversineClosestPoint;
+    match candidate {
+        Geometry::Point(point) => match rule.haversine_closest_point(point) {
+            geo::Closest::Intersection(_) => 0.0,
+            geo::Closest::SinglePoint(closest) => geo::Haversine.distance(*point, closest),
+            geo::Closest::Indeterminate => f64::INFINITY,
+        },
+        Geometry::MultiPoint(points) => points
+            .iter()
+            .map(|point| min_haversine_distance(&Geometry::Point(*point), rule))
+            .fold(f64::INFINITY, f64::min),
+        _ => f64::INFINITY,
+    }
+}
+
+/// The conservative bounding-circle pre-filter envelope for `withinDistance`
+/// (ADR-0016): expand the candidate's envelope by `distance_meters`, using
+/// latitude-dependent degrees-per-meter so a within-N rule is never dropped.
+/// The longitude half-width is taken at the expanded range's farthest-from-
+/// equator latitude (where cos is smallest, so the degree expansion is
+/// largest — conservative). Longitude may cross ±180; the wrapped complement
+/// is queried separately by the caller.
+fn expand_envelope(bbox: &Rect<f64>, distance_meters: f64) -> Rect<f64> {
+    let d_rad = distance_meters / EARTH_RADIUS_METERS;
+    let d_lat = d_rad.to_degrees();
+    let lat_min = bbox.min().y - d_lat;
+    let lat_max = bbox.max().y + d_lat;
+    let farthest_lat = lat_min.abs().max(lat_max.abs()).min(90.0);
+    let d_lon = if farthest_lat.cos() > 1e-6 {
+        (d_rad / farthest_lat.cos()).to_degrees()
+    } else {
+        360.0
+    };
+    Rect::new(
+        (bbox.min().x - d_lon, lat_min.clamp(-90.0, 90.0)),
+        (bbox.max().x + d_lon, lat_max.clamp(-90.0, 90.0)),
+    )
+}
+
 pub struct PreparedQuery<'a> {
     ruleset: &'a Ruleset,
     spatial: SpatialPredicate,
@@ -101,6 +164,10 @@ pub struct PreparedQuery<'a> {
     memo: PreparedMemo<'a>,
     where_filter: Option<HashSet<RuleId>>,
     include_overlap: bool,
+    /// The `withinDistance` radius in meters (ADR-0016), validated at parse.
+    distance_meters: Option<f64>,
+    /// The reference time for `$activeAt` predicates (ADR-0017).
+    at: Option<TemporalInstant>,
     /// Reused across the batch so the spatial-index result is filled into one
     /// buffer instead of allocated per candidate; then filtered in place to
     /// the rules the candidate will relate against (envelope order).
@@ -123,6 +190,8 @@ impl<'a> PreparedQuery<'a> {
             memo,
             where_filter,
             include_overlap: query.include_overlap,
+            distance_meters: query.distance_meters,
+            at: query.at,
             scratch: RefCell::new(Vec::new()),
         }
     }
@@ -159,9 +228,10 @@ impl<'a> PreparedQuery<'a> {
         candidates.iter().map(|c| self.evaluate_resolve_mask(c)).collect()
     }
 
-    /// Whether a candidate-touching rule reaches the exact DE-9IM step:
-    /// not excluded and admitted by the property filter (ADR-0003 pipeline).
-    fn reaches_relate(&self, rule_id: RuleId) -> bool {
+    /// Whether a candidate-touching rule is admitted by the property pipeline
+    /// (the `where` clause and exclusions) before its exact spatial admission
+    /// — DE-9IM relate or distance, whichever the predicate uses.
+    fn admitted_by_properties(&self, rule_id: RuleId) -> bool {
         if self.excluded.contains(&rule_id) {
             return false;
         }
@@ -169,11 +239,19 @@ impl<'a> PreparedQuery<'a> {
             Some(filter) => filter.contains(&rule_id),
             None => match &self.where_clause {
                 Some(where_clause) => {
-                    where_clause.eval(self.ruleset.properties(rule_id))
+                    where_clause.eval(self.ruleset.properties(rule_id), self.at)
                 }
                 None => true,
             },
         }
+    }
+
+    /// The validated `withinDistance` radius in meters, or `None` when the
+    /// query is a malformed programmatic construction (the JSON parser already
+    /// validates; the programmatic surface must not panic on misuse). All
+    /// withinDistance entries guard on this before evaluating.
+    fn within_distance_radius(&self) -> Option<f64> {
+        self.distance_meters.filter(|d| d.is_finite() && *d > 0.0)
     }
 
     pub fn evaluate(&self, candidate: &Candidate) -> CandidateOutcome {
@@ -221,7 +299,7 @@ impl<'a> PreparedQuery<'a> {
     {
         let mut scratch = self.scratch.borrow_mut();
         self.ruleset.query_envelope_into(bbox, &mut scratch);
-        scratch.retain(|&rule_id| self.reaches_relate(rule_id));
+        scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
         if !scratch.is_empty() {
             self.memo.ensure(&scratch);
             let slots = self.memo.slots();
@@ -249,6 +327,10 @@ impl<'a> PreparedQuery<'a> {
                 };
             }
         };
+
+        if self.spatial == SpatialPredicate::WithinDistance {
+            return self.evaluate_result_distance(candidate, collect_ids, bbox);
+        }
 
         // Fixed pipeline: bbox -> property -> exact DE-9IM.
         let compute_overlaps = collect_ids && self.include_overlap;
@@ -278,17 +360,103 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
+    /// The `withinDistance` admission step (ADR-0016): a conservative
+    /// bounding-circle pre-filter over the R-tree (querying the wrapped
+    /// longitude complement when the expansion crosses ±180), then an exact
+    /// haversine minimum-distance confirm. `on_within` fires for each admitted
+    /// rule, in envelope order. `distance` is the validated radius; a malformed
+    /// programmatic query (no radius) admits nothing rather than panicking.
+    fn within_rules(&self, candidate: &Candidate, bbox: &Rect<f64>, distance: f64, mut on_within: impl FnMut(RuleId)) {
+        let expanded = expand_envelope(bbox, distance);
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(&expanded, &mut scratch);
+        let e_min = expanded.min().x;
+        let e_max = expanded.max().x;
+        let mut wrapped: Vec<RuleId> = Vec::new();
+        if e_min < -180.0 {
+            let mut part = Vec::new();
+            self.ruleset.query_envelope_into(
+                &Rect::new((e_min + 360.0, expanded.min().y), (180.0, expanded.max().y)),
+                &mut part,
+            );
+            wrapped.extend(part);
+        }
+        if e_max > 180.0 {
+            let mut part = Vec::new();
+            self.ruleset.query_envelope_into(
+                &Rect::new((-180.0, expanded.min().y), (e_max - 360.0, expanded.max().y)),
+                &mut part,
+            );
+            wrapped.extend(part);
+        }
+        if !wrapped.is_empty() {
+            scratch.extend(wrapped);
+            scratch.sort_unstable();
+            scratch.dedup();
+        }
+        scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
+        for &rule_id in scratch.iter() {
+            if min_haversine_distance(&candidate.geometry, self.ruleset.geometry(rule_id))
+                <= distance
+            {
+                on_within(rule_id);
+            }
+        }
+    }
+
+    fn evaluate_result_distance(&self, candidate: &Candidate, collect_ids: bool, bbox: Rect<f64>) -> EvalResult {
+        if !within_distance_supported(candidate) {
+            return EvalResult {
+                matched: false,
+                invalid: Some("withinDistance requires a point candidate".to_string()),
+                rule_ids: Vec::new(),
+                overlaps: None,
+            };
+        }
+        let Some(distance) = self.within_distance_radius() else {
+            // A malformed programmatic query (the JSON parser validates): report
+            // the candidate invalid rather than panicking in the evaluation path.
+            return EvalResult {
+                matched: false,
+                invalid: Some("withinDistance requires a positive distance".to_string()),
+                rule_ids: Vec::new(),
+                overlaps: None,
+            };
+        };
+        let mut matched: Vec<RuleId> = Vec::new();
+        let mut any_match = false;
+        self.within_rules(candidate, &bbox, distance, |rule_id| {
+            any_match = true;
+            if collect_ids {
+                matched.push(rule_id);
+            }
+        });
+        EvalResult {
+            matched: any_match,
+            invalid: None,
+            rule_ids: matched,
+            overlaps: None,
+        }
+    }
+
     /// The applicable rule ids for a candidate in envelope order (the fixed
-    /// bbox → property → exact DE-9IM pipeline), or the recorded invalid
+    /// bbox → property → admission pipeline), or the recorded invalid
     /// reason. The full resolve path's gather step.
     fn applicable_ids(&self, candidate: &Candidate) -> Result<Vec<RuleId>, String> {
         let bbox = envelope_or_invalid(candidate)?;
         let mut ids: Vec<RuleId> = Vec::new();
-        self.relate_touched(candidate, &bbox, |rule_id, matrix| {
-            if spatial_predicate_holds(self.spatial, matrix) {
-                ids.push(rule_id);
+        match self.spatial {
+            SpatialPredicate::WithinDistance => {
+                if let Some(distance) = self.within_distance_radius() {
+                    self.within_rules(candidate, &bbox, distance, |rule_id| ids.push(rule_id));
+                }
             }
-        });
+            _ => self.relate_touched(candidate, &bbox, |rule_id, matrix| {
+                if spatial_predicate_holds(self.spatial, matrix) {
+                    ids.push(rule_id);
+                }
+            }),
+        }
         Ok(ids)
     }
 
@@ -303,6 +471,18 @@ impl<'a> PreparedQuery<'a> {
     /// **Collect-then-resolve**: no early exit at the first spatial hit, the
     /// merge needs the full applicable set (ADR-0015 stance).
     pub fn evaluate_resolve(&self, candidate: &Candidate) -> ResolutionOutcome {
+        if self.spatial == SpatialPredicate::WithinDistance {
+            if !within_distance_supported(candidate) {
+                return ResolutionOutcome::Invalid {
+                    reason: "withinDistance requires a point candidate".to_string(),
+                };
+            }
+            if self.within_distance_radius().is_none() {
+                return ResolutionOutcome::Invalid {
+                    reason: "withinDistance requires a positive distance".to_string(),
+                };
+            }
+        }
         let ids = match self.applicable_ids(candidate) {
             Ok(ids) => ids,
             Err(reason) => {
@@ -353,15 +533,27 @@ impl<'a> PreparedQuery<'a> {
     /// id buffer, the winner sort, the values merge, or the explanation —
     /// mirroring how the match mask skips per-match rule ids (ADR-0004).
     pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
+        if self.spatial == SpatialPredicate::WithinDistance
+            && (!within_distance_supported(candidate) || self.within_distance_radius().is_none())
+        {
+            return 2;
+        }
         let Ok(bbox) = envelope_or_invalid(candidate) else {
             return 2;
         };
         let mut resolved = false;
-        self.relate_touched(candidate, &bbox, |_, matrix| {
-            if spatial_predicate_holds(self.spatial, matrix) {
-                resolved = true;
+        match self.spatial {
+            SpatialPredicate::WithinDistance => {
+                if let Some(distance) = self.within_distance_radius() {
+                    self.within_rules(candidate, &bbox, distance, |_| resolved = true);
+                }
             }
-        });
+            _ => self.relate_touched(candidate, &bbox, |_, matrix| {
+                if spatial_predicate_holds(self.spatial, matrix) {
+                    resolved = true;
+                }
+            }),
+        }
         if resolved { 1 } else { 0 }
     }
 }

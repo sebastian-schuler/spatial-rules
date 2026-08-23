@@ -119,7 +119,7 @@ proptest! {
         // `eval` must be total: a bool for every property map, never a panic,
         // under the documented missing/type-mismatch = non-match rule.
         for expr in sample_where_exprs() {
-            let _ = expr.eval(&props);
+            let _ = expr.eval(&props, None);
         }
     }
 
@@ -418,5 +418,94 @@ proptest! {
                 ),
             }
         }
+    }
+}
+
+// --- P2 ticket 03: withinDistance (ADR-0016) ---
+
+/// A point anywhere on the globe, including near the antimeridian (which the
+/// pre-filter must handle by querying the wrapped longitude complement).
+fn point_strategy() -> impl Strategy<Value = (f64, f64)> {
+    (-180.0f64..180.0, -85.0f64..85.0)
+}
+
+/// A small world-spanning rectangle (always a valid simple polygon).
+fn world_rect_strategy() -> impl Strategy<Value = Rect<f64>> {
+    (-180.0f64..170.0, 1.0f64..10.0, -85.0f64..75.0, 1.0f64..10.0).prop_map(
+        |(min_x, width, min_y, height)| {
+            Rect::new(
+                Coord {
+                    x: min_x,
+                    y: min_y,
+                },
+                Coord {
+                    x: (min_x + width).min(180.0),
+                    y: (min_y + height).min(85.0),
+                },
+            )
+        },
+    )
+}
+
+/// The independent oracle for `withinDistance`: the minimum haversine distance
+/// from a point to a rule, computed directly from geo's primitives — never the
+/// engine's own admission path. Antimeridian-safe by construction.
+fn min_haversine_distance_oracle(rule: &geo::Geometry<f64>, point: &geo::Point<f64>) -> f64 {
+    use geo::Distance;
+    use geo::HaversineClosestPoint;
+    match rule.haversine_closest_point(point) {
+        geo::Closest::Intersection(_) => 0.0,
+        geo::Closest::SinglePoint(closest) => geo::Haversine.distance(*point, closest),
+        geo::Closest::Indeterminate => f64::INFINITY,
+    }
+}
+
+proptest! {
+    #[test]
+    fn within_distance_never_drops_a_within_rule(
+        rects in prop::collection::vec(world_rect_strategy(), 1..8),
+        (lon, lat) in point_strategy(),
+        distance in 1.0f64..200_000.0,
+    ) {
+        let rules: Vec<Rule> = rects
+            .iter()
+            .enumerate()
+            .map(|(index, rect)| Rule {
+                id: format!("r{index}"),
+                properties: BTreeMap::new(),
+                geometry: rect_to_geometry(*rect),
+                priority: 0,
+            })
+            .collect();
+        let ruleset = Ruleset::build(rules.clone()).unwrap();
+        let scan = Ruleset::build_with(rules, SpatialIndexKind::LinearScan).unwrap();
+        let candidate = Candidate::new(
+            "c".to_string(),
+            geo::Geometry::Point(geo::Point::new(lon, lat)),
+        );
+
+        // The oracle: any rule within `distance` of the point makes it a match.
+        let point = geo::Point::new(lon, lat);
+        let expected = ruleset
+            .rules()
+            .iter()
+            .any(|(_, geometry, _)| min_haversine_distance_oracle(geometry, &point) <= distance);
+
+        let query = Query::from_json(&json!({
+            "spatial": { "predicate": "withinDistance", "distance": distance }
+        }))
+        .unwrap();
+
+        // The engine's mask agrees with the oracle — so the conservative
+        // bounding-circle pre-filter (including its antimeridian complement)
+        // never drops a within-N rule, and the exact check is correct.
+        let mask = ruleset.query_mask(std::slice::from_ref(&candidate), &query);
+        prop_assert_eq!(&mask, &vec![expected as u8]);
+
+        // Determinism and index-kind parity.
+        let again = ruleset.query_mask(std::slice::from_ref(&candidate), &query);
+        prop_assert_eq!(&again, &mask);
+        let scanned = scan.query_mask(std::slice::from_ref(&candidate), &query);
+        prop_assert_eq!(&scanned, &mask);
     }
 }

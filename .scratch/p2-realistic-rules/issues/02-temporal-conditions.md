@@ -1,7 +1,7 @@
 # Temporal conditions: query `at` + whole-clause `$activeAt` over scalar rule window properties
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -49,3 +49,13 @@ Run: `cargo test --workspace` and `cargo clippy --workspace --all-targets` — g
 - Temporal indexing
 - Holidays; timezone offsets; sub-hour precision
 - Reserved window keys
+
+## Answer
+
+Implemented (P2 commit, see git log). Per ADR-0017:
+
+- `temporal.rs`: `TemporalInstant` — naive ISO-8601 (`YYYY-MM-DDTHH:MM[:SS]`) parsed to local day-of-week + hour (Zeller's congruence); offsets rejected; seconds validated but discarded (hour granularity).
+- `Query.at: Option<TemporalInstant>` — required (SR_INVALID_QUERY) when the `where` clause contains `$activeAt` (recursive `has_active_at`); a malformed `at` is rejected; a present-but-unused `at` is allowed and validated.
+- `WhereExpr::ActiveAt(ActiveAtClause)` — a whole-clause operator composable under `$and`/`$or`/`$nor`, naming the rule's window fields (`daysOfWeek` Int bitmask Mon=1..Sun=64, `startHour`/`endHour` Int 0..=23). Admission is start-inclusive/end-exclusive with midnight wrap; a missing or non-Int field, `daysOfWeek = 0`, or `startHour == endHour` never admits.
+- Evaluation threads the reference time through `WhereExpr::eval`; the equality index leaves `$activeAt` to per-rule scan.
+- `query()` and the DE-9IM mask are unchanged. Tests: `core/tests/temporal.rs` (12), `temporal.rs` unit tests, resolution admission.

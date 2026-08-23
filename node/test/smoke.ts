@@ -182,6 +182,16 @@ const pointCandidates = Buffer.from(
 );
 assert.deepEqual(Array.from(ruleset.query(pointCandidates, intersects).mask()), [1, 0]);
 
+// withinDistance (P2, ADR-0016): a metric predicate passing through the same
+// query surface. pt-in (inside zone-a) is within 100 m of it; pt-out is not.
+const within = JSON.stringify({ spatial: { predicate: 'withinDistance', distance: 100 } });
+assert.deepEqual(Array.from(ruleset.query(pointCandidates, within).mask()), [1, 0]);
+// Strict validation: distance is required for withinDistance.
+assert.throws(
+  () => ruleset.query(pointCandidates, JSON.stringify({ spatial: { predicate: 'withinDistance' } })),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',
+);
+
 // Resolution (ticket 04, ADR-0015): resolve() returns a chainable
 // ResolutionResult — a compact mask (0 no resolution, 1 resolved, 2 invalid)
 // plus lazy rich toJson() with the winner, first-provider-wins values, and the

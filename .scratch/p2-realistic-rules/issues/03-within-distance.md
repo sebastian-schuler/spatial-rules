@@ -1,7 +1,7 @@
 # withinDistance predicate: query shape, haversine admission, resolution integration
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 ## Question
@@ -54,3 +54,13 @@ Run: `cargo test --workspace` and `cargo clippy --workspace --all-targets` — g
 - `nearest` (documented Non-Goal, Initial-plan §72) and proximity bands
 - Ellipsoidal Karney geodesic (additive later, ADR-0016)
 - Any change to the existing DE-9IM predicates
+
+## Answer
+
+Implemented (P2 commit, see git log). Per ADR-0016:
+
+- `SpatialPredicate::WithinDistance` (payload-free) + `Query.distance_meters: Option<f64>`; the query shape `{spatial: {predicate: "withinDistance", distance: <meters>}}` is strictly validated (distance required and finite positive for withinDistance; present with another predicate → SR_INVALID_QUERY).
+- Admission is the minimum haversine distance ≤ N (0 when inside, symmetric) via `HaversineClosestPoint` + `Haversine.distance`. v1 supports point/multipoint candidates; a polygon candidate reports `withinDistance requires a point candidate` (ADR-0016 amended to carve out the restriction). A malformed programmatic query (missing/non-finite radius) reports invalid rather than panicking.
+- Evaluation: a conservative bounding-circle pre-filter (latitude-dependent degree expansion, with the wrapped longitude complement queried when the expansion crosses ±180) over the R-tree, then exact confirm — never dropping a within-N rule (property-oracled).
+- Resolve/mask integration: withinDistance admits rules into the resolution applicable set and the compact mask like DE-9IM. `query()` and the DE-9IM mask are unchanged.
+- Tests: `core/tests/distance.rs` (12), the `within_distance_never_drops_a_within_rule` property (oracle + RStar/LinearScan parity), api_surface predicate round-trip, node smoke.

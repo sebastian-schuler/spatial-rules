@@ -20,6 +20,7 @@ mod ruleset;
 mod spatial_index;
 #[cfg(test)]
 mod test_support;
+mod temporal;
 mod validation;
 mod where_expr;
 
@@ -35,5 +36,6 @@ pub use query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, Resoluti
 pub use rule::{Rule, RuleId};
 pub use ruleset::{PreparedQuery, PreparedRuleGeometries, RuleSource, Ruleset};
 pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};
+pub use temporal::TemporalInstant;
 pub use validation::{classify_candidate, ensure_supported_geometry, validate_rule_geometry};
 pub use where_expr::{FieldOp, FieldPredicate, WhereExpr};

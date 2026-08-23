@@ -6,9 +6,13 @@ use std::str::FromStr;
 use crate::error::SpatialError;
 use crate::properties::PropertyValue;
 use crate::rule::RuleId;
+use crate::temporal::TemporalInstant;
 use crate::where_expr::WhereExpr;
 
 /// A spatial predicate between a candidate and a rule (ADR-0008, ADR-0012).
+///
+/// `WithinDistance` is a metric predicate (ADR-0016), not DE-9IM: it is
+/// admitted when the candidate is within `Query.distance_meters` of the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpatialPredicate {
     Intersects,
@@ -18,6 +22,7 @@ pub enum SpatialPredicate {
     CoveredBy,
     Touches,
     Overlaps,
+    WithinDistance,
 }
 
 impl SpatialPredicate {
@@ -30,6 +35,7 @@ impl SpatialPredicate {
             SpatialPredicate::CoveredBy => "covered_by",
             SpatialPredicate::Touches => "touches",
             SpatialPredicate::Overlaps => "overlaps",
+            SpatialPredicate::WithinDistance => "withinDistance",
         }
     }
 }
@@ -48,6 +54,7 @@ impl std::str::FromStr for SpatialPredicate {
             "covered_by" => Ok(SpatialPredicate::CoveredBy),
             "touches" => Ok(SpatialPredicate::Touches),
             "overlaps" => Ok(SpatialPredicate::Overlaps),
+            "withinDistance" => Ok(SpatialPredicate::WithinDistance),
             other => Err(SpatialError::unsupported_spatial_predicate(format!(
                 "unsupported spatial predicate: {other}"
             ))),
@@ -56,8 +63,9 @@ impl std::str::FromStr for SpatialPredicate {
 }
 
 /// One batch evaluation: a spatial predicate, an optional property `where`
-/// clause, optional excluded rule ids (CONTEXT.md §5), and an opt-in overlap
-/// computation (ADR-0012).
+/// clause, optional excluded rule ids (CONTEXT.md §5), an opt-in overlap
+/// computation (ADR-0012), a distance radius for `withinDistance` (ADR-0016),
+/// and an optional reference time for temporal predicates (ADR-0017).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub spatial: SpatialPredicate,
@@ -66,6 +74,12 @@ pub struct Query {
     /// When true, the rich path computes per-matched-rule geodesic overlap
     /// area/ratio (ADR-0012). The hot-path mask ignores this flag.
     pub include_overlap: bool,
+    /// The `withinDistance` radius in meters (ADR-0016); `Some` only when
+    /// `spatial == WithinDistance`.
+    pub distance_meters: Option<f64>,
+    /// The reference time for `$activeAt` predicates (ADR-0017). Required
+    /// whenever the `where` clause contains one.
+    pub at: Option<TemporalInstant>,
 }
 
 impl Query {
@@ -75,6 +89,8 @@ impl Query {
             where_clause: None,
             exclude_rule_ids: Vec::new(),
             include_overlap: false,
+            distance_meters: None,
+            at: None,
         }
     }
 
@@ -93,8 +109,23 @@ impl Query {
         self
     }
 
+    /// Set the `withinDistance` radius in meters (ADR-0016).
+    pub fn with_distance(mut self, distance_meters: f64) -> Self {
+        self.distance_meters = Some(distance_meters);
+        self
+    }
+
+    /// Set the reference time for `$activeAt` predicates (ADR-0017).
+    pub fn with_at(mut self, at: TemporalInstant) -> Self {
+        self.at = Some(at);
+        self
+    }
+
     /// Parse the JSON query shape (Initial-plan §22):
-    /// `{ "spatial": { "predicate": "..." }, "where": {...}, "excludeRuleIds": [...], "includeOverlap": true }`.
+    /// `{ "spatial": { "predicate": "..." }, "where": {...}, "excludeRuleIds": [...], "includeOverlap": true, "at": "YYYY-MM-DDTHH:MM" }`.
+    /// For `withinDistance` the `spatial` object also carries `"distance"` in
+    /// meters (ADR-0016); `at` is required when the `where` clause uses
+    /// `$activeAt` (ADR-0017).
     pub fn from_json(value: &serde_json::Value) -> Result<Self, SpatialError> {
         let object = value
             .as_object()
@@ -112,10 +143,52 @@ impl Query {
             .ok_or_else(|| SpatialError::invalid_query("'spatial.predicate' must be a string"))?;
         let spatial = SpatialPredicate::from_str(predicate)?;
 
+        let distance_meters = match spatial_object.get("distance") {
+            None => None,
+            Some(value) => {
+                let distance = value.as_f64().ok_or_else(|| {
+                    SpatialError::invalid_query("'spatial.distance' must be a number")
+                })?;
+                if !distance.is_finite() || distance <= 0.0 {
+                    return Err(SpatialError::invalid_query(
+                        "'spatial.distance' must be a finite positive number",
+                    ));
+                }
+                Some(distance)
+            }
+        };
+        if spatial == SpatialPredicate::WithinDistance && distance_meters.is_none() {
+            return Err(SpatialError::invalid_query(
+                "'withinDistance' requires a positive 'spatial.distance'",
+            ));
+        }
+        if spatial != SpatialPredicate::WithinDistance && distance_meters.is_some() {
+            return Err(SpatialError::invalid_query(
+                "'spatial.distance' is only valid with the 'withinDistance' predicate",
+            ));
+        }
+
         let where_clause = match object.get("where") {
             None => None,
             Some(value) => Some(WhereExpr::parse(value)?),
         };
+
+        let at = match object.get("at") {
+            None => None,
+            Some(value) => {
+                let text = value.as_str().ok_or_else(|| {
+                    SpatialError::invalid_query("'at' must be an ISO-8601 string")
+                })?;
+                let instant = TemporalInstant::parse_iso8601(text)
+                    .map_err(|e| SpatialError::invalid_query(format!("invalid 'at': {e}")))?;
+                Some(instant)
+            }
+        };
+        if at.is_none() && where_clause.as_ref().is_some_and(WhereExpr::has_active_at) {
+            return Err(SpatialError::invalid_query(
+                "'at' is required when a '$activeAt' predicate is present",
+            ));
+        }
 
         let exclude_rule_ids = match object.get("excludeRuleIds") {
             None => Vec::new(),
@@ -146,6 +219,8 @@ impl Query {
             where_clause,
             exclude_rule_ids,
             include_overlap,
+            distance_meters,
+            at,
         })
     }
 }
