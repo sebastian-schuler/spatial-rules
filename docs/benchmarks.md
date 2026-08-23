@@ -244,11 +244,16 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
   on Windows (~7 ms on Linux) — one-time prepare cost now lands only in the
   latency tail of requests that first touch a rule.
 - **No per-replacement leak — proven on Linux (memory-benchmark ticket 03).**
-  The 5%-tolerance `bounded` verdict is a *heuristic*: it compares quarter
-  means, so a short (20-swap, budget-capped) window that lands on an up-slope
-  reports `bounded: false` even for a bounded process. The per-swap RSS/commit
-  traces in the report are the ground truth, and the 50-swap probes settle the
-  ticket-01 caveat ("no leak claim either way" for the big cells):
+  The 5%-tolerance `bounded` verdict is a *heuristic* that recognizes three
+  bounded shapes — a steady series, a sawtooth whose last quarter returns to
+  its floor (a trim landed in the window), and a warmup that went flat — and
+  reports `false` only as *inconclusive* (drift the window cannot explain, e.g.
+  an up-slope landing between two glibc trims). A short (20-swap,
+  budget-capped) window against a sawtooth is therefore **phase-dependent**
+  (the 100k×100 grid verdict flips between runs depending on where the trim
+  cycle lands), so the per-swap RSS/commit traces and the 50-swap probes are
+  the ground truth. The probes settle the ticket-01 caveat ("no leak claim
+  either way" for the big cells):
   - **The 1k×1k cell plateaus flat** (Windows): 270.7 MiB constant to ±0.1 MiB
     from swaps 36–50.
   - **The big cells oscillate in a bounded sawtooth, not a leak** (Linux).
@@ -302,7 +307,10 @@ self/status` parser didn't skip the `:` after the field name, so every
 in-container RSS reading silently read 0 (`benchmarks/src/rss.rs`, regression
 test pinned); and `.dockerignore`'s `*.node` didn't match nested addons, so a
 stale Windows `spatial_rules.node` would have shadowed the Linux build
-(`**/*.node`).
+(`**/*.node`). A follow-up made the lifecycle `bounded` verdict recognize
+warmup plateaus and sawtooth resets instead of reading them as leak drift
+(`is_bounded_series`, memory-benchmark ticket 03), pinned by tests on the
+recorded traces.
 
 ### Engine vs turf memory footprint (`bun run bench memory-turf`)
 

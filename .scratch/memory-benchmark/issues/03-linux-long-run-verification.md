@@ -64,13 +64,15 @@ inside the pinned container, plus two measurement bugs surfaced and fixed.
 - **Full grid (Linux).** Ruleset/serving/qps within ~±15% of Windows (Linux
   heavier on the tiny 10-vertex rings, leaner at 1k-vertex rings; qps mostly
   5–19% faster). Serving at 100k×100 = **282 MiB** (vs 1.78 GiB eager); cold
-  first batch 7 ms (vs 1.9 s eager); warm qps unchanged. Lifecycle `bounded`
-  verdicts per cell: 1000x10 / 1000x100 / 1000x1000 / 10000x100 `true`;
-  10000x10, 100000x10, 100000x100 `false`. The verdict is a quarter-mean
-  *heuristic* — the AC hypothesis that the Windows `false` cells would flip to
-  `true` on Linux was **refuted**: the traces show each `false` cell is either
-  a one-time warmup plateau (10000x10: 26→33 MiB then flat) or an up-slope of
-  a bounded sawtooth (the 100k cells), not a leak.
+  first batch 7 ms (vs 1.9 s eager); warm qps unchanged. The lifecycle
+  `bounded` verdict was a quarter-mean *heuristic* that misread bounded shapes
+  as drift — the AC hypothesis that the Windows `false` cells would flip to
+  `true` on Linux was **refuted**, and a follow-up fix replaced it with a
+  resets/plateau-aware verdict (see Comments): on Linux the warmup cell
+  (10000×10) and sawtooth-with-reset windows now report `true`; a 20-swap
+  window landing entirely between two glibc trims stays `false`
+  (*inconclusive* — phase-dependent, run to run), which is what the 50-swap
+  probes definitively resolve.
 - **50-swap probes settle the leak question.** 100k×100 oscillates between
   ~561 and ~774 MiB over 50 swaps, 100k×10 between ~286 and ~543 MiB — glibc
   grows the arena ~21 MiB per swap and trims it back to the same post-trim
@@ -88,3 +90,21 @@ inside the pinned container, plus two measurement bugs surfaced and fixed.
   Linux method, and updated container/load baselines; README + roadmap P0
   refreshed; ticket 01's caveats updated. Full workspace suite green on Linux
   (the rss tests that CI had been failing on now pass).
+
+## Comments
+
+- 2026-08-23 (follow-up): the lifecycle `bounded` verdict was replaced with a
+  resets/plateau-aware test (`is_bounded_series` in `benchmarks/src/
+  memory_scaling.rs`). The quarter-mean heuristic misread two bounded shapes
+  as leak drift: a one-time warmup step that then runs flat, and a bounded
+  sawtooth whose window landed on an up-slope. The new test classifies bounded
+  when the last quarter is steady, returns to the second quarter's floor
+  (a trim landed in the window), or is flat (warmup done); `false` is now the
+  honest *inconclusive* — drift the window can't explain, which is
+  phase-dependent for 20-swap windows against the ~11–18-swap glibc trim
+  cycle. A "one-time step" variant was rejected during development because it
+  could rescue a slow leak whose adjacent quarter means moved <5%. Pinned by
+  unit tests on the recorded Linux traces (warmup 10000×10 → bounded, sawtooth
+  with/without a visible reset, steady leak, slow leak) and validated against
+  both grids, both 50-swap probes, and a fresh Linux re-run of the affected
+  cells.
