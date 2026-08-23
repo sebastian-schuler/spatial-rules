@@ -5,8 +5,13 @@ Single-context repo. Requirements source: `docs/Initial-plan.md`. Decisions: `do
 ## Glossary
 
 - **Candidate** — a geometry being evaluated against the rules (§4.2).
-- **Rule** — an ID, queryable properties, and a geometry, evaluated as a predicate target (§4.1).
+- **Rule** — an ID, a top-level integer `priority`, queryable properties, and a geometry, evaluated as a predicate target (§4.1, ADR-0015).
 - **Rule ID** — the application-supplied identifier of a rule; internally mapped to a numeric `RuleId` (§9).
+- **Priority** — the top-level integer precedence field on a rule: higher wins, a missing field is `0`, ties break by ruleset declaration order (ADR-0015).
+- **Applicable rule** — a rule admitted for a candidate under a query: the spatial predicate holds, the `where` clause admits it, and it is not excluded (ADR-0015).
+- **Resolution** — a query mode producing, per candidate, the ordered applicable set, its winner, and derived values (ADR-0015).
+- **Winner** — the head of the ordered applicable set for a candidate: highest priority, ties by declaration order (ADR-0015).
+- **Derived values** — the first-provider-wins merge of applicable rules' properties down the precedence order: each field takes its value from the highest-priority applicable rule that defines it (ADR-0015).
 - **Ruleset** — an immutable, query-optimized collection of rules; the unit that is built, validated, indexed, and atomically replaced (§6, ADR-0007).
 - **Spatial predicate** — a boolean relationship between two geometries: `intersects`, `contains`, `within`, `covers`, `covered_by`, `touches`, or `overlaps`, defined by DE-9IM (ADR-0008, ADR-0012).
 - **Property predicate** — a boolean test on a rule's properties, expressed in a query's `where` clause (ADR-0003).

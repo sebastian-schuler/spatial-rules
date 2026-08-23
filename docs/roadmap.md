@@ -28,15 +28,19 @@ Target layering:
         Rust + R-tree + DE-9IM + typed properties
 ```
 
-## Gate: the precedence model
+## Gate: the precedence model — settled (ADR-0015)
 
-**No P1 implementation starts before the precedence/conflict-resolution model
-is decided.** When rules overlap (country → city → school zone all matching one
-point), the engine must answer *"which rule wins?"* — via priority values,
-specificity, allow/deny, first-match, merge, or some combination. This is the
-hardest design problem on the roadmap and every P1 feature (and the Postgres
-value proposition) presupposes an answer. It should be settled as an ADR
-before code.
+**Settled 2026-08-23 by ADR-0015: the resolution model.** When rules overlap
+(country → city → school zone all matching one point), the engine answers
+*"which rule wins?"* with numeric precedence: each rule carries a top-level
+integer `priority` (higher wins; missing = 0; ties break by declaration order),
+and resolution returns the **ordered applicable set**, its **winner** (head of
+the order), and **derived values** (first-provider-wins merge of rule properties
+down the order). Specificity and allow/deny were weighed and rejected as
+built-ins (expressible later as data on top of priority); a composable chain is
+the documented extension path. This was the hardest design problem on the
+roadmap and every P1 feature presupposes it — it is now the ADR that P1
+implementation cites.
 
 ## P0 — Memory benchmark (shipped)
 
@@ -68,6 +72,9 @@ The fork in the road. Three features that land together:
 3. **Explainability** — why did a rule fire: predicate, spatial vs property
    match, conditions evaluated. Resolution *is* the explanation; build them
    together.
+
+The resolution model is decided (ADR-0015); the working spec and ticket plan
+live in `.scratch/p1-resolution/` (spec + issues 01–05).
 
 ## P2 — Realistic rules
 
