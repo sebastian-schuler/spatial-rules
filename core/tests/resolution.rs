@@ -327,3 +327,70 @@ fn match_path_and_mask_are_unchanged_by_priorities() {
         vec![1]
     );
 }
+
+// --- Ticket 04: compact resolution mask (`0` no resolution, `1` resolved, `2` invalid) ---
+
+#[test]
+fn resolve_mask_marks_resolved_not_resolved_and_invalid() {
+    let ruleset = overlapping_ruleset();
+    let candidates = vec![
+        inside(), // resolved (both rules applicable)
+        candidate("far", square(50.0, 50.0, 60.0, 60.0)),
+        common::candidate_geometry("bowtie", geo::Geometry::Polygon(common::bowtie())),
+    ];
+    assert_eq!(
+        ruleset.resolve_mask(&candidates, &intersects()),
+        vec![1, 0, 2]
+    );
+}
+
+#[test]
+fn resolve_mask_matches_resolve_outcomes() {
+    let ruleset = overlapping_ruleset();
+    let candidates = vec![
+        inside(),
+        candidate("far", square(50.0, 50.0, 60.0, 60.0)),
+        common::candidate_geometry("bowtie", geo::Geometry::Polygon(common::bowtie())),
+    ];
+    let outcomes = ruleset.resolve(&candidates, &intersects());
+    let expected: Vec<u8> = outcomes
+        .iter()
+        .map(|outcome| match outcome {
+            ResolutionOutcome::Resolved { .. } => 1,
+            ResolutionOutcome::NotMatched => 0,
+            ResolutionOutcome::Invalid { .. } => 2,
+        })
+        .collect();
+    assert_eq!(ruleset.resolve_mask(&candidates, &intersects()), expected);
+}
+
+#[test]
+fn engine_resolve_mask_matches_ruleset_mask() {
+    use spatial_rules_core::candidates_from_geojson;
+    let engine = spatial_rules_core::Engine::from_geojson(
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            { "type": "Feature", "id": "hi", "priority": 10, "properties": { "kind": "a" },
+              "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] } },
+            { "type": "Feature", "id": "lo", "priority": 5, "properties": { "kind": "b" },
+              "geometry": { "type": "Polygon", "coordinates": [[[5, 5], [5, 15], [15, 15], [15, 5], [5, 5]]] } }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let candidates = candidates_from_geojson(
+        r#"{
+          "type": "FeatureCollection",
+          "features": [
+            { "type": "Feature", "id": "c", "properties": {}, "geometry": { "type": "Polygon", "coordinates": [[[6, 6], [6, 8], [8, 8], [8, 6], [6, 6]]] } }
+          ]
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        engine.resolve_mask(&candidates, &intersects()),
+        vec![1]
+    );
+    assert_eq!(engine.resolve(&candidates, &intersects()).len(), 1);
+}

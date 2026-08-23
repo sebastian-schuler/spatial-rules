@@ -37,13 +37,21 @@ export interface QuerySummary {
   invalid: number;
 }
 
+/** Count breakdown of a batch resolution (ADR-0015). */
+export interface ResolutionSummary {
+  resolved: number;
+  notResolved: number;
+  invalid: number;
+}
+
 /**
- * Structural slice of the native ruleset that `QueryResult` needs. Local (not
- * from `native.d.ts`) so the emitted `dist/index.d.ts` never references the
- * addon's module path.
+ * Structural slice of the native ruleset that `QueryResult`/`ResolutionResult`
+ * need. Local (not from `native.d.ts`) so the emitted `dist/index.d.ts` never
+ * references the addon's module path.
  */
 interface RichQuerySource {
   queryRich(candidates: Buffer, query: string): string;
+  resolveRich(candidates: Buffer, query: string): string;
 }
 
 // Map this process to a published per-platform package (ADR-0006: win32 +
@@ -162,6 +170,21 @@ function toQueryString(value: QueryInput): string {
   throw new TypeError('query must be a JSON string or an object');
 }
 
+// One pass over the mask yielding the 1/2/0 counts, shared by the match and
+// resolution result classes (masked results differ only in how they label the
+// three buckets).
+function maskCounts(mask: Uint8Array): { one: number; zero: number; two: number } {
+  let one = 0;
+  let zero = 0;
+  let two = 0;
+  for (let i = 0; i < mask.length; i += 1) {
+    if (mask[i] === 1) one += 1;
+    else if (mask[i] === 2) two += 1;
+    else zero += 1;
+  }
+  return { one, zero, two };
+}
+
 /**
  * A chainable evaluation result from one native query call. Every terminal
  * view is derived from a single computed mask without another native
@@ -223,15 +246,8 @@ export class QueryResult {
    * @returns The matched, notMatched, and invalid counts.
    */
   summary(): QuerySummary {
-    let matched = 0;
-    let notMatched = 0;
-    let invalid = 0;
-    for (let i = 0; i < this._mask.length; i += 1) {
-      if (this._mask[i] === 1) matched += 1;
-      else if (this._mask[i] === 2) invalid += 1;
-      else notMatched += 1;
-    }
-    return { matched, notMatched, invalid };
+    const { one, zero, two } = maskCounts(this._mask);
+    return { matched: one, notMatched: zero, invalid: two };
   }
 
   // Exact-size index array for the positions whose mask value passes `test`.
@@ -249,9 +265,7 @@ export class QueryResult {
    * @returns The count of candidates whose mask value is `1`.
    */
   count(): number {
-    let n = 0;
-    for (let i = 0; i < this._mask.length; i += 1) if (this._mask[i] === 1) n += 1;
-    return n;
+    return maskCounts(this._mask).one;
   }
 
   /**
@@ -288,6 +302,77 @@ export class QueryResult {
       this._rich = callNative(() => this._native.queryRich(this._candidates, this._query));
     }
     return this._rich;
+  }
+}
+
+/**
+ * A chainable resolution result from one native resolve call (ADR-0015).
+ * Mirrors `QueryResult`: `mask()`/`count()`/`summary()` derive from the native
+ * mask (`0` no resolution, `1` resolved, `2` invalid) with zero rich cost;
+ * `toJson()` is the one lazy native rich call, made on first use and then
+ * cached. Memory: the mask is 1 byte per candidate; the rich JSON is computed
+ * on demand so mask-only callers pay nothing for the winner/values/explanation.
+ */
+export class ResolutionResult {
+  private _native: RichQuerySource;
+  private _candidates: Buffer;
+  private _query: string;
+  private _mask: Uint8Array;
+  private _json: string | null;
+
+  /**
+   * Construct a result from a native resolve call. You generally won't call
+   * this directly — obtain one via `SpatialRuleset.resolve()`.
+   */
+  constructor(native: RichQuerySource, candidates: Buffer, query: string, mask: Uint8Array) {
+    this._native = native;
+    this._candidates = candidates;
+    this._query = query;
+    this._mask = mask;
+    this._json = null;
+  }
+
+  /**
+   * The primitive result: a `Uint8Array` mask aligned to the input candidates
+   * (`0` no resolution, `1` resolved, `2` invalid).
+   * @returns The raw mask, one byte per candidate.
+   */
+  mask(): Uint8Array {
+    return this._mask;
+  }
+
+  /**
+   * Number of resolved candidates.
+   * @returns The count of candidates whose mask value is `1`.
+   */
+  count(): number {
+    return maskCounts(this._mask).one;
+  }
+
+  /**
+   * A count breakdown of the batch: resolved / notResolved / invalid. Cheap —
+   * prefer this before materialising `toJson()`.
+   * @returns The resolved, notResolved, and invalid counts.
+   */
+  summary(): ResolutionSummary {
+    const { one, zero, two } = maskCounts(this._mask);
+    return { resolved: one, notResolved: zero, invalid: two };
+  }
+
+  /**
+   * Per-candidate resolution outcomes as a JSON string: for each candidate
+   * `{outcome, winner, values, applicable}` (resolved), `{outcome: notMatched}`,
+   * or `{outcome: invalid, reason}` (ADR-0015). Lazy: one native call on first
+   * use, then cached. Like `QueryResult.toOutcomesJson`, this is evaluated
+   * against the ruleset current at first call — the mask wins on a `replace()`
+   * race.
+   * @returns A JSON string of per-candidate resolution outcomes.
+   */
+  toJson(): string {
+    if (this._json === null) {
+      this._json = callNative(() => this._native.resolveRich(this._candidates, this._query));
+    }
+    return this._json;
   }
 }
 
@@ -341,6 +426,42 @@ export class SpatialRuleset {
       this._native.queryAsync(normalizedCandidates, normalizedQuery),
     );
     return new QueryResult(this._native, normalizedCandidates, normalizedQuery, mask);
+  }
+
+  /**
+   * Resolve `query` against `candidates` and return a chainable
+   * `ResolutionResult` (ADR-0015): the compact mask (`0` no resolution, `1`
+   * resolved, `2` invalid) plus the lazy rich `toJson()` view. The query shape
+   * is the same as `query()` (`spatial`/`where`/`excludeRuleIds`).
+   * @param candidates - Candidate features: Buffer, GeoJSON string, or object.
+   * @param query - The query to run: JSON string or object.
+   * @returns A `ResolutionResult` whose terminals expose the mask, counts, or
+   *   per-candidate resolution outcomes.
+   */
+  resolve(candidates: GeoJsonInput, query: QueryInput): ResolutionResult {
+    const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
+    const normalizedQuery = toQueryString(query);
+    const mask = callNative(() => this._native.resolve(normalizedCandidates, normalizedQuery));
+    return new ResolutionResult(this._native, normalizedCandidates, normalizedQuery, mask);
+  }
+
+  /**
+   * Same evaluation as `resolve`, computed off the main thread (libuv
+   * threadpool). Returns the same chainable `ResolutionResult` as `resolve`.
+   * Note: `toJson()` on an async result makes a *synchronous* native rich call
+   * on first use (there is no async rich path); the cheap views (`mask`,
+   * `count`, `summary`) are pure JS derivations and stay off-thread.
+   * @param candidates - Candidate features: Buffer, GeoJSON string, or object.
+   * @param query - The query to run: JSON string or object.
+   * @returns A promise of a `ResolutionResult` (mask + terminals).
+   */
+  async resolveAsync(candidates: GeoJsonInput, query: QueryInput): Promise<ResolutionResult> {
+    const normalizedCandidates = toGeoJsonBuffer(candidates, 'candidates');
+    const normalizedQuery = toQueryString(query);
+    const mask = await callNativeAsync(() =>
+      this._native.resolveAsync(normalizedCandidates, normalizedQuery),
+    );
+    return new ResolutionResult(this._native, normalizedCandidates, normalizedQuery, mask);
   }
 
   /**

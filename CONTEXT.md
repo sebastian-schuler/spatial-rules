@@ -12,3 +12,5 @@ Single-context repo. Requirements source: `docs/Initial-plan.md`. Decisions: `do
 - **Property predicate** — a boolean test on a rule's properties, expressed in a query's `where` clause (ADR-0003).
 - **Query** — one batch evaluation of candidates against a ruleset: a spatial predicate, an optional property `where`, optional excluded rule IDs, and an opt-in overlap computation (`includeOverlap`, ADR-0012).
 - **Match** — a candidate satisfying the query against at least one rule; reported per-query as `Matched`, `NotMatched`, or `Invalid` (ADR-0004, ADR-0005).
+- **Resolution** — answering "which rule wins, what values apply, and why" for a candidate: the ordered applicable set, its winner (the head), and first-provider-wins derived values (ADR-0015).
+- **Applicable set** — the rules admitted for a candidate (the query's spatial predicate holds, the `where` clause admits them, exclusions applied), ordered by precedence (priority desc, ties by declaration order); it is the explanation (ADR-0015).

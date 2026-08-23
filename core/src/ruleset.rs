@@ -270,6 +270,14 @@ impl Ruleset {
         self.prepare(query).evaluate_resolve_all(candidates)
     }
 
+    /// Resolve a batch and return the compact mask (`0` no resolution, `1`
+    /// resolved, `2` invalid) without materialising the winner, values, or
+    /// explanation (ADR-0015). Preparation is lazy per rule on first touch, as
+    /// in [`Ruleset::resolve`].
+    pub fn resolve_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
+        self.prepare(query).evaluate_resolve_mask_all(candidates)
+    }
+
     /// Compile a query into a reusable [`PreparedQuery`] holding the planning:
     /// excluded ids, this thread's lazy prepared-geometry memo (populated on
     /// first touch, ADR-0010), and the indexable `where` set.

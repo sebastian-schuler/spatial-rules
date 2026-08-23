@@ -20,6 +20,12 @@ export declare class SpatialRuleset {
     queryAsync(candidates: Buffer, query: string): Promise<Uint8Array>;
     /** Per-candidate rich outcomes (string rule ids, optional overlaps) as JSON. */
     queryRich(candidates: Buffer, query: string): string;
+    /** Resolution mask aligned to input candidates: `0` no resolution, `1` resolved, `2` invalid. */
+    resolve(candidates: Buffer, query: string): Uint8Array;
+    /** Same resolution mask as `resolve`, computed off the main thread. */
+    resolveAsync(candidates: Buffer, query: string): Promise<Uint8Array>;
+    /** Per-candidate resolution outcomes (winner, values, applicable) as JSON. */
+    resolveRich(candidates: Buffer, query: string): string;
     /** Atomically swap the ruleset; ADR-0007 observability report as JSON. */
     replace(rules: Buffer): string;
     /** Canonical (validated) ruleset serialization (ADR-0013). */

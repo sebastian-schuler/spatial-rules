@@ -6,7 +6,7 @@
 // and copy it to `node/spatial_rules.node` (see the ticket Answer).
 
 import assert from 'node:assert/strict';
-import { SpatialRulesError, SpatialRuleset } from '../index.ts';
+import { ResolutionResult, SpatialRulesError, SpatialRuleset } from '../index.ts';
 
 // Deliberately-invalid inputs: these assert the wrapper's runtime TypeErrors,
 // so they are cast to `never` to bypass the compile-time signatures.
@@ -19,19 +19,22 @@ const rules = Buffer.from(
       {
         type: 'Feature',
         id: 'zone-a',
-        properties: { active: true },
+        priority: 10,
+        properties: { active: true, name: 'a', shared: 'from-a', priority: 999 },
         geometry: { type: 'Polygon', coordinates: [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] },
       },
       {
         type: 'Feature',
         id: 'zone-b',
-        properties: { active: false },
+        priority: 5,
+        properties: { active: false, name: 'b' },
         geometry: { type: 'Polygon', coordinates: [[[100, 100], [100, 110], [110, 110], [110, 100], [100, 100]]] },
       },
       {
         type: 'Feature',
         id: 'zone-c',
-        properties: { active: true },
+        priority: 20,
+        properties: { active: true, name: 'c' },
         geometry: { type: 'Polygon', coordinates: [[[2, 2], [2, 12], [12, 12], [12, 2], [2, 2]]] },
       },
     ],
@@ -169,6 +172,66 @@ const pointCandidates = Buffer.from(
   }),
 );
 assert.deepEqual(Array.from(ruleset.query(pointCandidates, intersects).mask()), [1, 0]);
+
+// Resolution (ticket 04, ADR-0015): resolve() returns a chainable
+// ResolutionResult — a compact mask (0 no resolution, 1 resolved, 2 invalid)
+// plus lazy rich toJson() with the winner, first-provider-wins values, and the
+// ordered applicable set.
+const resolution = ruleset.resolve(candidates, intersects);
+assert.ok(resolution instanceof ResolutionResult, 'resolve() returns a ResolutionResult');
+assert.deepEqual(Array.from(resolution.mask()), [1, 0, 2]);
+assert.equal(resolution.count(), 1);
+assert.deepEqual(resolution.summary(), { resolved: 1, notResolved: 1, invalid: 1 });
+
+// toJson(): per-candidate {outcome, winner, values, applicable}. "inside"
+// intersects zone-a (priority 10) and zone-c (priority 20): winner is zone-c;
+// "shared" is gap-filled from zone-a because zone-c does not define it. The
+// zone-a properties.priority (999) is plain metadata — merged as an ordinary
+// property value, but never read for precedence (the winner is zone-c by its
+// top-level priority 20).
+const resolvedJson = JSON.parse(resolution.toJson());
+assert.equal(resolvedJson.length, 3);
+assert.equal(resolvedJson[0].outcome, 'resolved');
+assert.equal(resolvedJson[0].winner, 'zone-c');
+assert.deepEqual(resolvedJson[0].values, {
+  active: true,
+  name: 'c',
+  priority: 999,
+  shared: 'from-a',
+});
+assert.deepEqual(resolvedJson[0].applicable, [
+  { ruleId: 'zone-c', priority: 20, spatialMatched: true, propertyMatched: true },
+  { ruleId: 'zone-a', priority: 10, spatialMatched: true, propertyMatched: true },
+]);
+assert.equal(resolvedJson[1].outcome, 'notMatched');
+assert.equal(resolvedJson[2].outcome, 'invalid');
+assert.equal(typeof resolvedJson[2].reason, 'string');
+// The rich view is cached: a second call returns the identical string.
+assert.equal(resolution.toJson(), resolution.toJson());
+
+// Resolution honors the same query shape as query(): where + excludeRuleIds.
+const inactiveResolve = ruleset
+  .resolve(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, where: { active: false } }))
+  .mask();
+assert.deepEqual(Array.from(inactiveResolve), [0, 0, 2]);
+const excludedResolve = ruleset
+  .resolve(candidates, JSON.stringify({ spatial: { predicate: 'intersects' }, excludeRuleIds: ['zone-a', 'zone-c'] }))
+  .mask();
+assert.deepEqual(Array.from(excludedResolve), [0, 0, 2]);
+
+// resolveAsync(): same mask as resolve(), returned as a ResolutionResult.
+const asyncResolution = await ruleset.resolveAsync(candidates, intersects);
+assert.deepEqual(
+  Array.from(asyncResolution.mask()),
+  Array.from(ruleset.resolve(candidates, intersects).mask()),
+);
+assert.deepEqual(asyncResolution.summary(), resolution.summary());
+
+// resolveAsync rejects with the same SR_* error model as queryAsync.
+await assert.rejects(
+  ruleset.resolveAsync(candidates, 'not json'),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',
+);
 
 // Dynamic replacement (ADR-0007): atomic swap + observability.
 const stats = JSON.parse(ruleset.stats());
@@ -309,6 +372,18 @@ assert.throws(() => dynamicRuleset.query(candidates, invalid(null)), TypeError);
 assert.throws(() => dynamicRuleset.query(candidates, invalid([])), TypeError);
 assert.throws(() => dynamicRuleset.replace(invalid(42)), TypeError);
 assert.throws(() => dynamicRuleset.replace(invalid([])), TypeError);
+
+// resolve() normalizes inputs identically to query() (object/string forms).
+assert.deepEqual(
+  Array.from(dynamicRuleset.resolve(candidatesObject, intersectsObject).mask()),
+  [1, 0, 2],
+);
+assert.deepEqual(
+  Array.from(dynamicRuleset.resolve(candidatesString, intersects).mask()),
+  [1, 0, 2],
+);
+assert.throws(() => dynamicRuleset.resolve(invalid(42), intersects), TypeError);
+assert.throws(() => dynamicRuleset.resolve(candidates, invalid(42)), TypeError);
 
 // SpatialRulesError is a real Error subclass carrying a stable code (ADR-0005).
 const directError = new SpatialRulesError('boom', 'SR_TEST');

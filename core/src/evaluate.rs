@@ -143,6 +143,12 @@ impl<'a> PreparedQuery<'a> {
         candidates.iter().map(|c| self.evaluate_resolve(c)).collect()
     }
 
+    /// Batch form of [`PreparedQuery::evaluate_resolve_mask`] — same lazy
+    /// preparation as the match path.
+    pub(crate) fn evaluate_resolve_mask_all(&self, candidates: &[Candidate]) -> Vec<u8> {
+        candidates.iter().map(|c| self.evaluate_resolve_mask(c)).collect()
+    }
+
     /// Whether a candidate-touching rule reaches the exact DE-9IM step:
     /// not excluded and admitted by the property filter (ADR-0003 pipeline).
     fn reaches_relate(&self, rule_id: RuleId) -> bool {
@@ -262,6 +268,24 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
+    /// The applicable rule ids for a candidate in envelope order (the fixed
+    /// bbox → property → exact DE-9IM pipeline), or the recorded invalid
+    /// reason. Shared by the full resolve path and the compact mask path so
+    /// the relate loop lives in one body, as it does for the match path.
+    fn applicable_ids(&self, candidate: &Candidate) -> Result<Vec<RuleId>, String> {
+        let bbox = match candidate.class() {
+            CandidateClass::Valid { envelope } => *envelope,
+            CandidateClass::Invalid { reason } => return Err(reason.clone()),
+        };
+        let mut ids: Vec<RuleId> = Vec::new();
+        self.relate_touched(candidate, &bbox, |rule_id, matrix| {
+            if spatial_predicate_holds(self.spatial, matrix) {
+                ids.push(rule_id);
+            }
+        });
+        Ok(ids)
+    }
+
     /// Resolve one candidate (ADR-0015): gather the **applicable** rules
     /// (spatial predicate holds + where clause admits + not excluded) — the
     /// same fixed bbox → property → exact DE-9IM pipeline as the match path —
@@ -273,34 +297,25 @@ impl<'a> PreparedQuery<'a> {
     /// **Collect-then-resolve**: no early exit at the first spatial hit, the
     /// merge needs the full applicable set (ADR-0015 stance).
     pub fn evaluate_resolve(&self, candidate: &Candidate) -> ResolutionOutcome {
-        // Candidate classification is computed at intake, so this path only
-        // reads the cached envelope or the recorded invalid reason.
-        let bbox = match candidate.class() {
-            CandidateClass::Valid { envelope } => *envelope,
-            CandidateClass::Invalid { reason } => {
-                return ResolutionOutcome::Invalid {
-                    reason: reason.clone(),
-                };
+        let ids = match self.applicable_ids(candidate) {
+            Ok(ids) => ids,
+            Err(reason) => {
+                return ResolutionOutcome::Invalid { reason };
             }
         };
-
-        // Fixed pipeline: bbox -> property -> exact DE-9IM, gathering the
-        // applicable rules in envelope order.
-        let mut applicable: Vec<ApplicableRule> = Vec::new();
-        self.relate_touched(candidate, &bbox, |rule_id, matrix| {
-            if spatial_predicate_holds(self.spatial, matrix) {
-                applicable.push(ApplicableRule {
-                    rule_id,
-                    priority: self.ruleset.priority(rule_id),
-                    spatial_matched: true,
-                    property_matched: true,
-                });
-            }
-        });
-
-        if applicable.is_empty() {
+        if ids.is_empty() {
             return ResolutionOutcome::NotMatched;
         }
+
+        let mut applicable: Vec<ApplicableRule> = ids
+            .into_iter()
+            .map(|rule_id| ApplicableRule {
+                rule_id,
+                priority: self.ruleset.priority(rule_id),
+                spatial_matched: true,
+                property_matched: true,
+            })
+            .collect();
 
         // Precedence: priority desc, ties by declaration order (ascending rule
         // id). The explicit tie-break keeps the order deterministic even if
@@ -323,6 +338,19 @@ impl<'a> PreparedQuery<'a> {
             winner,
             values,
             applicable,
+        }
+    }
+
+    /// The compact form of [`PreparedQuery::evaluate_resolve`]: `0` no
+    /// resolution, `1` resolved, `2` invalid (ADR-0015). Mask-only callers pay
+    /// for the collect-then-resolve relate loop but not for the winner sort,
+    /// the values merge, or the explanation — mirroring how the match mask
+    /// skips per-match rule ids (ADR-0004).
+    pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
+        match self.applicable_ids(candidate) {
+            Err(_) => 2,
+            Ok(ids) if ids.is_empty() => 0,
+            Ok(_) => 1,
         }
     }
 }
