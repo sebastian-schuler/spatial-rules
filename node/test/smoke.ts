@@ -136,6 +136,15 @@ assert.throws(
   () => new SpatialRuleset(Buffer.from('not json')),
   (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_GEOJSON',
 );
+// A negative top-level priority fails construction (ADR-0015): it would sort
+// below unprioritized (0) rules, so it is rejected like a wrong type.
+assert.throws(
+  () => new SpatialRuleset(Buffer.from(JSON.stringify({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', id: 'bad', priority: -5, properties: {}, geometry: { type: 'Polygon', coordinates: [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] } }],
+  }))),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_RULESET_CONSTRUCTION_FAILED',
+);
 // Invalid UTF-8 buffers hit the same unified SR_* path.
 assert.throws(
   () => ruleset.query(Buffer.from([0xff, 0xfe, 0x00]), intersects),

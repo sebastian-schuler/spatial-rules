@@ -1,7 +1,7 @@
 # Resolution test suite: property tests, determinism, precedence invariants
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 ## Question
@@ -47,3 +47,11 @@ The suite cross-checks spatial predicates against turf; there is no oracle for r
 **Out of scope:**
 - Benchmark ladder additions (separate concern)
 - turf cross-checks for resolution
+
+## Answer
+
+Implemented in commit `96258ea` (test(core): resolution property suite — precedence invariants, determinism, index-kind parity).
+
+- Property tests (core/tests/proptest.rs) over synthetic overlapping rule sets: applicable order is priority desc then declaration order; the winner is the head and carries the maximum applicable priority (pinned against the authoritative `Ruleset::priority`, not the implementation-filled records); values are first-provider-wins (no invented fields, no dropped defined fields); results are stable across repeat evaluations and across the RStar and LinearScan index kinds; `excludeRuleIds` removes a rule from the applicable set and its unique source field from values.
+- Priorities are generated non-negative, so the "unprioritized (0) never outranks an explicitly prioritized rule" invariant is well-defined (consistent with the negative-priority gate added under ticket 01).
+- Hand-checked edge cases: single-rule candidate, no-match, invalid candidate, all-defaults ties (the latter two already covered from tickets 02/03).

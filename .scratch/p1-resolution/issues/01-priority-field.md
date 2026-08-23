@@ -1,7 +1,7 @@
 # Top-level priority field: schema, ingestion, canonical round-trip, validation
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -52,3 +52,14 @@ Rules are `{id, properties, geometry}` with no engine concept of precedence. A `
 - The resolution evaluation itself (ticket 02)
 - A configurable priority key
 - Any change to how `where` filters work
+
+## Answer
+
+Implemented in commit `e9eeb31` (feat(core): resolution — rule priority, ordered applicable set, ...).
+
+- `Rule` gains `priority: i64` (`#[serde(default)]` → 0), so pre-P1 canonical strings load as 0 and the canonical round-trip carries the field.
+- `rule_from_feature` reads the top-level `priority` foreign member; missing → 0; wrong-typed or negative → `SR_RULESET_CONSTRUCTION_FAILED` naming the rule. The canonical load gate (`Ruleset::from_canonical`) applies the same validation via the shared `validate_priority`.
+- `Ruleset` hoists priorities into a `Vec<i64>` aligned to `RuleId` and exposes `priority(rule_id)`.
+- `properties.priority` stays plain metadata and is never read for precedence.
+
+Amended 2026-08-23 (loose-end resolution): negative priorities are now rejected at both ingestion gates. A negative integer would silently sort below unprioritized (0) rules, breaking ADR-0015's "unprioritized rules sort below any explicit priority" invariant — the same class of silent precedence misreading the wrong-type gate exists to prevent. ADR-0015 was amended to say priorities are non-negative integers.

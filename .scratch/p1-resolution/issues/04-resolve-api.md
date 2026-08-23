@@ -1,7 +1,7 @@
 # resolve() / resolveAsync() API: ResolutionResult terminals (napi + wrapper)
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 03
 
 ## Question
@@ -51,3 +51,13 @@ The public surface exposes `query()`/`queryAsync()` returning a chainable `Query
 **Out of scope:**
 - `resolveFields` subset selection
 - Changing `query()`'s return type
+
+## Answer
+
+Implemented in commit `75fc5f5` (feat(node): resolve()/resolveAsync() — ResolutionResult mask, count, summary, lazy toJson).
+
+- Core: `Engine::resolve` / `Engine::resolve_mask` mirror `query`/`query_mask` (plus `Ruleset::resolve` / `Ruleset::resolve_mask`).
+- napi binding: `resolve` (compact `0` no resolution / `1` resolved / `2` invalid mask), `resolveAsync` (off-thread via `#[napi] async fn`, one buffer copy, `SR_*` Promise-rejection model), and `resolveRich` (the lazy per-candidate `{outcome, winner, values, applicable}` JSON with string rule ids).
+- Wrapper: chainable `ResolutionResult` — `mask()`/`count()`/`summary()` derived in JS from the native mask (zero rich cost), `toJson()` the one lazy native rich call, cached. `SpatialRuleset.resolve()`/`resolveAsync()` normalise inputs identically to `query()`/`queryAsync()` (same `GeoJsonInput`/`QueryInput` shapes).
+- `query()` and its mask are untouched; `ResolutionResult`/`ResolutionSummary` are exported (verified in `dist/index.d.ts`).
+- Verification: core tests, node + bun smoke, integration smoke, clippy, tsc all green.

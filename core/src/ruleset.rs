@@ -190,19 +190,18 @@ impl Ruleset {
         let rules = value.as_array().ok_or_else(|| {
             SpatialError::invalid_geojson("failed to parse canonical ruleset: expected an array of rules")
         })?;
-        // A present-but-wrong-typed `priority` must fail build with
-        // `SR_RULESET_CONSTRUCTION_FAILED` naming the rule — the same gate as
-        // GeoJSON ingestion (ADR-0015) — rather than surface as a generic
-        // parse error, so precedence is never silently misread on any load path.
+        // A present-but-invalid `priority` (wrong-typed or negative) must fail
+        // build with `SR_RULESET_CONSTRUCTION_FAILED` naming the rule — the
+        // same gate as GeoJSON ingestion (ADR-0015) — rather than surface as a
+        // generic parse error, so precedence is never silently misread on any
+        // load path.
         for rule_value in rules {
             if let Some(priority) = rule_value.get("priority") {
-                if priority.as_i64().is_none() {
-                    let id = rule_value
-                        .get("id")
-                        .and_then(|id| id.as_str())
-                        .unwrap_or("<unknown>");
-                    return Err(crate::ingestion::priority_type_error(id, priority));
-                }
+                let id = rule_value
+                    .get("id")
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("<unknown>");
+                crate::ingestion::validate_priority(id, priority)?;
             }
         }
         let rules: Vec<Rule> = serde_json::from_value(value).map_err(|e| {

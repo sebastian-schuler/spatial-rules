@@ -1,7 +1,7 @@
 # Explanation: flat per-rule "why" in the resolved outcome
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 ## Question
@@ -46,3 +46,11 @@ No explanation exists; match results report only rule ids.
 **Out of scope:**
 - Field-by-field property predicate traces
 - Any explanation UI
+
+## Answer
+
+Implemented in commit `e9eeb31` (feat(core): resolution — rule priority, ordered applicable set, ...).
+
+- `ApplicableRule { rule_id, priority, spatial_matched, property_matched }` — the ordered applicable set is the flat per-rule explanation; `spatial_matched` is the DE-9IM predicate result, `property_matched` is `reaches_relate` (the where admission). Both are true for an applicable rule; a rule failing either gate is absent from the set.
+- `ResolutionOutcome` distinguishes `Resolved { winner, values, applicable }` / `NotMatched` / `Invalid { reason }`.
+- The napi layer serializes these as the JSON shape `{outcome, winner, values, applicable}` with string rule ids (ticket 04, commit `75fc5f5`).

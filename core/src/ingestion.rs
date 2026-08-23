@@ -101,10 +101,11 @@ fn id_to_string(id: &geojson::feature::Id) -> String {
     }
 }
 
-/// Read the top-level `priority` foreign member (ADR-0015). Missing → `0`;
-/// present-but-not-an-integer (string/float/bool) → a construction error
-/// naming the rule, because silently misreading precedence is the bug the
-/// top-level field exists to prevent.
+/// Read the top-level `priority` foreign member (ADR-0015). Missing → `0`.
+/// A present-but-invalid value (not an integer, or a negative integer) → a
+/// construction error naming the rule, because silently misreading precedence
+/// is the bug the top-level field exists to prevent — a negative priority
+/// would silently sort below unprioritized (0) rules.
 fn extract_feature_priority(
     feature: &geojson::Feature,
     rule_id: &str,
@@ -115,18 +116,29 @@ fn extract_feature_priority(
     let Some(priority) = foreign_members.get("priority") else {
         return Ok(0);
     };
-    priority
-        .as_i64()
-        .ok_or_else(|| priority_type_error(rule_id, priority))
+    validate_priority(rule_id, priority)
 }
 
-/// The construction error for a present-but-non-integer top-level `priority`
-/// (ADR-0015), shared by the GeoJSON ingestion gate and the canonical load
-/// gate so both paths fail build with the same `SR_RULESET_CONSTRUCTION_FAILED`
-/// code and name the rule.
-pub(crate) fn priority_type_error(rule_id: &str, found: &serde_json::Value) -> SpatialError {
-    SpatialError::new(
-        ErrorCode::RulesetConstructionFailed,
-        format!("rule '{rule_id}': top-level 'priority' must be an integer, found {found}"),
-    )
+/// Validate a present top-level `priority` (ADR-0015): it must be an integer
+/// and non-negative, so the "unprioritized (0) rules sort below any explicit
+/// priority" invariant holds for every accepted ruleset. Shared by the GeoJSON
+/// ingestion gate and the canonical load gate so both paths fail build with the
+/// same `SR_RULESET_CONSTRUCTION_FAILED` code and name the rule.
+pub(crate) fn validate_priority(
+    rule_id: &str,
+    found: &serde_json::Value,
+) -> Result<i64, SpatialError> {
+    let Some(value) = found.as_i64() else {
+        return Err(SpatialError::new(
+            ErrorCode::RulesetConstructionFailed,
+            format!("rule '{rule_id}': top-level 'priority' must be an integer, found {found}"),
+        ));
+    };
+    if value < 0 {
+        return Err(SpatialError::new(
+            ErrorCode::RulesetConstructionFailed,
+            format!("rule '{rule_id}': top-level 'priority' must be non-negative, found {value}"),
+        ));
+    }
+    Ok(value)
 }

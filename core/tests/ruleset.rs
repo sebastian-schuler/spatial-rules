@@ -377,3 +377,20 @@ fn from_canonical_rejects_wrong_typed_priority_naming_the_rule() {
     assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
     assert!(err.message.contains("hi"));
 }
+
+#[test]
+fn from_canonical_rejects_negative_priority_naming_the_rule() {
+    // Same gate as GeoJSON ingestion: a negative priority would silently sort
+    // below unprioritized (0) rules, so it fails build (ADR-0015).
+    let rule = rule_with_priority("hi", 7);
+    let mut value = serde_json::to_value(rule).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("priority".to_string(), json!(-5));
+    let bytes = serde_json::to_vec(&vec![value]).unwrap();
+
+    let err = Ruleset::from_canonical(&bytes).unwrap_err();
+    assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
+    assert!(err.message.contains("hi"));
+}

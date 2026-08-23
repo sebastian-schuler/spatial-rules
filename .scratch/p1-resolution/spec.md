@@ -30,8 +30,8 @@ Data model (01) → resolution evaluation (02) → explanation shape (03) → bi
 
 ## Ticket index
 
-- `issues/01-priority-field.md` — needs-triage
-- `issues/02-resolution-evaluation.md` — needs-triage (blocked by 01)
-- `issues/03-explanation-shape.md` — needs-triage (blocked by 02)
-- `issues/04-resolve-api.md` — needs-triage (blocked by 02, 03)
-- `issues/05-resolution-tests.md` — needs-triage (blocked by 02)
+- `issues/01-priority-field.md` — resolved
+- `issues/02-resolution-evaluation.md` — resolved (blocked by 01)
+- `issues/03-explanation-shape.md` — resolved (blocked by 02)
+- `issues/04-resolve-api.md` — resolved (blocked by 02, 03)
+- `issues/05-resolution-tests.md` — resolved (blocked by 02)

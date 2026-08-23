@@ -1,7 +1,7 @@
 # Resolution evaluation: ordered applicable set, winner, first-provider-wins values
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 ## Question
@@ -57,3 +57,12 @@ A query reports per candidate which rules matched (rule ids in deterministic asc
 - The napi/wrapper API (ticket 04)
 - Field subset selection
 - The early-exit optimization
+
+## Answer
+
+Implemented in commit `e9eeb31` (feat(core): resolution — rule priority, ordered applicable set, ...).
+
+- `PreparedQuery::evaluate_resolve` (+ `evaluate_resolve_all`) gathers the **applicable** rules through the shared `relate_touched` loop (spatial predicate holds + where admits + not excluded), orders them by precedence (priority desc, ties by ascending rule id), and returns `ResolutionOutcome::Resolved { winner, values, applicable }` — the winner is the head, `values` a first-provider-wins merge down the order.
+- **Collect-then-resolve**: no early exit; the merge needs the full set (ADR-0015 stance).
+- `Ruleset::resolve` is the batch seam; `Ruleset::resolve_mask` / `PreparedQuery::evaluate_resolve_mask` add the compact `0/1/2` mask without materialising winner/values/explanation.
+- The existing match path (`evaluate`/`evaluate_mask`/`query`/`query_mask`) is unchanged.

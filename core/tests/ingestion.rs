@@ -349,6 +349,24 @@ fn wrong_typed_priority_fails_construction_naming_the_rule() {
 }
 
 #[test]
+fn negative_priority_fails_construction_naming_the_rule() {
+    // A negative integer would silently sort below unprioritized (0) rules,
+    // breaking ADR-0015's "unprioritized rules sort below any explicit
+    // priority" invariant — so it fails build like a wrong type.
+    let input = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        { "type": "Feature", "id": "priority-rule", "priority": -3,
+          "properties": {},
+          "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] } }
+      ]
+    }"#;
+    let err = rules_from_geojson(input).unwrap_err();
+    assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
+    assert!(err.message.contains("priority-rule"));
+}
+
+#[test]
 fn top_level_priority_and_properties_priority_are_distinct() {
     let input = r#"{
       "type": "FeatureCollection",
