@@ -142,6 +142,7 @@ pub fn rules() -> Vec<Rule> {
             id: format!("rule-{index:02}"),
             properties,
             geometry: geo::Geometry::MultiPolygon(MultiPolygon::new(polygons)),
+            priority: 0,
         });
     }
     rules

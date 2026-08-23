@@ -147,6 +147,7 @@ mod tests {
                     ]),
                     vec![],
                 )),
+                priority: 0,
             },
             Rule {
                 id: "zone-b".to_string(),
@@ -161,6 +162,7 @@ mod tests {
                     ]),
                     vec![],
                 )),
+                priority: 0,
             },
         ]
     }

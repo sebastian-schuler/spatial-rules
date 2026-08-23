@@ -485,6 +485,7 @@ pub fn generate_rules(scale: Scale) -> Vec<Rule> {
                     ring(&mut rng, cx, cy, scale.vertices),
                     vec![],
                 )])),
+                priority: 0,
             }
         })
         .collect()

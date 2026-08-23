@@ -95,6 +95,7 @@ fn antimeridian_crossing_rule_queries_without_panic() {
             ]),
             vec![],
         )),
+        priority: 0,
     }])
     .unwrap();
     let candidate = candidate_geometry(
@@ -111,6 +112,7 @@ fn unsupported_rule_geometry_type_is_rejected() {
         id: "point".to_string(),
         properties: Default::default(),
         geometry: Geometry::Point(Point::new(1.0, 1.0)),
+        priority: 0,
     }])
     .unwrap_err();
     assert_eq!(err.code, spatial_rules_core::ErrorCode::UnsupportedGeometryType);

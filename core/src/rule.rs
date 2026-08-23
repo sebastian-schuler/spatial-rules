@@ -30,4 +30,9 @@ pub struct Rule {
     pub properties: BTreeMap<String, PropertyValue>,
     /// The rule's geometry (Polygon or MultiPolygon once validated).
     pub geometry: Geometry<f64>,
+    /// Top-level precedence for resolution (ADR-0015): higher wins; a missing
+    /// field is `0` (unprioritized rules sort below any explicit priority).
+    /// A `priority` inside `properties` is plain metadata, never read here.
+    #[serde(default)]
+    pub priority: i64,
 }

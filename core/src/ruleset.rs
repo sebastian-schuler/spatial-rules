@@ -11,7 +11,7 @@ use crate::error::{ErrorCode, SpatialError};
 use crate::prepared_cache::{next_ruleset_id, PreparedGeometries, PreparedMemo};
 use crate::property_index::{EqualityIndex, PropertyIndex};
 use crate::properties::PropertyValue;
-use crate::query::{CandidateOutcome, Query};
+use crate::query::{CandidateOutcome, Query, ResolutionOutcome};
 use crate::rule::{Rule, RuleId};
 use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
 use crate::validation::validate_rule_geometry;
@@ -26,6 +26,10 @@ pub struct Ruleset {
     id: u64,
     rules: Vec<Rule>,
     ids: HashMap<String, RuleId>,
+    /// Hoisted top-level priorities, aligned to [`RuleId`] — the resolution
+    /// path reads precedence without touching `properties` per candidate
+    /// (ADR-0015).
+    priorities: Vec<i64>,
     envelopes: Vec<Rect<f64>>,
     spatial_index: Box<dyn SpatialIndex>,
     property_index: Box<dyn PropertyIndex>,
@@ -93,11 +97,13 @@ impl Ruleset {
 
         let spatial_index = build_spatial_index(index_kind, index_entries);
         let property_index: Box<dyn PropertyIndex> = Box::new(EqualityIndex::build(&rules));
+        let priorities: Vec<i64> = rules.iter().map(|rule| rule.priority).collect();
 
         Ok(Ruleset {
             id: next_ruleset_id(),
             rules,
             ids,
+            priorities,
             envelopes,
             spatial_index,
             property_index,
@@ -137,6 +143,13 @@ impl Ruleset {
         &self.rules[rule_id.0 as usize].properties
     }
 
+    /// The top-level precedence of a rule by [`RuleId`] (ADR-0015). Missing at
+    /// ingestion means `0` (unprioritized rules sort below any explicit
+    /// priority).
+    pub fn priority(&self, rule_id: RuleId) -> i64 {
+        self.priorities[rule_id.0 as usize]
+    }
+
     /// The precomputed envelope of a rule by [`RuleId`].
     pub fn envelope(&self, rule_id: RuleId) -> &Rect<f64> {
         &self.envelopes[rule_id.0 as usize]
@@ -171,7 +184,28 @@ impl Ruleset {
     /// (validation, envelopes, rstar index, property index) and assigning a
     /// **fresh `Ruleset.id`** — the id is never persisted (ADR-0010, ADR-0013).
     pub fn from_canonical(input: &[u8]) -> Result<Self, SpatialError> {
-        let rules: Vec<Rule> = serde_json::from_slice(input).map_err(|e| {
+        let value: serde_json::Value = serde_json::from_slice(input).map_err(|e| {
+            SpatialError::invalid_geojson(format!("failed to parse canonical ruleset: {e}"))
+        })?;
+        let rules = value.as_array().ok_or_else(|| {
+            SpatialError::invalid_geojson("failed to parse canonical ruleset: expected an array of rules")
+        })?;
+        // A present-but-wrong-typed `priority` must fail build with
+        // `SR_RULESET_CONSTRUCTION_FAILED` naming the rule — the same gate as
+        // GeoJSON ingestion (ADR-0015) — rather than surface as a generic
+        // parse error, so precedence is never silently misread on any load path.
+        for rule_value in rules {
+            if let Some(priority) = rule_value.get("priority") {
+                if priority.as_i64().is_none() {
+                    let id = rule_value
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .unwrap_or("<unknown>");
+                    return Err(crate::ingestion::priority_type_error(id, priority));
+                }
+            }
+        }
+        let rules: Vec<Rule> = serde_json::from_value(value).map_err(|e| {
             SpatialError::invalid_geojson(format!("failed to parse canonical ruleset: {e}"))
         })?;
         Self::build(rules)
@@ -225,6 +259,15 @@ impl Ruleset {
     /// [`Ruleset::query`].
     pub fn query_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
         self.prepare(query).evaluate_mask_all(candidates)
+    }
+
+    /// Resolve a batch of candidates against `query`, returning one
+    /// [`ResolutionOutcome`] per candidate in input order (ADR-0015): the
+    /// ordered applicable set, the winner, and first-provider-wins derived
+    /// values. The match path and its mask are untouched; resolution is the
+    /// same pipeline plus a precedence-ordered layer over the applicable set.
+    pub fn resolve(&self, candidates: &[Candidate], query: &Query) -> Vec<ResolutionOutcome> {
+        self.prepare(query).evaluate_resolve_all(candidates)
     }
 
     /// Compile a query into a reusable [`PreparedQuery`] holding the planning:
@@ -312,6 +355,7 @@ mod tests {
                 LineString::from(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]),
                 vec![],
             )),
+            priority: 0,
         }]
     }
 
@@ -346,11 +390,13 @@ mod tests {
                 id: "zone-a".to_string(),
                 properties: BTreeMap::new(),
                 geometry: square(0.0, 0.0),
+                priority: 0,
             },
             Rule {
                 id: "zone-b".to_string(),
                 properties: BTreeMap::new(),
                 geometry: square(100.0, 100.0),
+                priority: 0,
             },
         ]
     }
@@ -436,6 +482,7 @@ mod tests {
                 LineString::from(vec![(-50.0, -50.0), (-50.0, 150.0), (150.0, 150.0), (150.0, -50.0), (-50.0, -50.0)]),
                 vec![],
             )),
+            priority: 0,
         });
         let ruleset = Ruleset::build(rules).unwrap();
         // A candidate whose envelope intersects all three rules.

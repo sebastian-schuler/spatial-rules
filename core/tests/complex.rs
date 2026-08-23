@@ -29,6 +29,7 @@ fn complex_rule(id: &str, cx: f64, vertices: usize, fields: usize, seed: u64) ->
         id: id.to_string(),
         properties,
         geometry: geo::Geometry::Polygon(Polygon::new(exterior, vec![hole])),
+        priority: 0,
     }
 }
 

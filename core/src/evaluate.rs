@@ -1,14 +1,15 @@
 //! Compiled-query evaluation and spatial predicate helpers.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use geo::algorithm::relate::IntersectionMatrix;
-use geo::{BooleanOps, GeodesicArea, Geometry, Relate};
+use geo::{BooleanOps, GeodesicArea, Geometry, Rect, Relate};
 
 use crate::candidate::{Candidate, CandidateClass};
 use crate::prepared_cache::PreparedMemo;
-use crate::query::{CandidateOutcome, OverlapMetric, Query, SpatialPredicate};
+use crate::properties::PropertyValue;
+use crate::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
 use crate::rule::RuleId;
 use crate::ruleset::Ruleset;
 use crate::where_expr::WhereExpr;
@@ -136,6 +137,12 @@ impl<'a> PreparedQuery<'a> {
         candidates.iter().map(|c| self.evaluate_mask(c)).collect()
     }
 
+    /// Batch form of [`PreparedQuery::evaluate_resolve`] — same lazy
+    /// preparation as the match path.
+    pub(crate) fn evaluate_resolve_all(&self, candidates: &[Candidate]) -> Vec<ResolutionOutcome> {
+        candidates.iter().map(|c| self.evaluate_resolve(c)).collect()
+    }
+
     /// Whether a candidate-touching rule reaches the exact DE-9IM step:
     /// not excluded and admitted by the property filter (ADR-0003 pipeline).
     fn reaches_relate(&self, rule_id: RuleId) -> bool {
@@ -178,6 +185,40 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
+    /// The shared relate step of the fixed pipeline (bbox → property → exact
+    /// DE-9IM): fill the scratch buffer with the candidate-touching, admitted
+    /// rules, lazily prepare them, and invoke `on_hold(rule_id, matrix)` for
+    /// each in envelope order. Both the match and resolve paths layer their
+    /// per-rule action on this one loop; the mask hot path is unchanged
+    /// because the closure does the same per-rule work it always did.
+    ///
+    /// Lazy preparation (ADR-0010, memory-benchmark 02): filter the envelope
+    /// results to the rules this candidate will relate against, prepare
+    /// exactly the missing ones, then relate in envelope order — so matched
+    /// rule ids stay in the eager path's deterministic ascending order whether
+    /// or not the memo was already warm. Warm batches find everything
+    /// prepared: `ensure` skips every slot fill and the loop adds one
+    /// predicted `None` check per touched rule.
+    fn relate_touched<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_hold: F)
+    where
+        F: FnMut(RuleId, &IntersectionMatrix),
+    {
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(bbox, &mut scratch);
+        scratch.retain(|&rule_id| self.reaches_relate(rule_id));
+        if !scratch.is_empty() {
+            self.memo.ensure(&scratch);
+            let slots = self.memo.slots();
+            for &rule_id in scratch.iter() {
+                let prepared = slots[rule_id.index()]
+                    .as_ref()
+                    .expect("touched rules are prepared");
+                let matrix = candidate.geometry.relate(prepared);
+                on_hold(rule_id, &matrix);
+            }
+        }
+    }
+
     fn evaluate_result(&self, candidate: &Candidate, collect_ids: bool) -> EvalResult {
         // Candidate classification is computed at intake, so the hot path only
         // reads the cached envelope or returns the recorded invalid reason.
@@ -198,7 +239,7 @@ impl<'a> PreparedQuery<'a> {
         let mut matched: Vec<RuleId> = Vec::new();
         let mut overlaps: Vec<OverlapMetric> = Vec::new();
         let mut any_match = false;
-        let mut record_match = |rule_id: RuleId, matrix: &IntersectionMatrix| {
+        self.relate_touched(candidate, &bbox, |rule_id, matrix| {
             if spatial_predicate_holds(self.spatial, matrix) {
                 any_match = true;
                 if collect_ids {
@@ -211,36 +252,77 @@ impl<'a> PreparedQuery<'a> {
                     }
                 }
             }
-        };
-
-        // Lazy preparation (ADR-0010, memory-benchmark 02): filter the
-        // envelope results to the rules this candidate will relate against,
-        // prepare exactly the missing ones, then relate in envelope order — so
-        // `rule_ids` stays in the eager path's deterministic ascending order
-        // whether or not the memo was already warm. Warm batches find
-        // everything prepared: `ensure` skips every slot fill and the loop
-        // adds one predicted `None` check per touched rule.
-        let mut scratch = self.scratch.borrow_mut();
-        self.ruleset.query_envelope_into(&bbox, &mut scratch);
-        scratch.retain(|&rule_id| self.reaches_relate(rule_id));
-        if !scratch.is_empty() {
-            self.memo.ensure(&scratch);
-            let slots = self.memo.slots();
-            for &rule_id in scratch.iter() {
-                let prepared = slots[rule_id.index()]
-                    .as_ref()
-                    .expect("touched rules are prepared");
-                let matrix = candidate.geometry.relate(prepared);
-                record_match(rule_id, &matrix);
-            }
-        }
-        drop(scratch);
+        });
 
         EvalResult {
             matched: any_match,
             invalid: None,
             rule_ids: matched,
             overlaps: if compute_overlaps { Some(overlaps) } else { None },
+        }
+    }
+
+    /// Resolve one candidate (ADR-0015): gather the **applicable** rules
+    /// (spatial predicate holds + where clause admits + not excluded) — the
+    /// same fixed bbox → property → exact DE-9IM pipeline as the match path —
+    /// then order them by precedence (priority desc, ties by declaration
+    /// order / ascending rule id). The winner is the head of that order; the
+    /// values are a first-provider-wins merge of the applicable rules'
+    /// properties down the order; the ordered set itself is the explanation.
+    ///
+    /// **Collect-then-resolve**: no early exit at the first spatial hit, the
+    /// merge needs the full applicable set (ADR-0015 stance).
+    pub fn evaluate_resolve(&self, candidate: &Candidate) -> ResolutionOutcome {
+        // Candidate classification is computed at intake, so this path only
+        // reads the cached envelope or the recorded invalid reason.
+        let bbox = match candidate.class() {
+            CandidateClass::Valid { envelope } => *envelope,
+            CandidateClass::Invalid { reason } => {
+                return ResolutionOutcome::Invalid {
+                    reason: reason.clone(),
+                };
+            }
+        };
+
+        // Fixed pipeline: bbox -> property -> exact DE-9IM, gathering the
+        // applicable rules in envelope order.
+        let mut applicable: Vec<ApplicableRule> = Vec::new();
+        self.relate_touched(candidate, &bbox, |rule_id, matrix| {
+            if spatial_predicate_holds(self.spatial, matrix) {
+                applicable.push(ApplicableRule {
+                    rule_id,
+                    priority: self.ruleset.priority(rule_id),
+                    spatial_matched: true,
+                    property_matched: true,
+                });
+            }
+        });
+
+        if applicable.is_empty() {
+            return ResolutionOutcome::NotMatched;
+        }
+
+        // Precedence: priority desc, ties by declaration order (ascending rule
+        // id). The explicit tie-break keeps the order deterministic even if
+        // the envelope order ever changes.
+        applicable.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.rule_id.cmp(&b.rule_id))
+        });
+
+        let winner = applicable[0].rule_id;
+        let mut values: BTreeMap<String, PropertyValue> = BTreeMap::new();
+        for rule in &applicable {
+            for (key, value) in self.ruleset.properties(rule.rule_id) {
+                values.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+
+        ResolutionOutcome::Resolved {
+            winner,
+            values,
+            applicable,
         }
     }
 }

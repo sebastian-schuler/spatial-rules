@@ -6,7 +6,7 @@
 use geo::Geometry;
 
 use crate::candidate::Candidate;
-use crate::error::SpatialError;
+use crate::error::{ErrorCode, SpatialError};
 use crate::properties::properties_from_json;
 use crate::rule::Rule;
 
@@ -40,10 +40,12 @@ pub fn rule_from_feature(feature: &geojson::Feature) -> Result<Rule, SpatialErro
         .as_ref()
         .map(properties_from_json)
         .unwrap_or_default();
+    let priority = extract_feature_priority(feature, &id)?;
     Ok(Rule {
         id,
         properties,
         geometry,
+        priority,
     })
 }
 
@@ -97,4 +99,34 @@ fn id_to_string(id: &geojson::feature::Id) -> String {
         geojson::feature::Id::String(s) => s.clone(),
         geojson::feature::Id::Number(n) => n.to_string(),
     }
+}
+
+/// Read the top-level `priority` foreign member (ADR-0015). Missing → `0`;
+/// present-but-not-an-integer (string/float/bool) → a construction error
+/// naming the rule, because silently misreading precedence is the bug the
+/// top-level field exists to prevent.
+fn extract_feature_priority(
+    feature: &geojson::Feature,
+    rule_id: &str,
+) -> Result<i64, SpatialError> {
+    let Some(foreign_members) = &feature.foreign_members else {
+        return Ok(0);
+    };
+    let Some(priority) = foreign_members.get("priority") else {
+        return Ok(0);
+    };
+    priority
+        .as_i64()
+        .ok_or_else(|| priority_type_error(rule_id, priority))
+}
+
+/// The construction error for a present-but-non-integer top-level `priority`
+/// (ADR-0015), shared by the GeoJSON ingestion gate and the canonical load
+/// gate so both paths fail build with the same `SR_RULESET_CONSTRUCTION_FAILED`
+/// code and name the rule.
+pub(crate) fn priority_type_error(rule_id: &str, found: &serde_json::Value) -> SpatialError {
+    SpatialError::new(
+        ErrorCode::RulesetConstructionFailed,
+        format!("rule '{rule_id}': top-level 'priority' must be an integer, found {found}"),
+    )
 }

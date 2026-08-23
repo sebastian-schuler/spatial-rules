@@ -1,8 +1,10 @@
 //! Query model and per-candidate outcomes (ADR-0004, ADR-0005).
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use crate::error::SpatialError;
+use crate::properties::PropertyValue;
 use crate::rule::RuleId;
 use crate::where_expr::WhereExpr;
 
@@ -166,6 +168,41 @@ pub enum CandidateOutcome {
     Matched {
         rule_ids: Vec<RuleId>,
         overlaps: Option<Vec<OverlapMetric>>,
+    },
+    NotMatched,
+    Invalid { reason: String },
+}
+
+/// One rule in the ordered applicable set — the per-rule explanation member
+/// (ADR-0015). An applicable rule passed both admission gates, so
+/// `spatial_matched` (the DE-9IM predicate held) and `property_matched` (the
+/// `where` clause admitted the rule) are data the evaluation already computes;
+/// a rule failing either gate is absent from the set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApplicableRule {
+    pub rule_id: RuleId,
+    /// The rule's top-level precedence (higher wins).
+    pub priority: i64,
+    /// The query's spatial predicate held between the candidate and the rule.
+    pub spatial_matched: bool,
+    /// The `where` clause admitted the rule.
+    pub property_matched: bool,
+}
+
+/// The resolution outcome for one candidate, aligned to input order
+/// (ADR-0015). Resolution answers "which rule wins, what values apply, and
+/// why" instead of only "which rules matched".
+///
+/// `Resolved.winner` is the head of the priority-descending applicable order;
+/// `values` is the first-provider-wins merge of the applicable rules'
+/// properties down that order (a field no applicable rule defines is absent);
+/// `applicable` is the ordered set, which is the explanation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolutionOutcome {
+    Resolved {
+        winner: RuleId,
+        values: BTreeMap<String, PropertyValue>,
+        applicable: Vec<ApplicableRule>,
     },
     NotMatched,
     Invalid { reason: String },

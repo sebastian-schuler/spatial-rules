@@ -34,6 +34,7 @@ fn main() {
             id: "b".to_string(),
             properties: Default::default(),
             geometry: geometry_from_json(&pair["b"]),
+            priority: 0,
         };
         let ruleset = Ruleset::build(vec![rule]).expect("fixture rule must build");
 

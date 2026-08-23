@@ -91,6 +91,7 @@ fn rejects_unsupported_geometry_type() {
         id: "point".into(),
         properties: BTreeMap::new(),
         geometry: geo::Geometry::Point(Point::new(0.0, 0.0)),
+        priority: 0,
     }];
     let err = Ruleset::build(rules).unwrap_err();
     assert_eq!(err.code, ErrorCode::UnsupportedGeometryType);
@@ -282,8 +283,97 @@ fn from_canonical_rejects_invalid_geometry() {
         id: "bad".to_string(),
         properties: BTreeMap::new(),
         geometry: geo::Geometry::Polygon(bowtie()),
+        priority: 0,
     };
     let bytes = serde_json::to_vec(&vec![bad_rule]).unwrap();
     let err = Ruleset::from_canonical(&bytes).unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidGeometry);
+}
+
+// --- Ticket 01: top-level priority hoist + canonical round-trip (ADR-0015) ---
+
+fn rule_with_priority(id: &str, priority: i64) -> Rule {
+    Rule {
+        id: id.to_string(),
+        properties: BTreeMap::new(),
+        geometry: geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)),
+        priority,
+    }
+}
+
+#[test]
+fn ruleset_hoists_priority_aligned_to_rule_id() {
+    let ruleset = Ruleset::build(vec![
+        rule_with_priority("low", 5),
+        rule_with_priority("high", 10),
+        rule_with_priority("unprioritized", 0),
+    ])
+    .unwrap();
+    assert_eq!(ruleset.priority(ruleset.rule_id("low").unwrap()), 5);
+    assert_eq!(ruleset.priority(ruleset.rule_id("high").unwrap()), 10);
+    assert_eq!(ruleset.priority(ruleset.rule_id("unprioritized").unwrap()), 0);
+}
+
+#[test]
+fn canonical_round_trip_preserves_priority() {
+    let original = Ruleset::build(vec![
+        rule_with_priority("a", 7),
+        rule_with_priority("b", 0),
+    ])
+    .unwrap();
+    let bytes = original.to_canonical().unwrap();
+    let loaded = Ruleset::from_canonical(&bytes).unwrap();
+    for id in ["a", "b"] {
+        let rule_id = loaded.rule_id(id).unwrap();
+        assert_eq!(
+            loaded.priority(rule_id),
+            original.priority(original.rule_id(id).unwrap()),
+            "priority of {id}"
+        );
+    }
+}
+
+#[test]
+fn canonical_form_serializes_priority_field() {
+    let original = Ruleset::build(vec![rule_with_priority("a", 7)]).unwrap();
+    let bytes = original.to_canonical().unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(text.contains("\"priority\":7"), "canonical text: {text}");
+}
+
+#[test]
+fn old_canonical_without_priority_loads_as_zero() {
+    // A pre-P1 canonical rule record (no `priority` member) must load as 0
+    // (ADR-0013 compatibility, ADR-0015 `#[serde(default)]`). Build it by
+    // serializing a rule and stripping the `priority` member, so the fixture
+    // matches geo's exact canonical geometry form without hand-writing it.
+    let rule = rule_with_priority("legacy", 7);
+    let mut value = serde_json::to_value(rule).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("priority")
+        .expect("serialized rule carries priority");
+    let old_style = serde_json::to_vec(&vec![value]).unwrap();
+
+    let loaded = Ruleset::from_canonical(&old_style).unwrap();
+    assert_eq!(loaded.priority(loaded.rule_id("legacy").unwrap()), 0);
+}
+
+#[test]
+fn from_canonical_rejects_wrong_typed_priority_naming_the_rule() {
+    // A wrong-typed `priority` in canonical input fails build with the same
+    // code and rule name as the GeoJSON ingestion gate (ADR-0015), not a
+    // generic parse error.
+    let rule = rule_with_priority("hi", 7);
+    let mut value = serde_json::to_value(rule).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("priority".to_string(), json!("high"));
+    let bytes = serde_json::to_vec(&vec![value]).unwrap();
+
+    let err = Ruleset::from_canonical(&bytes).unwrap_err();
+    assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
+    assert!(err.message.contains("hi"));
 }

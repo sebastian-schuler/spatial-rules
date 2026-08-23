@@ -124,6 +124,7 @@ proptest! {
                 id: format!("r{index}"),
                 properties: BTreeMap::new(),
                 geometry: rect_to_geometry(*rect),
+                priority: 0,
             })
             .collect();
         let ruleset = Ruleset::build(rules).unwrap();
