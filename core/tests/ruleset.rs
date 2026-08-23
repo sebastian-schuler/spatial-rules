@@ -394,3 +394,13 @@ fn from_canonical_rejects_negative_priority_naming_the_rule() {
     assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
     assert!(err.message.contains("hi"));
 }
+
+#[test]
+fn build_rejects_negative_priority_from_programmatic_rules() {
+    // The non-negativity gate lives at compile, so a directly-constructed
+    // `Rule { priority: -5 }` fails the same way the JSON gates do — no
+    // construction path can produce a negative-precedence ruleset (ADR-0015).
+    let err = Ruleset::build(vec![rule_with_priority("programmatic", -5)]).unwrap_err();
+    assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
+    assert!(err.message.contains("programmatic"));
+}

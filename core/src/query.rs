@@ -1,4 +1,4 @@
-//! Query model and per-candidate outcomes (ADR-0004, ADR-0005).
+//! Query model and per-candidate outcomes (ADR-0004, ADR-0005, ADR-0015).
 
 use std::collections::BTreeMap;
 use std::str::FromStr;

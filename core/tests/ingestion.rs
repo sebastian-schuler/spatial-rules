@@ -9,7 +9,7 @@ use geo::{LineString, Point, Polygon};
 use spatial_rules_core::{
     candidate_from_feature, candidates_from_geojson, ensure_supported_geometry, feature_geometry,
     parse_geojson, rule_from_feature, rules_from_geojson, validate_rule_geometry, Candidate,
-    ErrorCode, PropertyValue, Rule,
+    ErrorCode, PropertyValue, Rule, Ruleset,
 };
 
 mod common;
@@ -352,7 +352,7 @@ fn wrong_typed_priority_fails_construction_naming_the_rule() {
 fn negative_priority_fails_construction_naming_the_rule() {
     // A negative integer would silently sort below unprioritized (0) rules,
     // breaking ADR-0015's "unprioritized rules sort below any explicit
-    // priority" invariant — so it fails build like a wrong type.
+    // priority" invariant — so it fails the build gate like a wrong type.
     let input = r#"{
       "type": "FeatureCollection",
       "features": [
@@ -361,7 +361,7 @@ fn negative_priority_fails_construction_naming_the_rule() {
           "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] } }
       ]
     }"#;
-    let err = rules_from_geojson(input).unwrap_err();
+    let err = Ruleset::from_geojson(input).unwrap_err();
     assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
     assert!(err.message.contains("priority-rule"));
 }

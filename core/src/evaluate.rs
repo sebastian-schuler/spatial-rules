@@ -343,9 +343,10 @@ impl<'a> PreparedQuery<'a> {
 
     /// The compact form of [`PreparedQuery::evaluate_resolve`]: `0` no
     /// resolution, `1` resolved, `2` invalid (ADR-0015). Mask-only callers pay
-    /// for the collect-then-resolve relate loop but not for the winner sort,
-    /// the values merge, or the explanation — mirroring how the match mask
-    /// skips per-match rule ids (ADR-0004).
+    /// for the collect-then-resolve gather (the relate loop and its per-candidate
+    /// id buffer) but not for the winner sort, the values merge, or the
+    /// explanation — mirroring how the match mask skips per-match rule ids
+    /// (ADR-0004).
     pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
         match self.applicable_ids(candidate) {
             Err(_) => 2,

@@ -68,6 +68,19 @@ impl Ruleset {
             validate_rule_geometry(&rule.geometry).map_err(|e| {
                 SpatialError::new(e.code, format!("rule '{}': {}", rule.id, e.message))
             })?;
+            // Non-negativity is the authoritative precedence gate (ADR-0015):
+            // every construction path — GeoJSON, canonical, and programmatic
+            // `Rule`s — lands here, so a negative priority can never silently
+            // sort below unprioritized (0) rules.
+            if rule.priority < 0 {
+                return Err(SpatialError::new(
+                    ErrorCode::RulesetConstructionFailed,
+                    format!(
+                        "rule '{}': priority must be non-negative, found {}",
+                        rule.id, rule.priority
+                    ),
+                ));
+            }
             if ids.insert(rule.id.clone(), RuleId(index as u32)).is_some() {
                 return Err(SpatialError::new(
                     ErrorCode::RulesetConstructionFailed,
@@ -190,11 +203,11 @@ impl Ruleset {
         let rules = value.as_array().ok_or_else(|| {
             SpatialError::invalid_geojson("failed to parse canonical ruleset: expected an array of rules")
         })?;
-        // A present-but-invalid `priority` (wrong-typed or negative) must fail
-        // build with `SR_RULESET_CONSTRUCTION_FAILED` naming the rule — the
-        // same gate as GeoJSON ingestion (ADR-0015) — rather than surface as a
-        // generic parse error, so precedence is never silently misread on any
-        // load path.
+        // A present-but-wrong-typed `priority` must fail build with
+        // `SR_RULESET_CONSTRUCTION_FAILED` naming the rule — the same gate as
+        // GeoJSON ingestion (ADR-0015) — rather than surface as a generic
+        // parse error. (A valid-but-negative integer flows through to the
+        // build-time non-negativity gate below.)
         for rule_value in rules {
             if let Some(priority) = rule_value.get("priority") {
                 let id = rule_value

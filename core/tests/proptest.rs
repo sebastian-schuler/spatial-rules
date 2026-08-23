@@ -11,8 +11,8 @@ use geo::{Coord, Relate, Rect};
 use proptest::prelude::*;
 use serde_json::json;
 use spatial_rules_core::{
-    Candidate, PropertyValue, Query, ResolutionOutcome, Rule, Ruleset, SpatialIndexKind,
-    SpatialPredicate, WhereExpr,
+    Candidate, CandidateOutcome, PropertyValue, Query, ResolutionOutcome, Rule, Ruleset,
+    SpatialIndexKind, SpatialPredicate, WhereExpr,
 };
 
 /// A non-degenerate integer-aligned rectangle (always a valid simple polygon),
@@ -202,6 +202,36 @@ proptest! {
         let scanned = scan.resolve(&candidates, &query);
         prop_assert_eq!(&outcomes, &scanned);
 
+        // The applicable set is exactly the set the match path reports —
+        // ADR-0015's "the same set `rule_ids` reports today" — an independent
+        // oracle that catches a rule wrongly dropped from resolution.
+        let matches = ruleset.query(&candidates, &query);
+        for (resolution, matched) in outcomes.iter().zip(matches.iter()) {
+            match (resolution, matched) {
+                (
+                    ResolutionOutcome::Resolved { applicable, .. },
+                    CandidateOutcome::Matched { rule_ids, .. },
+                ) => {
+                    let mut resolved_ids: Vec<_> =
+                        applicable.iter().map(|rule| rule.rule_id).collect();
+                    let mut matched_ids = rule_ids.clone();
+                    resolved_ids.sort();
+                    matched_ids.sort();
+                    prop_assert_eq!(
+                        &resolved_ids,
+                        &matched_ids,
+                        "the applicable set must equal the match path's rule ids"
+                    );
+                }
+                (ResolutionOutcome::NotMatched, CandidateOutcome::NotMatched) => {}
+                (ResolutionOutcome::Invalid { .. }, CandidateOutcome::Invalid { .. }) => {}
+                (resolution, matched) => prop_assert!(
+                    false,
+                    "resolution and match outcomes must agree: {resolution:?} vs {matched:?}"
+                ),
+            }
+        }
+
         for outcome in &outcomes {
             let ResolutionOutcome::Resolved { winner, values, applicable } = outcome else {
                 continue;
@@ -324,6 +354,69 @@ proptest! {
                 values.get("source"),
                 Some(&PropertyValue::Str(ruleset.string_id(winner).to_string()))
             );
+        }
+    }
+
+    #[test]
+    fn where_admission_agrees_with_the_match_path(
+        rule_data in prop::collection::vec(
+            (rect_strategy(), priority_strategy(), any::<bool>()),
+            1..8,
+        ),
+        candidates in prop::collection::vec(rect_strategy(), 1..4),
+    ) {
+        // Every rule carries an `active` bool so the where clause is meaningful
+        // (some rules admitted, some not).
+        let rules: Vec<Rule> = rule_data
+            .iter()
+            .enumerate()
+            .map(|(index, (rect, priority, active))| {
+                let mut properties = BTreeMap::new();
+                properties.insert("active".to_string(), PropertyValue::Bool(*active));
+                Rule {
+                    id: format!("r{index}"),
+                    properties,
+                    geometry: rect_to_geometry(*rect),
+                    priority: *priority,
+                }
+            })
+            .collect();
+        let ruleset = Ruleset::build(rules).unwrap();
+        let candidates = candidates_from_rects(&candidates);
+        let query = Query::from_json(&json!({
+            "spatial": { "predicate": "intersects" },
+            "where": { "active": true }
+        }))
+        .unwrap();
+
+        // Resolution and the match path must admit exactly the same rules: the
+        // where-admitted applicable set equals the match path's rule ids.
+        let resolutions = ruleset.resolve(&candidates, &query);
+        let matches = ruleset.query(&candidates, &query);
+        for (resolution, matched) in resolutions.iter().zip(matches.iter()) {
+            match (resolution, matched) {
+                (
+                    ResolutionOutcome::Resolved { applicable, .. },
+                    CandidateOutcome::Matched { rule_ids, .. },
+                ) => {
+                    let mut resolved_ids: Vec<_> =
+                        applicable.iter().map(|rule| rule.rule_id).collect();
+                    let mut matched_ids = rule_ids.clone();
+                    resolved_ids.sort();
+                    matched_ids.sort();
+                    prop_assert_eq!(
+                        &resolved_ids,
+                        &matched_ids,
+                        "where-admitted applicable set must equal the match path's rule ids"
+                    );
+                }
+                (ResolutionOutcome::NotMatched, CandidateOutcome::NotMatched) => {}
+                (ResolutionOutcome::Invalid { .. }, CandidateOutcome::Invalid { .. }) => {}
+                (resolution, matched) => prop_assert!(
+                    false,
+                    "where admission must agree: {resolution:?} vs {matched:?}"
+                ),
+            }
         }
     }
 }
