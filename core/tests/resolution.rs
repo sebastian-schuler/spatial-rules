@@ -394,3 +394,77 @@ fn engine_resolve_mask_matches_ruleset_mask() {
     );
     assert_eq!(engine.resolve(&candidates, &intersects()).len(), 1);
 }
+
+// --- Ticket 05: explicit edge cases ---
+
+#[test]
+fn single_rule_candidate_resolves_to_that_rule() {
+    let ruleset = Ruleset::build(vec![priority_rule(
+        "solo",
+        square(0.0, 0.0, 10.0, 10.0),
+        3,
+        &[("kind", PropertyValue::Str("solo".into()))],
+    )])
+    .unwrap();
+    let local = candidate("c", square(2.0, 2.0, 4.0, 4.0));
+    let outcomes = ruleset.resolve(&[local], &intersects());
+    let ResolutionOutcome::Resolved {
+        winner,
+        values,
+        applicable,
+    } = &outcomes[0]
+    else {
+        panic!("expected a resolved outcome");
+    };
+    assert_eq!(*winner, ruleset.rule_id("solo").unwrap());
+    assert_eq!(applicable.len(), 1);
+    assert_eq!(
+        values.get("kind"),
+        Some(&PropertyValue::Str("solo".into()))
+    );
+}
+
+#[test]
+fn all_defaults_ties_resolve_by_declaration_order() {
+    // Every rule is unprioritized (0): ties break by declaration order.
+    let ruleset = Ruleset::build(vec![
+        priority_rule(
+            "first",
+            square(0.0, 0.0, 10.0, 10.0),
+            0,
+            &[("kind", PropertyValue::Str("first".into()))],
+        ),
+        priority_rule(
+            "second",
+            square(5.0, 5.0, 15.0, 15.0),
+            0,
+            &[("kind", PropertyValue::Str("second".into()))],
+        ),
+        priority_rule(
+            "third",
+            square(8.0, 8.0, 18.0, 18.0),
+            0,
+            &[("kind", PropertyValue::Str("third".into()))],
+        ),
+    ])
+    .unwrap();
+    let outcomes = ruleset.resolve(&[inside()], &intersects());
+    let ResolutionOutcome::Resolved {
+        winner,
+        applicable,
+        ..
+    } = &outcomes[0]
+    else {
+        panic!("expected a resolved outcome");
+    };
+    assert_eq!(*winner, ruleset.rule_id("first").unwrap());
+    let ids: Vec<_> = applicable.iter().map(|rule| rule.rule_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            ruleset.rule_id("first").unwrap(),
+            ruleset.rule_id("second").unwrap(),
+            ruleset.rule_id("third").unwrap(),
+        ]
+    );
+}
