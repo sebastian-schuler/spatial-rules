@@ -468,3 +468,47 @@ fn all_defaults_ties_resolve_by_declaration_order() {
         ]
     );
 }
+
+#[test]
+fn empty_ruleset_resolves_every_candidate_as_not_resolved() {
+    // An empty ruleset is valid (ADR-0004); resolution mirrors the match path
+    // and reports every candidate as not resolved, with a zero mask.
+    let ruleset = Ruleset::build(vec![]).unwrap();
+    let candidates = vec![
+        inside(),
+        candidate("far", square(50.0, 50.0, 60.0, 60.0)),
+    ];
+    assert_eq!(
+        ruleset.resolve(&candidates, &intersects()),
+        vec![
+            ResolutionOutcome::NotMatched,
+            ResolutionOutcome::NotMatched,
+        ]
+    );
+    assert_eq!(ruleset.resolve_mask(&candidates, &intersects()), vec![0, 0]);
+}
+
+#[test]
+fn values_are_empty_when_no_applicable_rule_defines_properties() {
+    // First-provider-wins over an applicable set whose rules all have no
+    // properties yields an empty values map — never null or absent.
+    let ruleset = Ruleset::build(vec![
+        priority_rule("winner", square(0.0, 0.0, 10.0, 10.0), 10, &[]),
+        priority_rule("backup", square(5.0, 5.0, 15.0, 15.0), 5, &[]),
+    ])
+    .unwrap();
+    let outcomes = ruleset.resolve(&[inside()], &intersects());
+    let ResolutionOutcome::Resolved {
+        values,
+        applicable,
+        ..
+    } = &outcomes[0]
+    else {
+        panic!("expected a resolved outcome");
+    };
+    assert_eq!(applicable.len(), 2);
+    assert!(
+        values.is_empty(),
+        "no applicable rule defines a property, so values must be empty"
+    );
+}
