@@ -81,6 +81,16 @@ struct EvalResult {
     overlaps: Option<Vec<OverlapMetric>>,
 }
 
+/// The candidate's precomputed bounding envelope, or the recorded invalid
+/// reason (ADR-0005). Candidate classification happens once at intake, so every
+/// evaluation path — match and resolve — reads it through this one seam.
+fn envelope_or_invalid(candidate: &Candidate) -> Result<Rect<f64>, String> {
+    match candidate.class() {
+        CandidateClass::Valid { envelope } => Ok(*envelope),
+        CandidateClass::Invalid { reason } => Err(reason.clone()),
+    }
+}
+
 pub struct PreparedQuery<'a> {
     ruleset: &'a Ruleset,
     spatial: SpatialPredicate,
@@ -228,12 +238,12 @@ impl<'a> PreparedQuery<'a> {
     fn evaluate_result(&self, candidate: &Candidate, collect_ids: bool) -> EvalResult {
         // Candidate classification is computed at intake, so the hot path only
         // reads the cached envelope or returns the recorded invalid reason.
-        let bbox = match candidate.class() {
-            CandidateClass::Valid { envelope } => *envelope,
-            CandidateClass::Invalid { reason } => {
+        let bbox = match envelope_or_invalid(candidate) {
+            Ok(bbox) => bbox,
+            Err(reason) => {
                 return EvalResult {
                     matched: false,
-                    invalid: Some(reason.clone()),
+                    invalid: Some(reason),
                     rule_ids: Vec::new(),
                     overlaps: None,
                 };
@@ -270,13 +280,9 @@ impl<'a> PreparedQuery<'a> {
 
     /// The applicable rule ids for a candidate in envelope order (the fixed
     /// bbox → property → exact DE-9IM pipeline), or the recorded invalid
-    /// reason. Shared by the full resolve path and the compact mask path so
-    /// the relate loop lives in one body, as it does for the match path.
+    /// reason. The full resolve path's gather step.
     fn applicable_ids(&self, candidate: &Candidate) -> Result<Vec<RuleId>, String> {
-        let bbox = match candidate.class() {
-            CandidateClass::Valid { envelope } => *envelope,
-            CandidateClass::Invalid { reason } => return Err(reason.clone()),
-        };
+        let bbox = envelope_or_invalid(candidate)?;
         let mut ids: Vec<RuleId> = Vec::new();
         self.relate_touched(candidate, &bbox, |rule_id, matrix| {
             if spatial_predicate_holds(self.spatial, matrix) {
@@ -343,15 +349,19 @@ impl<'a> PreparedQuery<'a> {
 
     /// The compact form of [`PreparedQuery::evaluate_resolve`]: `0` no
     /// resolution, `1` resolved, `2` invalid (ADR-0015). Mask-only callers pay
-    /// for the collect-then-resolve gather (the relate loop and its per-candidate
-    /// id buffer) but not for the winner sort, the values merge, or the
-    /// explanation — mirroring how the match mask skips per-match rule ids
-    /// (ADR-0004).
+    /// for the collect-then-resolve relate loop but not for the per-candidate
+    /// id buffer, the winner sort, the values merge, or the explanation —
+    /// mirroring how the match mask skips per-match rule ids (ADR-0004).
     pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
-        match self.applicable_ids(candidate) {
-            Err(_) => 2,
-            Ok(ids) if ids.is_empty() => 0,
-            Ok(_) => 1,
-        }
+        let Ok(bbox) = envelope_or_invalid(candidate) else {
+            return 2;
+        };
+        let mut resolved = false;
+        self.relate_touched(candidate, &bbox, |_, matrix| {
+            if spatial_predicate_holds(self.spatial, matrix) {
+                resolved = true;
+            }
+        });
+        if resolved { 1 } else { 0 }
     }
 }
