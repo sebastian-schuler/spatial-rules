@@ -77,6 +77,21 @@ impl Default for CellOptions {
 /// (allocator retention, page trimming) without indicating a leak.
 pub const BOUNDED_TOLERANCE_RATIO: f64 = 0.05;
 
+/// The tail-plateau tolerance for [`is_bounded_series`]: the last quarter is
+/// "flat" only when its range is within this fraction of its mean. Deliberately
+/// **tighter** than [`BOUNDED_TOLERANCE_RATIO`] (memory-benchmark ticket 03):
+/// the plateau signal exists to recognize a warmup that has *settled* (whose
+/// flat tail has ~0% range on Linux), and a loose tolerance would instead
+/// rescue a slow leak — a 5-sample tail spans 4 per-swap intervals, so a 2%
+/// plateau still rejects any leak above ~0.5% of the footprint per swap,
+/// matching the steady test's detection boundary.
+pub const PLATEAU_RANGE_RATIO: f64 = 0.02;
+
+/// [`is_bounded_series`] needs at least this many samples (16 = four
+/// 4-point quarters) before the reset/plateau signals are meaningful; below
+/// it only the steady test applies.
+pub const MIN_RESET_PLATEAU_SAMPLES: usize = 16;
+
 /// Whether resident memory is *bounded* across a repeated operation: the
 /// spread between the last and first observation must sit within
 /// [`BOUNDED_TOLERANCE_RATIO`] of the **first** observation. A leak makes
@@ -127,21 +142,22 @@ pub fn capped_replacements(scale: Scale, requested: usize) -> usize {
 /// what the window supports:
 ///
 /// - **steady**: `|mean(q4) − mean(q2)|` ≤ tolerance (the original test);
-/// - **reset**: the last quarter returns to within tolerance of the second
-///   quarter's floor — a sawtooth that completed a trim inside the window;
-/// - **tail plateau**: the last quarter is flat (range ≤ tolerance) — warmup
-///   or noise that has stopped growing. A genuine per-swap leak never flattens,
-///   so a flat tail is positive no-leak evidence (this deliberately replaces a
-///   "one-time step" signal, which could have rescued a slow leak whose
-///   adjacent quarter means moved <5%).
+/// - **reset**: some sample of the last quarter revisits within tolerance of
+///   the second quarter's floor — a sawtooth that completed a trim inside the
+///   window (a monotone leak never revisits its earlier floor, so this is
+///   leak-proof);
+/// - **tail plateau**: the last quarter is flat (range ≤ [`PLATEAU_RANGE_RATIO`]
+///   of its mean) — warmup that has settled. The plateau tolerance is tight
+///   enough that a slow leak's still-climbing tail is not mistaken for flat.
 ///
-/// Otherwise the verdict is `false` = *inconclusive*: the window shows drift
-/// it cannot explain (an up-slope with no reset yet — e.g. a 20-swap window
-/// landing entirely between two glibc trims, whose phase varies run to run),
-/// and a longer probe spanning several trim cycles is needed before claiming
-/// either way. The reset/plateau signals need ≥16 samples (4-point quarters)
-/// to be meaningful; below that only the steady test applies. Returns `None`
-/// with fewer than 4 observations — no claim.
+/// Otherwise the verdict is `false` = **not proven bounded**: the window shows
+/// drift it cannot explain — either an up-slope with no reset yet (e.g. a
+/// 20-swap window landing between two glibc trims, whose phase varies run to
+/// run) or a genuine leak. The two are indistinguishable within one window; a
+/// 50-swap probe spanning several trim cycles distinguishes them. The
+/// reset/plateau signals need [`MIN_RESET_PLATEAU_SAMPLES`] samples
+/// (4-point quarters) to be meaningful; below that only the steady test
+/// applies. Returns `None` with fewer than 4 observations — no claim.
 pub fn is_bounded_series(samples: &[u64]) -> Option<bool> {
     if samples.len() < 4 {
         return None;
@@ -156,7 +172,7 @@ pub fn is_bounded_series(samples: &[u64]) -> Option<bool> {
     if steady {
         return Some(true);
     }
-    if samples.len() < 16 {
+    if samples.len() < MIN_RESET_PLATEAU_SAMPLES {
         // Too few samples to tell a bounded shape from drift.
         return Some(false);
     }
@@ -166,8 +182,7 @@ pub fn is_bounded_series(samples: &[u64]) -> Option<bool> {
     let tail = &samples[3 * quarter..];
     let tail_min = *tail.iter().min().unwrap();
     let tail_max = *tail.iter().max().unwrap();
-    let tail_plateau =
-        (tail_max - tail_min) as f64 <= BOUNDED_TOLERANCE_RATIO * mean(tail).max(1.0);
+    let tail_plateau = (tail_max - tail_min) as f64 <= PLATEAU_RANGE_RATIO * mean(tail).max(1.0);
     Some(reset || tail_plateau)
 }
 
@@ -643,8 +658,10 @@ mod tests {
 
     #[test]
     fn sawtooth_returning_to_its_floor_is_bounded() {
-        // Real 100000x10 Linux 50-swap probe: ~21 MiB per-swap climb, then
-        // glibc trims back to the same ~286 MiB floor every ~11-18 swaps.
+        // Real 100000x10 Linux 50-swap probe (memory-benchmark ticket 03):
+        // ~21 MiB per-swap climb, then glibc trims back to the same ~286 MiB
+        // floor every ~11-18 swaps. (Trace values differ slightly from the
+        // 20-swap grid run below — separate runs.)
         let samples: Vec<u64> = [
             224, 245, 285, 286, 287, 287, 287, 287, 308, 329, 350, 372, 393, 414, 436, 457,
             478, 500, 521, 543, 286, 307, 328, 350, 286, 307, 328, 350, 371, 392, 414, 435,
@@ -674,9 +691,9 @@ mod tests {
 
     #[test]
     fn upslope_with_no_reset_in_window_is_inconclusive() {
-        // Real 100000x10 Linux 20-swap trace: an up-slope with no reset inside
-        // the window — the verdict must stay `false` (the honest answer is
-        // "run the 50-swap probe", which then proves the sawtooth bounded).
+        // Real 100000x10 Linux 20-swap grid trace: an up-slope with no reset
+        // inside the window — the verdict must stay `false` (the honest answer
+        // is "run the 50-swap probe", which then proves the sawtooth bounded).
         let samples: Vec<u64> = [
             224, 246, 285, 286, 287, 287, 287, 287, 308, 329, 350, 372, 393, 415, 436, 457,
             479, 500, 521, 543,
@@ -688,11 +705,13 @@ mod tests {
     }
 
     #[test]
-    fn slow_leak_is_still_unbounded() {
-        // A leak slow enough that adjacent quarters move <5% must still fail:
-        // quarters 2-4 keep climbing, so the one-time-step test must not
-        // rescue it.
-        let samples: Vec<u64> = (0..30).map(|i| 10_000_000 + i * 150_000).collect();
+    fn slow_leak_is_still_unbounded_at_the_20_swap_window() {
+        // A leak of ~1.5% of the footprint per swap at the real 20-swap window:
+        // slow enough that its 5-sample tail is nearly flat, so a loose plateau
+        // tolerance would rescue it as "bounded" — the exact hole a 2%
+        // PLATEAU_RANGE_RATIO closes (a 5-sample tail spans 4 intervals, so it
+        // still rejects any leak above ~0.5%/swap, matching the steady test).
+        let samples: Vec<u64> = (0..20).map(|i| 10_000_000 + i * 150_000).collect();
         assert_eq!(is_bounded_series(&samples), Some(false));
     }
 

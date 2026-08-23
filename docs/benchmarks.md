@@ -245,26 +245,27 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
   latency tail of requests that first touch a rule.
 - **No per-replacement leak — proven on Linux (memory-benchmark ticket 03).**
   The 5%-tolerance `bounded` verdict is a *heuristic* that recognizes three
-  bounded shapes — a steady series, a sawtooth whose last quarter returns to
-  its floor (a trim landed in the window), and a warmup that went flat — and
-  reports `false` only as *inconclusive* (drift the window cannot explain, e.g.
-  an up-slope landing between two glibc trims). A short (20-swap,
-  budget-capped) window against a sawtooth is therefore **phase-dependent**
-  (the 100k×100 grid verdict flips between runs depending on where the trim
-  cycle lands), so the per-swap RSS/commit traces and the 50-swap probes are
-  the ground truth. The probes settle the ticket-01 caveat ("no leak claim
-  either way" for the big cells):
+  bounded shapes — a steady series, a sawtooth whose last quarter revisits its
+  floor (a trim landed in the window), and a warmup whose tail has gone flat —
+  and reports `false` when it **cannot prove bounded**: drift the window can't
+  explain (an up-slope landing between two glibc trims, whose phase varies run
+  to run — or a genuine leak; the two are indistinguishable in one window). A
+  short (20-swap, budget-capped) window against a sawtooth is therefore
+  **phase-dependent** (the 100k×100 grid verdict flips between runs depending
+  on where the trim cycle lands), so the per-swap RSS/commit traces and the
+  50-swap probes are the ground truth. The probes settle the ticket-01 caveat
+  ("no leak claim either way" for the big cells):
   - **The 1k×1k cell plateaus flat** (Windows): 270.7 MiB constant to ±0.1 MiB
     from swaps 36–50.
   - **The big cells oscillate in a bounded sawtooth, not a leak** (Linux).
-    glibc grows the arena ~21 MiB per swap (each replacement rebuilds the
-    ruleset), then trims and returns the excess to the kernel every ~11–18
-    swaps: 100k×100 swings between ~561 and ~774 MiB over 50 swaps, 100k×10
-    between ~286 and ~543 MiB — both returning to the **same post-trim floor**
-    every cycle (commit tracks RSS; a leak climbs monotonically and never comes
-    back down). A 10000×10-style cell shows a one-time warmup plateau instead.
-    So a long-lived serving process does **not** accumulate memory across
-    replacements at any scale.
+    glibc grows the arena in steps (~21 MiB typical per swap; each replacement
+    rebuilds the ruleset), then trims and returns the excess to the kernel
+    every ~11–18 swaps: 100k×100 swings between ~561 and ~774 MiB over 50
+    swaps, 100k×10 between ~286 and ~563 MiB — both returning to the **same
+    post-trim floor** every cycle (commit tracks RSS; a leak climbs
+    monotonically and never comes back down). A 10000×10-style cell shows a
+    one-time warmup plateau instead. So a long-lived serving process does
+    **not** accumulate memory across replacements at any scale.
   - **Replacement peak is the capacity number.** Old + new rulesets coexist
     during the build: the 100k×100 50-swap probe's VmHWM peaks ~492 MiB above
     its pre-lifecycle peak (~774 MiB resident total) while holding a ~258 MiB

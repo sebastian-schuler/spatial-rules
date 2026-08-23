@@ -98,13 +98,18 @@ inside the pinned container, plus two measurement bugs surfaced and fixed.
   memory_scaling.rs`). The quarter-mean heuristic misread two bounded shapes
   as leak drift: a one-time warmup step that then runs flat, and a bounded
   sawtooth whose window landed on an up-slope. The new test classifies bounded
-  when the last quarter is steady, returns to the second quarter's floor
-  (a trim landed in the window), or is flat (warmup done); `false` is now the
-  honest *inconclusive* — drift the window can't explain, which is
-  phase-dependent for 20-swap windows against the ~11–18-swap glibc trim
-  cycle. A "one-time step" variant was rejected during development because it
-  could rescue a slow leak whose adjacent quarter means moved <5%. Pinned by
-  unit tests on the recorded Linux traces (warmup 10000×10 → bounded, sawtooth
-  with/without a visible reset, steady leak, slow leak) and validated against
-  both grids, both 50-swap probes, and a fresh Linux re-run of the affected
-  cells.
+  when the last quarter is steady vs the second, revisits the second quarter's
+  floor (a trim landed in the window), or is flat (warmup done); `false` is now
+  the honest **not proven bounded** — drift the window can't explain (an
+  up-slope between trims, phase-dependent at 20 swaps, or a real leak; the two
+  are indistinguishable in one window, which is why the 50-swap probes are the
+  definitive answer). Post-review tightening: the tail-plateau tolerance is 2%
+  (not 5%) — a 5% plateau was shown to rescue a slow leak (~1.5%/swap) at the
+  real 20-swap window, and 2% rejects any leak above ~0.5%/swap, matching the
+  steady test's boundary. A "one-time step" variant was rejected during
+  development for the same slow-leak rescue. The bool is kept deliberately:
+  the harness measures only "bounded evidence present / absent", never a
+  provable leak. Pinned by unit tests on the recorded Linux traces (warmup
+  10000×10 → bounded, sawtooth with/without a visible reset, steady leak, slow
+  leak at 20 swaps) and validated against both platform grids, both 50-swap
+  probes, and a fresh Linux re-run of the affected cells.
