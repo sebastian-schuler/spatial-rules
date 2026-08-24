@@ -447,24 +447,38 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
+    /// The single admission seam for a candidate's spatial predicate: run the
+    /// pre-filtered, property-admitted rules through the predicate's exact
+    /// check — DE-9IM relate, or the haversine minimum-distance confirm for
+    /// `withinDistance` — and fire `on_admitted` per admitted rule, in
+    /// ascending rule-id (envelope) order. The resolve paths dispatch the
+    /// spatial predicate here; their withinDistance invalid-reason guards
+    /// still match the enum at the entries (they produce per-outcome invalids).
+    fn admit_by_predicate<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_admitted: F)
+    where
+        F: FnMut(RuleId),
+    {
+        match self.spatial {
+            SpatialPredicate::WithinDistance => {
+                if let Some(distance) = self.within_distance_radius() {
+                    self.admit_within_distance(candidate, bbox, distance, on_admitted);
+                }
+            }
+            _ => self.relate_touched(candidate, bbox, |rule_id, matrix| {
+                if spatial_predicate_holds(self.spatial, matrix) {
+                    on_admitted(rule_id);
+                }
+            }),
+        }
+    }
+
     /// The applicable rule ids for a candidate in envelope order (the fixed
     /// bbox → property → admission pipeline), or the recorded invalid
     /// reason. The full resolve path's gather step.
     fn applicable_ids(&self, candidate: &Candidate) -> Result<Vec<RuleId>, String> {
         let bbox = envelope_or_invalid(candidate)?;
         let mut ids: Vec<RuleId> = Vec::new();
-        match self.spatial {
-            SpatialPredicate::WithinDistance => {
-                if let Some(distance) = self.within_distance_radius() {
-                    self.admit_within_distance(candidate, &bbox, distance, |rule_id| ids.push(rule_id));
-                }
-            }
-            _ => self.relate_touched(candidate, &bbox, |rule_id, matrix| {
-                if spatial_predicate_holds(self.spatial, matrix) {
-                    ids.push(rule_id);
-                }
-            }),
-        }
+        self.admit_by_predicate(candidate, &bbox, |rule_id| ids.push(rule_id));
         Ok(ids)
     }
 
@@ -543,18 +557,7 @@ impl<'a> PreparedQuery<'a> {
             return 2;
         };
         let mut resolved = false;
-        match self.spatial {
-            SpatialPredicate::WithinDistance => {
-                if let Some(distance) = self.within_distance_radius() {
-                    self.admit_within_distance(candidate, &bbox, distance, |_| resolved = true);
-                }
-            }
-            _ => self.relate_touched(candidate, &bbox, |_, matrix| {
-                if spatial_predicate_holds(self.spatial, matrix) {
-                    resolved = true;
-                }
-            }),
-        }
+        self.admit_by_predicate(candidate, &bbox, |_| resolved = true);
         if resolved { 1 } else { 0 }
     }
 }
