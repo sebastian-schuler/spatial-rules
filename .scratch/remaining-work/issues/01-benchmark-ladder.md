@@ -1,7 +1,7 @@
 # Benchmark ladder additions: resolution, withinDistance, temporal, aggregation cells
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -34,6 +34,14 @@ benchmark ladder (`bun run bench ...`) — green before commit.
 ## Comments
 
 > *Deferred as "separate concern" by the P1/P2/aggregation tickets.*
+
+> *Resolved 2026-08-24 (commit `d447f24`): ladder cells added in
+> `benchmarks/benches/ladder.rs` (`batch_resolve`, `batch_within_distance`,
+> `batch_temporal`, `batch_aggregation`) with mask/rich-path baselines;
+> dataset fixtures `point_candidates`/`rules_with_windows` with tests; results
+> recorded in `docs/benchmarks.md` (existing B–F cells re-run, no regression).
+> Headline: resolution & `$activeAt` ~free, `withinDistance` ~21× the point
+> mask, aggregation coverage ~13× the rich path.*
 
 ## Agent Brief
 
