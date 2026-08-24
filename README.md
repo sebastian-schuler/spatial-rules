@@ -12,6 +12,11 @@ The motivating use case is a batch of candidate geometries checked against a set
 of geometry-bearing rules with queryable properties; the library is generic and
 knows nothing about any specific application domain.
 
+> **New here?** Jump to the end-to-end walkthrough — a city delivery/parking
+> rules engine exercising matching, `where` filters, temporal conditions,
+> geofencing, resolution, and aggregation together:
+> [docs/examples.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/examples.md).
+
 **One number:** ~18.5 ms to evaluate 1,000 candidates × 30 rules — about **60×
 faster** than the equivalent turf.js check (~1.1 s). See
 [docs/benchmarks.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md)
