@@ -143,8 +143,10 @@ fn expand_envelope(bbox: &Rect<f64>, distance_meters: f64) -> Rect<f64> {
     let lat_min = bbox.min().y - d_lat;
     let lat_max = bbox.max().y + d_lat;
     let farthest_lat = lat_min.abs().max(lat_max.abs()).min(90.0);
-    let d_lon = if farthest_lat.cos() > 1e-6 {
-        (d_rad / farthest_lat.cos()).to_degrees()
+    // cos() takes radians: the latitude here is a degree value, so convert.
+    let farthest_cos = farthest_lat.to_radians().cos();
+    let d_lon = if farthest_cos > 1e-6 {
+        (d_rad / farthest_cos).to_degrees()
     } else {
         360.0
     };
@@ -365,7 +367,13 @@ impl<'a> PreparedQuery<'a> {
     /// or `None` when evaluation can proceed. The JSON parser validates the
     /// query; the programmatic surface must not panic on misuse, so every
     /// withinDistance entry reports the candidate invalid through this one seam.
+    /// A candidate that is itself invalid (bad geometry) is not reported here —
+    /// its classification reason surfaces through `envelope_or_invalid` on all
+    /// paths, matching the DE-9IM path.
     fn within_distance_invalid_reason(&self, candidate: &Candidate) -> Option<String> {
+        if envelope_or_invalid(candidate).is_err() {
+            return None;
+        }
         if !within_distance_supported(candidate) {
             return Some("withinDistance requires a point candidate".to_string());
         }

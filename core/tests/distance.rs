@@ -9,7 +9,7 @@ use spatial_rules_core::{
 };
 
 mod common;
-use common::{candidate_geometry, rule_with_props, square};
+use common::{bowtie, candidate_geometry, rule_with_props, square};
 
 /// The rule used across most cases: the unit square (0,0)-(1,1) (~111 km
 /// across), so a point 0.001° north of its top edge is ~111 m away.
@@ -288,6 +288,93 @@ fn malformed_programmatic_distance_query_is_invalid_not_a_panic() {
     assert_eq!(
         ruleset.query_mask(&[point(0.5, 0.5)], &non_finite),
         vec![2]
+    );
+}
+
+#[test]
+fn empty_ruleset_within_distance_is_not_matched() {
+    let ruleset = Ruleset::build(vec![]).unwrap();
+    assert_eq!(
+        ruleset.query_mask(&[point(0.5, 0.5)], &distance_query(1000.0)),
+        vec![0]
+    );
+    assert_eq!(
+        ruleset.resolve(&[point(0.5, 0.5)], &distance_query(1000.0)),
+        vec![ResolutionOutcome::NotMatched]
+    );
+}
+
+#[test]
+fn invalid_geometry_candidate_reports_invalid_geometry_not_a_type_error() {
+    // An invalid-geometry polygon candidate under withinDistance reports its
+    // classification reason ("invalid geometry") on both the match and resolve
+    // surfaces — not the "requires a point candidate" type error, which is
+    // reserved for *valid* polygon candidates.
+    let ruleset = Ruleset::build(vec![unit_square_rule("zone")]).unwrap();
+    let bowtie = candidate_geometry("bowtie", geo::Geometry::Polygon(bowtie()));
+    let outcomes = ruleset.query(std::slice::from_ref(&bowtie), &distance_query(100.0));
+    assert!(matches!(
+        &outcomes[0],
+        spatial_rules_core::CandidateOutcome::Invalid { reason }
+            if reason.starts_with("invalid geometry:")
+    ));
+    let resolved = ruleset.resolve(std::slice::from_ref(&bowtie), &distance_query(100.0));
+    assert!(matches!(
+        &resolved[0],
+        ResolutionOutcome::Invalid { reason } if reason.starts_with("invalid geometry:")
+    ));
+}
+
+#[test]
+fn within_distance_is_antimeridian_safe() {
+    // A point just east of ±180 and a rule just west of ∓180 are ~1° apart
+    // across the antimeridian (~111 km): the pre-filter must query the wrapped
+    // longitude complement and the exact check must agree. This pins the
+    // deterministic wrap path (the property suite covers it probabilistically).
+    let ruleset = Ruleset::build(vec![{
+        let mut rule = unit_square_rule("across");
+        rule.geometry = geo::Geometry::Polygon(square(-179.5, -1.0, -178.5, 1.0));
+        rule
+    }])
+    .unwrap();
+    let near = point(179.5, 0.0);
+    assert_eq!(
+        ruleset.query_mask(&[near], &distance_query(200_000.0)),
+        vec![1],
+        "across the antimeridian, ~111 km apart, within 200 km"
+    );
+    let far = point(179.5, 20.0);
+    assert_eq!(
+        ruleset.query_mask(&[far], &distance_query(200_000.0)),
+        vec![0],
+        "far north is beyond 200 km of the rule"
+    );
+}
+
+#[test]
+fn pre_filter_is_conservative_at_high_latitude() {
+    // Regression: the bounding-circle lon expansion applied cos() to a
+    // degree-valued latitude as if it were radians, under-expanding at high
+    // latitude and dropping within-N rules. The point is ~44 km from the rule
+    // (well inside the 74 km radius) but the rule's longitude is ~2.5° east at
+    // ~75°S, where 1° of longitude is only ~30 km — the old bug produced a
+    // too-small expanded envelope and missed it.
+    let ruleset = Ruleset::build(vec![Rule {
+        id: "polar".into(),
+        properties: Default::default(),
+        geometry: geo::Geometry::Polygon(square(
+            159.2601376164383,
+            -79.69452208333574,
+            160.2601376164383,
+            -69.96299532572077,
+        )),
+        priority: 0,
+    }])
+    .unwrap();
+    let near = point(157.79342361968477, -74.28126533638867);
+    assert_eq!(
+        ruleset.query_mask(&[near], &distance_query(73791.55725308752)),
+        vec![1]
     );
 }
 
