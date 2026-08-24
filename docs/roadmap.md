@@ -96,13 +96,20 @@ ADR-0016: spherical great-circle (Haversine) meters, antimeridian-safe for
 conformant (in-range) coordinates; the ellipsoidal Karney geodesic is the
 documented higher-accuracy additive alternative.
 
-## P3 — PostgreSQL loader
+## P3 — PostgreSQL loader (deferred 2026-08-24)
 
 Load rules directly from PostGIS without GeoJSON serialization
-(`SpatialRules.fromPostgres({connectionString, table, ...})`). Easy win;
-independent of the precedence decision. Positioning: **PostGIS owns the data
-and large-scale spatial querying; this engine owns high-speed rule
-evaluation.**
+(`SpatialRules.fromPostgres({connectionString, table, ...})`). **Deferred, not
+rejected**: the loader is pure ingestion convenience — it adds no engine
+capability. The "without GeoJSON serialization" mechanism only holds on a
+native-Rust driver path (async in the napi binding, TLS, pooling, EWKB
+parsing) that is not the "easy win" the roadmap assumed; the JS-driver
+alternative (`pg` + `ST_AsGeoJSON`) re-serializes through GeoJSON and adds a
+runtime dependency. No concrete PostGIS-backed deployment is driving demand.
+The Postgres **phases 2–5** in fog (live sync, predicate pushdown, native
+extension) remain the compelling direction once the decision semantics are
+worth embedding. Positioning: **PostGIS owns the data and large-scale spatial
+querying; this engine owns high-speed rule evaluation.**
 
 ## Fog — not yet specified
 
