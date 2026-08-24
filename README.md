@@ -67,18 +67,23 @@ The short version:
 - **Ruleset** — an immutable, query-optimized collection of geometry-bearing
   rules with typed properties, built and validated once, then atomically
   replaceable at runtime without dropping in-flight queries.
-- **Query** — one batch evaluation: a spatial predicate
-  (`intersects` / `contains` / `within` / `covers` / `covered_by` / `touches` /
-  `overlaps`), an optional property `where` clause, and optional excluded rule
-  ids.
+- **Query** — one batch evaluation: a spatial predicate (`intersects` /
+  `contains` / `within` / `covers` / `covered_by` / `touches` / `overlaps`, or
+  the metric `withinDistance` with a radius), an optional property `where`
+  clause, optional excluded rule ids, and an optional reference time `at` for
+  temporal predicates.
 - **Spatial index** — a packed `rstar` R*-tree over rule envelopes, plus a
   linear-scan baseline for the benchmark ladder.
 - **Property predicates** — Mongo-style `where`: equality, `$ne`,
   `$gt/$gte/$lt/$lte`, `$in`/`$nin`, `$exists`, `$not`, `$and`/`$or`/`$nor`,
-  served by a compile-time equality index with a per-rule fallback.
+  and the temporal `$activeAt` window predicate, served by a compile-time
+  equality index with a per-rule fallback.
 - **Result model** — a compact `Uint8Array` mask (`0` no match, `1` matched,
   `2` invalid) for the hot path, and a per-candidate outcomes API with string
   rule ids.
+- **Resolution** — `resolve()`/`resolveAsync()` answer "which rule wins, what
+  values apply, and why" per candidate: an ordered applicable set, its winner,
+  and first-provider-wins derived values (ADR-0015).
 - **Errors** — a stable `SR_*` code model (see below), surfaced in Node as
   `SpatialRulesError`.
 
@@ -179,17 +184,25 @@ The query is a JSON object (or its string form):
   "spatial": { "predicate": "intersects" }, // required
   "where": { "active": true },                // optional property filter
   "excludeRuleIds": ["zone-b"],               // optional rule ids to ignore
-  "includeOverlap": true                       // optional, outcomes path only
+  "includeOverlap": true,                     // optional, outcomes path only
+  "at": "2026-08-24T10:00"                    // optional reference time for $activeAt
 }
 ```
 
 - `spatial.predicate` — one of `intersects`, `contains`, `within`, `covers`,
-  `covered_by`, `touches`, `overlaps` (DE-9IM; ADR-0008, ADR-0012). Required.
+  `covered_by`, `touches`, `overlaps` (DE-9IM; ADR-0008, ADR-0012), or
+  `withinDistance` (metric; ADR-0016). Required.
+- `spatial.distance` — the `withinDistance` radius in meters; required (a
+  finite positive number) when the predicate is `withinDistance`, rejected with
+  any other predicate. Optional.
 - `where` — a Mongo-style filter over rule `properties` (see below). Optional.
 - `excludeRuleIds` — rule ids excluded from the evaluation. Optional.
 - `includeOverlap` — when `true`, matched candidates in the outcomes path also
   carry per-rule geodesic `overlapArea` (m²) / `overlapRatio` ([0, 1]). The
   mask ignores this flag. Optional.
+- `at` — the reference time (ISO-8601, e.g. `2026-08-24T10:00`), required when
+  a `$activeAt` predicate is present; a present-but-unused `at` is validated and
+  ignored. Optional (ADR-0017).
 
 `where` operators:
 
@@ -201,6 +214,7 @@ The query is a JSON object (or its string form):
 | `$exists` | key presence |
 | `$not: { field: { $op: value } }` | negates one field predicate |
 | `$and`, `$or`, `$nor` | boolean composition (`$nor` = whole-clause negation) |
+| `$activeAt: { daysOfWeek, startHour, endHour }` | admits a rule whose window properties (Int bitmask Mon=1..Sun=64; Int hours) contain the query's `at`; requires `at` (ADR-0017) |
 
 A missing property or a type mismatch is a **non-match** (even for `$ne`); only
 malformed predicates throw.
@@ -231,11 +245,38 @@ input candidate order.
 
 `overlaps` appears only when the query set `includeOverlap: true`.
 
+### Resolution (ADR-0015)
+
+`resolve()` / `resolveAsync()` answer "which rule wins, what values apply, and
+why" for each candidate. Both return a chainable `ResolutionResult`:
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `mask()` | `Uint8Array` | one byte per candidate: `0` no resolution, `1` resolved, `2` invalid |
+| `count()` | `number` | number of resolved candidates |
+| `summary()` | `{ resolved, notResolved, invalid }` | count breakdown |
+| `toJson()` | `string` | per-candidate resolution outcomes (lazy — one native call on first use) |
+
+`toJson()` element shapes:
+
+```jsonc
+{ "outcome": "resolved", "winner": "zone-a", "values": { "speedLimit": 30 },
+  "applicable": [ { "ruleId": "zone-a", "priority": 10,
+                    "spatialMatched": true, "propertyMatched": true } ] }
+{ "outcome": "notMatched" }
+{ "outcome": "invalid", "reason": "..." }
+```
+
+The query shape is the same as `query()` (`spatial`/`where`/`excludeRuleIds`,
+plus `at`/`distance` as above); `resolveAsync()` computes off the main thread.
+
 Other methods:
 
 | Method | Returns | Meaning |
 |---|---|---|
 | `queryAsync(candidates, query)` | `Promise<QueryResult>` | the same chainable result as `query()`, computed off the main thread |
+| `resolve(candidates, query)` | `ResolutionResult` | the resolution mask + lazy `toJson()` |
+| `resolveAsync(candidates, query)` | `Promise<ResolutionResult>` | resolution computed off the main thread |
 | `replace(rules)` | `string` | JSON report `{ version, ruleCount, buildDurationMs, lastSwapTime }` |
 | `stats()` | `string` | the same report for the current ruleset |
 | `toCanonical()` | `string` | the ruleset in canonical JSON form (array of rules) |

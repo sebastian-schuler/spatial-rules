@@ -1,7 +1,7 @@
 # P2 test suite: haversine invariants, determinism, temporal edge cases
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 03
 
 ## Question
@@ -45,3 +45,12 @@ Run: `cargo test --workspace` and `cargo clippy --workspace --all-targets` — g
 **Out of scope:**
 - Benchmark ladder additions (separate concern)
 - turf cross-checks for distance/time
+
+## Answer
+
+Satisfied by the tests landed with tickets 02 and 03 (the suite needed no separate ticket — all coverage shipped with the features).
+
+- **withinDistance** (core/tests/distance.rs, 16 tests): inside=0, boundary, within/outside, point/multipoint candidates, polygon-candidate invalid, where + exclusions, strict validation, resolution + mask parity, empty ruleset, invalid-geometry reason parity, antimeridian wrap, and a high-latitude pre-filter regression.
+- **Property tests** (core/tests/proptest.rs): `within_distance_never_drops_a_within_rule` — the conservative pre-filter (incl. the ±180 wrap complement) never drops a within-N rule, oracled against geo's haversine primitives, with repeat-evaluation and RStar/LinearScan parity.
+- **Temporal** (core/tests/temporal.rs, 13 tests): window admission, end-exclusive boundary, midnight wrap, empty window, daysOfWeek=0, missing/non-Int fields, `$and`/`$or`/`$nor` composition, `at` required/malformed/unused semantics, malformed `$activeAt` clause, resolution admission, malformed-instant no-panic.
+- `cargo test --workspace` and `cargo clippy --workspace --all-targets` are green.

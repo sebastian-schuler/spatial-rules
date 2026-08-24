@@ -76,18 +76,25 @@ The fork in the road. Three features that land together:
 The resolution model is decided (ADR-0015); the working spec and ticket plan
 live in `.scratch/p1-resolution/` (spec + issues 01–05).
 
-## P2 — Realistic rules
+## P2 — Realistic rules (shipped)
 
 4. **Temporal conditions** — day-of-week/time-window filters on rules
-   (parking, congestion zones, delivery windows). Ship as a property-filter
-   predicate first; time as a first-class indexed dimension stays in fog until
-   demand proves out.
+   (parking, congestion zones, delivery windows). Shipped as a property-filter
+   predicate: the query carries an ISO-8601 `at` and a whole-clause `$activeAt`
+   admits rules whose window properties (day bitmask + hour range) contain it
+   (ADR-0017, ticket 02). Time as a first-class indexed dimension stays in fog
+   until demand proves out.
 5. **Distance predicates** — `withinDistance`, `nearest`, proximity bands.
-   Fits the R-tree naturally; unlocks geofencing positioning.
+   `withinDistance` shipped as a metric predicate — spherical great-circle
+   (Haversine) meters, minimum distance with 0 if inside, a conservative
+   bounding-circle pre-filter over the R-tree, and resolution admission parity
+   (ADR-0016, ticket 03). `nearest` remains a documented Non-Goal (Initial-plan
+   §72); proximity bands compose as repeated `withinDistance`.
 
-CRS/geodesic semantics must be **decided and documented before distance
-lands** (planar vs geodesic, antimeridian, wrapping) even if only planar is
-implemented — otherwise every distance result becomes ambiguous retroactively.
+The CRS/geodesic gate was settled by the 2026-08-23 grilling session into
+ADR-0016: spherical great-circle (Haversine) meters, antimeridian-safe for
+conformant (in-range) coordinates; the ellipsoidal Karney geodesic is the
+documented higher-accuracy additive alternative.
 
 ## P3 — PostgreSQL loader
 

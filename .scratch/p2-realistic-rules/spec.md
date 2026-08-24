@@ -30,6 +30,6 @@ ADR (01) → withinDistance (03); temporal (02) is independent and parallel. Blo
 ## Ticket index
 
 - `issues/01-distance-adr.md` — resolved
-- `issues/02-temporal-conditions.md` — ready-for-agent
-- `issues/03-within-distance.md` — ready-for-agent (blocked by 01)
-- `issues/04-p2-tests.md` — ready-for-agent (blocked by 02, 03)
+- `issues/02-temporal-conditions.md` — resolved
+- `issues/03-within-distance.md` — resolved (blocked by 01)
+- `issues/04-p2-tests.md` — resolved (blocked by 02, 03)
