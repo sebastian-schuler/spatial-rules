@@ -13,8 +13,8 @@ use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
 use spatial_rules_core::{
-    candidates_from_geojson, Candidate, CandidateOutcome, Engine, ErrorCode, Query, ReplaceReport,
-    ResolutionOutcome, Ruleset, SpatialError,
+    candidates_from_geojson, AggregateSpec, Candidate, CandidateOutcome, Engine, ErrorCode, Query,
+    ReplaceReport, ResolutionOutcome, RuleId, Ruleset, SpatialError,
 };
 
 fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
@@ -72,13 +72,45 @@ fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str>
     })
 }
 
+/// The requested per-candidate aggregate as the ADR-0018 JSON object — only
+/// the functions the spec asked for (and that produced a value) are emitted.
+fn aggregate_json(
+    spec: &AggregateSpec,
+    candidate: &Candidate,
+    applicable: &[RuleId],
+    ruleset: &Ruleset,
+) -> serde_json::Value {
+    let aggregate = spec.compute(candidate, applicable, ruleset);
+    let mut object = serde_json::Map::new();
+    if let Some(count) = aggregate.count {
+        object.insert("count".to_string(), serde_json::json!(count));
+    }
+    for (key, value) in [
+        ("min", aggregate.min),
+        ("max", aggregate.max),
+        ("sum", aggregate.sum),
+        ("avg", aggregate.avg),
+        ("coverage", aggregate.coverage),
+    ] {
+        if let Some(value) = value {
+            object.insert(key.to_string(), serde_json::json!(value));
+        }
+    }
+    serde_json::Value::Object(object)
+}
+
 /// One `ResolutionOutcome` as the ADR-0015 JSON shape: `{outcome, winner,
 /// values, applicable}` for resolved, `{outcome: notMatched}`, or
 /// `{outcome: invalid, reason}`. Rule ids are the application's original
 /// strings (mapped via the snapshot, so a concurrent replace can't tear them
 /// apart). `values` uses the rules' compact typed properties, which serialize
 /// to the plain JSON scalars they wrap (ADR-0013).
-fn resolution_outcome_to_json(ruleset: &Ruleset, outcome: &ResolutionOutcome) -> serde_json::Value {
+fn resolution_outcome_to_json(
+    ruleset: &Ruleset,
+    candidate: &Candidate,
+    aggregate: Option<&AggregateSpec>,
+    outcome: &ResolutionOutcome,
+) -> serde_json::Value {
     match outcome {
         ResolutionOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
         ResolutionOutcome::Invalid { reason } => {
@@ -89,7 +121,7 @@ fn resolution_outcome_to_json(ruleset: &Ruleset, outcome: &ResolutionOutcome) ->
             values,
             applicable,
         } => {
-            let applicable: Vec<serde_json::Value> = applicable
+            let applicable_json: Vec<serde_json::Value> = applicable
                 .iter()
                 .map(|rule| {
                     serde_json::json!({
@@ -117,8 +149,15 @@ fn resolution_outcome_to_json(ruleset: &Ruleset, outcome: &ResolutionOutcome) ->
             object.insert("values".to_string(), serde_json::Value::Object(values_json));
             object.insert(
                 "applicable".to_string(),
-                serde_json::Value::Array(applicable),
+                serde_json::Value::Array(applicable_json),
             );
+            if let Some(spec) = aggregate {
+                let rule_ids: Vec<RuleId> = applicable.iter().map(|rule| rule.rule_id).collect();
+                object.insert(
+                    "aggregate".to_string(),
+                    aggregate_json(spec, candidate, &rule_ids, ruleset),
+                );
+            }
             serde_json::Value::Object(object)
         }
     }
@@ -216,7 +255,10 @@ impl SpatialRuleset {
         let outcomes = ruleset.resolve(&candidates, &query);
         let rich: Vec<serde_json::Value> = outcomes
             .iter()
-            .map(|outcome| resolution_outcome_to_json(&ruleset, outcome))
+            .zip(candidates.iter())
+            .map(|(outcome, candidate)| {
+                resolution_outcome_to_json(&ruleset, candidate, query.aggregate.as_ref(), outcome)
+            })
             .collect();
         serde_json::to_string(&rich).map_err(|e| {
             spatial_error_to_napi(SpatialError::new(
@@ -240,7 +282,8 @@ impl SpatialRuleset {
         let outcomes = ruleset.query(&candidates, &query);
         let rich: Vec<serde_json::Value> = outcomes
             .iter()
-            .map(|outcome| match outcome {
+            .zip(candidates.iter())
+            .map(|(outcome, candidate)| match outcome {
                 CandidateOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
                 CandidateOutcome::Matched { rule_ids, overlaps } => {
                     let ids: Vec<&str> = rule_ids
@@ -263,6 +306,12 @@ impl SpatialRuleset {
                             })
                             .collect();
                         object.insert("overlaps".to_string(), serde_json::Value::Array(per_rule));
+                    }
+                    if let Some(spec) = &query.aggregate {
+                        object.insert(
+                            "aggregate".to_string(),
+                            aggregate_json(spec, candidate, rule_ids, &ruleset),
+                        );
                     }
                     serde_json::Value::Object(object)
                 }

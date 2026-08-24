@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+use crate::aggregate::AggregateSpec;
 use crate::error::SpatialError;
 use crate::properties::PropertyValue;
 use crate::rule::RuleId;
@@ -80,6 +81,9 @@ pub struct Query {
     /// The reference time for `$activeAt` predicates (ADR-0017). Required
     /// whenever the `where` clause contains one.
     pub at: Option<TemporalInstant>,
+    /// Per-candidate analytics over the applicable rule set (ADR-0018),
+    /// computed on the rich path only.
+    pub aggregate: Option<AggregateSpec>,
 }
 
 impl Query {
@@ -91,6 +95,7 @@ impl Query {
             include_overlap: false,
             distance_meters: None,
             at: None,
+            aggregate: None,
         }
     }
 
@@ -118,6 +123,12 @@ impl Query {
     /// Set the reference time for `$activeAt` predicates (ADR-0017).
     pub fn with_at(mut self, at: TemporalInstant) -> Self {
         self.at = Some(at);
+        self
+    }
+
+    /// Request per-candidate aggregates over the applicable rule set (ADR-0018).
+    pub fn with_aggregate(mut self, aggregate: AggregateSpec) -> Self {
+        self.aggregate = Some(aggregate);
         self
     }
 
@@ -190,6 +201,11 @@ impl Query {
             ));
         }
 
+        let aggregate = match object.get("aggregate") {
+            None => None,
+            Some(value) => Some(AggregateSpec::from_json(value)?),
+        };
+
         let exclude_rule_ids = match object.get("excludeRuleIds") {
             None => Vec::new(),
             Some(value) => {
@@ -221,6 +237,7 @@ impl Query {
             include_overlap,
             distance_meters,
             at,
+            aggregate,
         })
     }
 }

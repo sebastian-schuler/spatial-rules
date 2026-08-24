@@ -1,7 +1,7 @@
 # Aggregation test suite: numeric oracles, coverage vs geo union, determinism
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 ## Question
@@ -44,3 +44,6 @@ Run: `cargo test --workspace` and `cargo clippy --workspace --all-targets` — g
 **Out of scope:**
 - Benchmark ladder additions (separate concern)
 - Per-rule histograms
+## Answer
+
+Implemented. core/tests/aggregation.rs (9 hand-checked: numeric fold + skip-non-numeric, union-not-double-count coverage, partial-union coverage, absent-when-nothing-contributes, strict validation, admission/mask unchanged, withinDistance + temporal applicable sets, single-rule coverage = overlap). Property test aggregate_matches_an_independent_fold: numeric aggregates vs an independent fold and coverage vs a direct geo union/area oracle, with RStar/LinearScan parity. cargo test --workspace + clippy green.

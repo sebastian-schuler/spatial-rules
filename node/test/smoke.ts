@@ -192,6 +192,37 @@ assert.throws(
   (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',
 );
 
+// Aggregation (ADR-0018): per-candidate analytics over the applicable set,
+// carried in the rich JSON. "inside" matches zone-a and zone-c; the union
+// covers it fully; "far"/"invalid" get no aggregate.
+const agg = JSON.parse(ruleset.query(candidates, {
+  spatial: { predicate: 'intersects' },
+  aggregate: { count: true, coverage: true },
+}).toOutcomesJson());
+assert.equal(agg[0].outcome, 'matched');
+assert.equal(agg[0].aggregate.count, 2);
+assert.ok(agg[0].aggregate.coverage > 0.9, `coverage ${agg[0].aggregate.coverage}`);
+assert.ok(!('aggregate' in agg[1]), 'notMatched has no aggregate');
+assert.ok(!('aggregate' in agg[2]), 'invalid has no aggregate');
+// The aggregate rides the resolution rich path too, and async parity holds.
+const resAgg = JSON.parse(ruleset.resolve(candidates, {
+  spatial: { predicate: 'intersects' },
+  aggregate: { count: true },
+}).toJson());
+assert.equal(resAgg[0].outcome, 'resolved');
+assert.equal(resAgg[0].aggregate.count, 2);
+assert.ok(!('aggregate' in resAgg[1]));
+const aggAsync = await ruleset.queryAsync(candidates, {
+  spatial: { predicate: 'intersects' },
+  aggregate: { count: true },
+});
+assert.equal(JSON.parse(aggAsync.toOutcomesJson())[0].aggregate.count, 2);
+// Strict validation: an unknown aggregate function is rejected.
+assert.throws(
+  () => ruleset.query(candidates, { spatial: { predicate: 'intersects' }, aggregate: { median: true } }),
+  (e) => e instanceof SpatialRulesError && e.code === 'SR_INVALID_QUERY',
+);
+
 // Resolution (ticket 04, ADR-0015): resolve() returns a chainable
 // ResolutionResult — a compact mask (0 no resolution, 1 resolved, 2 invalid)
 // plus lazy rich toJson() with the winner, first-provider-wins values, and the

@@ -1,7 +1,7 @@
 # Aggregation binding + wrapper: aggregate in `toOutcomesJson` / `toJson`, types
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 ## Question
@@ -48,3 +48,6 @@ Run: `cargo test --workspace`, clippy, and the node smoke/integration suites.
 - Changing the query/mask hot path
 - A dedicated aggregate API
 - Typed aggregate objects on the wrapper (rich JSON is a string)
+## Answer
+
+Implemented. napi query_rich and resolve_rich serialize a per-candidate aggregate object when the query requests it (only the requested functions, absent for notMatched/invalid), computed via the core AggregateSpec::compute at serialization time; no new wrapper methods; README documents the aggregate query member and output shape; node smoke verifies toOutcomesJson/toJson payloads and async parity.

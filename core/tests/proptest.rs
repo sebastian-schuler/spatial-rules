@@ -11,8 +11,8 @@ use geo::{Coord, Relate, Rect};
 use proptest::prelude::*;
 use serde_json::json;
 use spatial_rules_core::{
-    Candidate, CandidateOutcome, PropertyValue, Query, ResolutionOutcome, Rule, Ruleset,
-    SpatialIndexKind, SpatialPredicate, WhereExpr,
+    AggregateSpec, Candidate, CandidateOutcome, PropertyValue, Query, ResolutionOutcome, Rule,
+    RuleId, Ruleset, SpatialIndexKind, SpatialPredicate, WhereExpr,
 };
 
 /// A non-degenerate integer-aligned rectangle (always a valid simple polygon),
@@ -507,5 +507,139 @@ proptest! {
         prop_assert_eq!(&again, &mask);
         let scanned = scan.query_mask(std::slice::from_ref(&candidate), &query);
         prop_assert_eq!(&scanned, &mask);
+    }
+}
+
+// --- Aggregation (ADR-0018) ---
+
+/// An independent fold of the numeric `field` values across the applicable
+/// rules: `(min, max, sum, avg)`, each `None` when nothing numeric contributes.
+/// Written directly over the ruleset's properties, never via the engine's
+/// aggregation code.
+fn independent_numeric_fold(
+    applicable: &[RuleId],
+    ruleset: &Ruleset,
+    field: &str,
+) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    let values: Vec<f64> = applicable
+        .iter()
+        .filter_map(|&rule_id| match ruleset.properties(rule_id).get(field) {
+            Some(PropertyValue::Int(value)) => Some(*value as f64),
+            Some(PropertyValue::Float(value)) => Some(*value),
+            _ => None,
+        })
+        .collect();
+    let min = values.iter().copied().reduce(f64::min);
+    let max = values.iter().copied().reduce(f64::max);
+    let sum = values.iter().copied().reduce(|a, b| a + b);
+    let avg = (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64);
+    (min, max, sum, avg)
+}
+
+/// An independent coverage oracle: union of the applicable rule geometries via
+/// `geo::BooleanOps::union`, intersected with the candidate, geodesic area
+/// ratio — the same primitives the engine wires, computed directly.
+fn independent_coverage(candidate: &geo::Geometry<f64>, applicable: &[RuleId], ruleset: &Ruleset) -> f64 {
+    use geo::BooleanOps;
+    use geo::GeodesicArea;
+    if matches!(candidate, geo::Geometry::Point(_) | geo::Geometry::MultiPoint(_)) {
+        return 0.0;
+    }
+    let mut union: Option<geo::MultiPolygon<f64>> = None;
+    for &rule_id in applicable {
+        let rule = match ruleset.geometry(rule_id) {
+            geo::Geometry::Polygon(polygon) => geo::MultiPolygon::new(vec![polygon.clone()]),
+            geo::Geometry::MultiPolygon(multipolygon) => multipolygon.clone(),
+            _ => continue,
+        };
+        union = Some(match union {
+            None => rule,
+            Some(acc) => acc.union(&rule),
+        });
+    }
+    let Some(union) = union else {
+        return 0.0;
+    };
+    let intersection = match candidate {
+        geo::Geometry::Polygon(polygon) => polygon.intersection(&union),
+        geo::Geometry::MultiPolygon(multipolygon) => multipolygon.intersection(&union),
+        _ => return 0.0,
+    };
+    let covered = intersection.geodesic_area_signed().abs();
+    let area = candidate.geodesic_area_signed().abs();
+    if area > 0.0 {
+        covered / area
+    } else {
+        0.0
+    }
+}
+
+proptest! {
+    #[test]
+    fn aggregate_matches_an_independent_fold(
+        rule_data in prop::collection::vec(
+            (rect_strategy(), prop::option::of(0i64..100)),
+            1..8,
+        ),
+        candidates in prop::collection::vec(rect_strategy(), 1..4),
+    ) {
+        let rules: Vec<Rule> = rule_data
+            .iter()
+            .enumerate()
+            .map(|(index, (rect, speed))| {
+                let mut properties = BTreeMap::new();
+                if let Some(speed) = speed {
+                    properties.insert("speedLimit".to_string(), PropertyValue::Int(*speed));
+                }
+                Rule {
+                    id: format!("r{index}"),
+                    properties,
+                    geometry: rect_to_geometry(*rect),
+                    priority: 0,
+                }
+            })
+            .collect();
+        let ruleset = Ruleset::build(rules.clone()).unwrap();
+        let scan = Ruleset::build_with(rules, SpatialIndexKind::LinearScan).unwrap();
+        let spec = AggregateSpec::from_json(&json!({
+            "count": true,
+            "min": "speedLimit", "max": "speedLimit",
+            "sum": "speedLimit", "avg": "speedLimit",
+            "coverage": true
+        }))
+        .unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+
+        for (index, rect) in candidates.iter().enumerate() {
+            let candidate = Candidate::new(format!("c{index}"), rect_to_geometry(*rect));
+            let rule_ids: Vec<RuleId> = match &ruleset.query(std::slice::from_ref(&candidate), &query)[0] {
+                CandidateOutcome::Matched { rule_ids, .. } => rule_ids.clone(),
+                _ => vec![],
+            };
+            let aggregate = spec.compute(&candidate, &rule_ids, &ruleset);
+            let (min, max, sum, avg) = independent_numeric_fold(&rule_ids, &ruleset, "speedLimit");
+            prop_assert_eq!(aggregate.count, Some(rule_ids.len() as u32));
+            prop_assert_eq!(aggregate.min, min);
+            prop_assert_eq!(aggregate.max, max);
+            prop_assert_eq!(aggregate.sum, sum);
+            prop_assert_eq!(aggregate.avg, avg);
+            let coverage = independent_coverage(&candidate.geometry, &rule_ids, &ruleset);
+            let engine_coverage = aggregate.coverage.unwrap_or(-1.0);
+            prop_assert!(
+                (engine_coverage - coverage).abs() < 1e-9,
+                "coverage {engine_coverage} vs oracle {coverage}"
+            );
+
+            // Index-kind parity: the linear-scan ruleset admits the same rules
+            // and yields the same aggregates.
+            let scan_ids: Vec<RuleId> =
+                match &scan.query(std::slice::from_ref(&candidate), &query)[0] {
+                    CandidateOutcome::Matched { rule_ids, .. } => rule_ids.clone(),
+                    _ => vec![],
+                };
+            prop_assert_eq!(&scan_ids, &rule_ids, "linear-scan admission must match rstar");
+            let scan_aggregate = spec.compute(&candidate, &scan_ids, &scan);
+            prop_assert_eq!(scan_aggregate, aggregate, "aggregates must agree across index kinds");
+        }
     }
 }

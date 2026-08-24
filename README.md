@@ -185,7 +185,8 @@ The query is a JSON object (or its string form):
   "where": { "active": true },                // optional property filter
   "excludeRuleIds": ["zone-b"],               // optional rule ids to ignore
   "includeOverlap": true,                     // optional, outcomes path only
-  "at": "2026-08-24T10:00"                    // optional reference time for $activeAt
+  "at": "2026-08-24T10:00",                   // optional reference time for $activeAt
+  "aggregate": { "count": true, "avg": "speedLimit" } // optional analytics (below)
 }
 ```
 
@@ -203,6 +204,13 @@ The query is a JSON object (or its string form):
 - `at` — the reference time (ISO-8601, e.g. `2026-08-24T10:00`), required when
   a `$activeAt` predicate is present; a present-but-unused `at` is validated and
   ignored. Optional (ADR-0017).
+- `aggregate` — per-candidate analytics over the applicable rule set
+  (ADR-0018): `count`/`coverage` are booleans, `min`/`max`/`sum`/`avg` each
+  name a rule-property field (`{ count: true, min: "speedLimit", coverage: true }`).
+  `min`/`max`/`sum`/`avg` fold the named numeric property across applicable
+  rules (missing/non-numeric rules skipped; absent if nothing contributes);
+  `coverage` is the geodesic fraction of the candidate covered by the union of
+  applicable rules. Computed on the rich path only. Optional.
 
 `where` operators:
 
@@ -244,6 +252,14 @@ input candidate order.
 ```
 
 `overlaps` appears only when the query set `includeOverlap: true`.
+
+When the query sets `aggregate`, matched candidates also carry an `aggregate`
+object (absent for `notMatched`/`invalid`):
+
+```jsonc
+{ "outcome": "matched", "ruleIds": ["zone-a"],
+  "aggregate": { "count": 1, "min": 30, "max": 30, "sum": 30, "avg": 30, "coverage": 1.0 } }
+```
 
 ### Resolution (ADR-0015)
 

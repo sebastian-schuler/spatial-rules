@@ -1,7 +1,7 @@
 # Aggregation core: `AggregateSpec` parse/validation + per-candidate computation over the applicable set
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -56,3 +56,6 @@ Run: `cargo test --workspace` and `cargo clippy --workspace --all-targets` — g
 - Per-rule aggregates across the batch (histograms)
 - Any change to admission, resolution, or the mask hot path
 - Wrapper/napi exposure (ticket 02)
+## Answer
+
+Implemented. core/src/aggregate.rs: AggregateSpec (strict from_json validation: unknown keys, wrong types, empty/all-false -> SR_INVALID_QUERY) + per-candidate Aggregate computed over the applicable rule set (count; min/max/sum/avg over a named numeric property, missing/non-numeric skipped, absent when nothing contributes; union coverage via BooleanOps::union + GeodesicArea, point candidates -> 0). Query gains an optional aggregate member + with_aggregate builder. Rich-path only; mask/winner/values unchanged. Works across DE-9IM, withinDistance, and $activeAt (all feed the applicable set).
