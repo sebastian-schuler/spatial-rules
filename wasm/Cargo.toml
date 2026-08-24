@@ -1,0 +1,16 @@
+[package]
+name = "spatial-rules-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WASM distribution of the spatial rules engine core (Deno/browser/edge/Node)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json.workspace = true
+spatial-rules-bindings-common = { path = "../bindings-common" }
+spatial-rules-core = { path = "../core" }
+wasm-bindgen.workspace = true

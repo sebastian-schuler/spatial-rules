@@ -1,7 +1,7 @@
 # Wasm package: wasm-bindgen core binding + TS glue + npm `spatial-rules-wasm`
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -49,3 +49,16 @@ contracts), `node/package.json` as the packaging precedent.
 - `replace`/`stats` on wasm (degenerate clock), async surfaces.
 - Any change to `spatial-rules-core` or `node/`.
 - Python (ticket 02), CI/release wiring (ticket 03).
+
+## Comments
+
+> *Resolved 2026-08-24: `wasm/` crate (`spatial-rules-wasm`, wasm-bindgen,
+> `wasm-pack build --release --target bundler`) — Ruleset-level surface
+> (`build`/`query` mask `Uint8Array`/`resolve`/`query_rich`/`resolve_rich`/
+> `to_canonical`, no `replace`/`stats`, no async); TS wrapper in
+> `wasm/index.ts` → `dist/` + `.d.ts`, in-package normalization; npm package
+> with `prepack`. The rich-JSON serializers are shared with the Python binding
+> via `spatial-rules-bindings-common` (node's copy untouched). Smoke
+> (`wasm/test/smoke.ts`) asserts the controlled-ruleset literals plus the
+> production `~1k×30` matched count (481) under **node** and **deno**.
+> Release wasm blob: **829 KB** (≤ 2 MB budget).*

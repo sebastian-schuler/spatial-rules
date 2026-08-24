@@ -3,6 +3,16 @@ node_modules/
 *.node
 node/dist/
 
+# Generated wasm/py binding outputs (build artifacts; produced by wasm-pack /
+# maturin before publishing).
+wasm/pkg/
+wasm/dist/
+python/dist/
+python/target/
+python/.venv/
+__pycache__/
+*.pyc
+
 # Generated at `npm pack` time by node/scripts/sync-docs.mjs (canonical copies
 # live at the repo root as the GitHub-facing docs).
 node/README.md

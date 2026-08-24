@@ -1,7 +1,7 @@
 # Python package: PyO3 binding + Pythonic surface + PyPI `spatial-rules`
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -46,3 +46,16 @@ as packaging/test precedents.
 - Async Python surfaces (the engine is sync).
 - Any change to `spatial-rules-core` or `node/`.
 - Wasm (ticket 01), CI/release wiring (ticket 03).
+
+## Comments
+
+> *Resolved 2026-08-24: `python/` PyO3 crate (`spatial-rules-python`, abi3
+> `cp39-abi3`, maturin) packaging PyPI `spatial-rules` (version inherited from
+> the Cargo workspace via `dynamic = ["version"]`). Pythonic surface:
+> `Ruleset.from_geojson` → `query`/`resolve` (mask `list[int]`),
+> `query_rich`/`resolve_rich` (`list[dict]`), `replace`, `to_canonical`,
+> `stats` — dicts/lists in and out, the full Engine surface. Serializers
+> shared with wasm via `spatial-rules-bindings-common`. pytest
+> (`python/tests/test_smoke.py`, 10 tests) asserts the controlled-ruleset
+> literals plus the production `~1k×30` matched count (481); wheel built and
+> pytest green locally on CPython 3.12, CI runs 3.11 + 3.13.*

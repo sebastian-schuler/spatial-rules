@@ -1,7 +1,7 @@
 # Build/CI + release automation for the wasm and Python packages
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 
 ## Question
 
@@ -44,3 +44,15 @@ published npm and PyPI packages.
 - The packages themselves (tickets 01/02).
 - Any change to `spatial-rules-core` or `node/`.
 - A headless-browser CI job.
+
+## Comments
+
+> *Resolved 2026-08-24: `wasm` CI job (wasm32 target via
+> `dtolnay/rust-toolchain`, `wasm-pack build --target bundler`, typecheck, and
+> the smoke under node **and** deno) and `python` CI job (maturin release
+> wheel + pytest on CPython 3.11 and 3.13); headless-browser deliberately
+> deferred to the bundler-target module contract. release-please config +
+> manifest extended to `spatial-rules-wasm` (npm, `wasm/` changelog) and
+> `spatial-rules` (PyPI, `python/` changelog). The existing rust job gains
+> `PYO3_NO_PYTHON=1` so the workspace build needs no interpreter; node/bun
+> jobs untouched.*

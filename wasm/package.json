@@ -1,0 +1,35 @@
+{
+    "name": "spatial-rules-wasm",
+    "version": "0.1.0",
+    "type": "module",
+    "description": "WASM distribution of the spatial rules engine core (Deno/browser/edge/Node)",
+    "license": "MIT OR Apache-2.0",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist/",
+        "pkg/"
+    ],
+    "scripts": {
+        "build:wasm": "wasm-pack build --release --target bundler --out-dir pkg",
+        "build:ts": "tsc -p tsconfig.build.json",
+        "prepack": "npm run build:wasm && npm run build:ts",
+        "typecheck": "tsc --noEmit",
+        "test": "node --experimental-strip-types --experimental-wasm-modules test/smoke.ts",
+        "test:deno": "deno run --allow-read test/smoke.ts"
+    },
+    "sideEffects": false,
+    "engines": {
+        "node": ">=18"
+    },
+    "devDependencies": {
+        "@types/node": "^24.0.0",
+        "typescript": "^5.9.0"
+    }
+}
