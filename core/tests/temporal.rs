@@ -7,7 +7,7 @@
 
 use spatial_rules_core::{
     candidates_from_geojson, ErrorCode, PropertyValue, Query, ResolutionOutcome, Rule, Ruleset,
-    SpatialPredicate,
+    SpatialPredicate, TemporalInstant, WhereExpr,
 };
 
 mod common;
@@ -300,6 +300,26 @@ fn temporal_admission_feeds_resolution() {
         panic!("expected a resolved outcome");
     };
     assert_eq!(*winner, ruleset.rule_id("weekend").unwrap());
+}
+
+#[test]
+fn malformed_programmatic_temporal_instant_is_a_non_match_not_a_panic() {
+    // The ISO-8601 parse guarantees day_of_week 1..=7, but a directly-constructed
+    // `TemporalInstant { day_of_week: 0, .. }` must not underflow the bit-shift
+    // in the window evaluation — it evaluates as a non-match (no-panic stance).
+    let ruleset = Ruleset::build(vec![window_rule("parking", WEEKDAYS, 9, 17)]).unwrap();
+    let bad = Query::new(SpatialPredicate::Intersects)
+        .with_at(TemporalInstant {
+            day_of_week: 0,
+            hour: 10,
+        })
+        .with_where(
+            WhereExpr::parse(&serde_json::json!({
+                "$activeAt": { "daysOfWeek": "daysOfWeek", "startHour": "startHour", "endHour": "endHour" }
+            }))
+            .unwrap(),
+        );
+    assert_eq!(ruleset.query_mask(&[inside()], &bad), vec![0]);
 }
 
 #[test]

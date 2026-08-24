@@ -276,6 +276,12 @@ fn eval_active_at(
     let Some(end) = get_int(&clause.end_hour_field) else {
         return false;
     };
+    // The parse always yields a valid day (1..=7); guard anyway so a malformed
+    // programmatic `TemporalInstant` evaluates as a non-match, never underflowing
+    // the bit shift below (no-panic stance).
+    if !(1..=7).contains(&at.day_of_week) {
+        return false;
+    }
     if days & (1 << (at.day_of_week - 1)) == 0 {
         return false;
     }

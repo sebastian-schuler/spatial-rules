@@ -360,13 +360,30 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
+    /// The reason `withinDistance` cannot evaluate `candidate` (unsupported
+    /// candidate type, or a malformed programmatic query with no valid radius),
+    /// or `None` when evaluation can proceed. The JSON parser validates the
+    /// query; the programmatic surface must not panic on misuse, so every
+    /// withinDistance entry reports the candidate invalid through this one seam.
+    fn within_distance_invalid_reason(&self, candidate: &Candidate) -> Option<String> {
+        if !within_distance_supported(candidate) {
+            return Some("withinDistance requires a point candidate".to_string());
+        }
+        if self.within_distance_radius().is_none() {
+            return Some("withinDistance requires a positive distance".to_string());
+        }
+        None
+    }
+
     /// The `withinDistance` admission step (ADR-0016): a conservative
     /// bounding-circle pre-filter over the R-tree (querying the wrapped
     /// longitude complement when the expansion crosses ±180), then an exact
     /// haversine minimum-distance confirm. `on_within` fires for each admitted
-    /// rule, in envelope order. `distance` is the validated radius; a malformed
-    /// programmatic query (no radius) admits nothing rather than panicking.
-    fn within_rules(&self, candidate: &Candidate, bbox: &Rect<f64>, distance: f64, mut on_within: impl FnMut(RuleId)) {
+    /// rule, in ascending rule-id (envelope) order — the wrap merge re-sorts,
+    /// so both index queries and the wrapped complement land in the same order.
+    /// `distance` is the validated radius; a malformed programmatic query (no
+    /// radius) admits nothing rather than panicking.
+    fn admit_within_distance(&self, candidate: &Candidate, bbox: &Rect<f64>, distance: f64, mut on_within: impl FnMut(RuleId)) {
         let expanded = expand_envelope(bbox, distance);
         let mut scratch = self.scratch.borrow_mut();
         self.ruleset.query_envelope_into(&expanded, &mut scratch);
@@ -405,27 +422,18 @@ impl<'a> PreparedQuery<'a> {
     }
 
     fn evaluate_result_distance(&self, candidate: &Candidate, collect_ids: bool, bbox: Rect<f64>) -> EvalResult {
-        if !within_distance_supported(candidate) {
+        if let Some(reason) = self.within_distance_invalid_reason(candidate) {
             return EvalResult {
                 matched: false,
-                invalid: Some("withinDistance requires a point candidate".to_string()),
+                invalid: Some(reason),
                 rule_ids: Vec::new(),
                 overlaps: None,
             };
         }
-        let Some(distance) = self.within_distance_radius() else {
-            // A malformed programmatic query (the JSON parser validates): report
-            // the candidate invalid rather than panicking in the evaluation path.
-            return EvalResult {
-                matched: false,
-                invalid: Some("withinDistance requires a positive distance".to_string()),
-                rule_ids: Vec::new(),
-                overlaps: None,
-            };
-        };
+        let distance = self.within_distance_radius().expect("guarded above");
         let mut matched: Vec<RuleId> = Vec::new();
         let mut any_match = false;
-        self.within_rules(candidate, &bbox, distance, |rule_id| {
+        self.admit_within_distance(candidate, &bbox, distance, |rule_id| {
             any_match = true;
             if collect_ids {
                 matched.push(rule_id);
@@ -448,7 +456,7 @@ impl<'a> PreparedQuery<'a> {
         match self.spatial {
             SpatialPredicate::WithinDistance => {
                 if let Some(distance) = self.within_distance_radius() {
-                    self.within_rules(candidate, &bbox, distance, |rule_id| ids.push(rule_id));
+                    self.admit_within_distance(candidate, &bbox, distance, |rule_id| ids.push(rule_id));
                 }
             }
             _ => self.relate_touched(candidate, &bbox, |rule_id, matrix| {
@@ -472,15 +480,8 @@ impl<'a> PreparedQuery<'a> {
     /// merge needs the full applicable set (ADR-0015 stance).
     pub fn evaluate_resolve(&self, candidate: &Candidate) -> ResolutionOutcome {
         if self.spatial == SpatialPredicate::WithinDistance {
-            if !within_distance_supported(candidate) {
-                return ResolutionOutcome::Invalid {
-                    reason: "withinDistance requires a point candidate".to_string(),
-                };
-            }
-            if self.within_distance_radius().is_none() {
-                return ResolutionOutcome::Invalid {
-                    reason: "withinDistance requires a positive distance".to_string(),
-                };
+            if let Some(reason) = self.within_distance_invalid_reason(candidate) {
+                return ResolutionOutcome::Invalid { reason };
             }
         }
         let ids = match self.applicable_ids(candidate) {
@@ -534,7 +535,7 @@ impl<'a> PreparedQuery<'a> {
     /// mirroring how the match mask skips per-match rule ids (ADR-0004).
     pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
         if self.spatial == SpatialPredicate::WithinDistance
-            && (!within_distance_supported(candidate) || self.within_distance_radius().is_none())
+            && self.within_distance_invalid_reason(candidate).is_some()
         {
             return 2;
         }
@@ -545,7 +546,7 @@ impl<'a> PreparedQuery<'a> {
         match self.spatial {
             SpatialPredicate::WithinDistance => {
                 if let Some(distance) = self.within_distance_radius() {
-                    self.within_rules(candidate, &bbox, distance, |_| resolved = true);
+                    self.admit_within_distance(candidate, &bbox, distance, |_| resolved = true);
                 }
             }
             _ => self.relate_touched(candidate, &bbox, |_, matrix| {
