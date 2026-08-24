@@ -18,7 +18,7 @@ in JavaScript with turf.js (≈1.1 s per batch).
 **Why it got fast.** The cost was dominated by the exact geometry check ("does
 this footprint touch this zone?"). The fix that mattered was **preparing** each
 rule's geometry once per ruleset, per thread (~5 ms for all 30), then reusing
-that work across every footprint and every request — a ~29× speedup on its own
+that work across every footprint and every request — a ~31× speedup on its own
 (the ladder's B → E rung). The bounding-box index, by contrast, barely helped:
 with 30 large zones, almost every footprint overlaps some zone's box anyway
 (B → C → D ≈ 1×). See the separated attribution in the ladder Results below.
@@ -64,6 +64,10 @@ it (architecture-hardening 04):
 | `F_prepared_rstar_bbox` | E + `rstar` bbox filter |
 | `ruleset_build/build_30_rules` | ruleset construction |
 | `prepare/prepare_30_rules` | per-worker `PreparedGeometry` preparation |
+| `batch_resolve/*` | P1 resolution vs the mask baseline: `resolve_mask`, `resolve_full` |
+| `batch_within_distance/*` | P2 `withinDistance` geofencing vs the point-mask baseline |
+| `batch_temporal/*` | P2 `$activeAt` window scan vs the no-where mask |
+| `batch_aggregation/*` | aggregation (count/numeric/coverage) vs the mask + rich baselines |
 
 The two levers are isolated: bbox/index filter = B→C→D; prepared geometries =
 B→E (and D→F with the index held constant).
@@ -88,23 +92,27 @@ are still verified).
 ## Results (release profile, 1,000 candidates × 30 rules)
 
 Quick criterion run (`--warm-up-time 1 --measurement-time 2 --sample-size 10`,
-Windows, 2026-08-19) — order-of-magnitude figures, not tuned medians:
+Windows, re-recorded 2026-08-24) — order-of-magnitude figures, not tuned
+medians. The 2026-08-19 run recorded higher absolute values (B 580 ms, E
+20.3 ms, F 21.6 ms, build 32.7 ms, prepare 6.2 ms); the B–F rungs call the
+raw `geo` relate loop, so the drop below is run-to-run/machine variance, not
+a regression — no core code changed, and the mask output is byte-identical.
 
 | Bench | Time/batch | vs B |
 |---|---|---|
-| B naive (unprepared, no bbox) | 580 ms | 1× |
-| C linear-scan bbox (unprepared) | 570 ms | ≈1× |
-| D rstar bbox (unprepared) | 554 ms | ≈1× |
-| E prepared (naive, no bbox) | 20.3 ms | **≈29×** |
-| F prepared + rstar bbox | 21.6 ms | ≈27× |
-| ruleset build (30 rules) | 32.7 ms | — |
-| prepare 30 rules | 6.2 ms | — |
+| B naive (unprepared, no bbox) | 481 ms | 1× |
+| C linear-scan bbox (unprepared) | 472 ms | ≈1× |
+| D rstar bbox (unprepared) | 468 ms | ≈1× |
+| E prepared (naive, no bbox) | 15.7 ms | **≈31×** |
+| F prepared + rstar bbox | 14.7 ms | **≈33×** |
+| ruleset build (30 rules) | 14.2 ms | — |
+| prepare 30 rules | 5.3 ms | — |
 
 **Attribution (the two levers, separated).** The bbox/index filter alone is
 negligible at these shapes — B → C → D ≈ 1×, because with 30 large
 country-scale rules nearly every candidate's envelope already overlaps most
-rules. The dominant lever is **prepared geometry**: B → E ≈ 29× (each relate is
-~29× cheaper once the rule's topology is prepared, ADR-0010), and adding the
+rules. The dominant lever is **prepared geometry**: B → E ≈ 31× (each relate is
+~31× cheaper once the rule's topology is prepared, ADR-0010), and adding the
 index on top (F) adds nothing (E ≈ F). Previous ladder tables conflated the two
 because the C/D rungs ran the full engine (bbox **and** prepared); the rungs
 above isolate one variable each (architecture-hardening 04).
@@ -113,9 +121,81 @@ vs turf.js (`bun run bench perf`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (
 481 matched candidates). The addon figure includes the Buffer→parse→mask
 round-trip.
 
+### Surfaces: resolution, withinDistance, temporal, aggregation (2026-08-24)
+
+The mask ladder above only measures the match path. The surfaces shipped since
+(P1 resolution, P2 temporal + `withinDistance`, aggregation) ride the **same
+relate loop** — they are additive layers over the applicable-set gather, so
+each cell is measured against a mask/rich-path baseline and its own cost is
+the delta. Same quick flags and 1,000 × 30 workload; `withinDistance` runs the
+1,000 point candidates (`dataset::point_candidates`, the polygon candidates'
+envelope centers) at a 100 km radius. The tables are separate quick runs on a
+noisy Windows box — the mask baseline itself swung ~12–15 ms across runs, so
+read the **ratios** (each table vs its own baseline), not the absolute ms.
+
+**Resolution** (`batch_resolve`, vs the F mask path):
+
+| Bench | Time/batch | vs mask |
+|---|---|---|
+| mask baseline | 14.7 ms | 1× |
+| resolve_mask (admission loop, no winner/values) | 15.1 ms | +3% |
+| resolve_full (gather + sort + winner + values) | 15.0 ms | +2% |
+
+**`withinDistance`** (`batch_within_distance`, point candidates, radius 100 km):
+
+| Bench | Time/batch | vs mask |
+|---|---|---|
+| mask baseline (points, intersects) | 7.9 ms | 1× |
+| withinDistance mask (pre-filter + haversine confirm) | 164 ms | **~21×** |
+| withinDistance full | 164 ms | ~21× |
+
+**Temporal** (`batch_temporal`, all rules' windows admit at the Monday-10:00
+`at`, so the scan runs over every touched rule with no pruning benefit):
+
+| Bench | Time/batch | vs mask |
+|---|---|---|
+| mask (no where) | 12.1 ms | 1× |
+| `$activeAt` window scan (mask) | 13.2 ms | +9% |
+| `$activeAt` full (rich path) | 12.3 ms | +2% |
+
+**Aggregation** (`batch_aggregation`, over the applicable set):
+
+| Bench | Time/batch | vs mask / rich |
+|---|---|---|
+| mask baseline | 14.7 ms | 1× |
+| query rich (applicable-set gather) | 14.9 ms | +1% vs mask |
+| aggregate count + numeric (`priority`) | 14.9 ms | +0.1% vs rich |
+| aggregate coverage (union + geodesic area) | 200 ms | **~13× vs rich** |
+
+**Findings:**
+
+- **Resolution is free.** `resolve_mask` is the admission loop alone (no
+  winner/values materialised) and lands within ~3% of the mask; `resolve_full`
+  — the actual ordered applicable-set gather, precedence sort, and
+  first-provider-wins values merge — also lands within ~2%. The applicable set
+  is a handful of rules per candidate, so the whole resolution layer is
+  negligible on top of the relate loop.
+- **`withinDistance` is the expensive surface: ~21× the intersect mask.**
+  Its exact admission (`haversine_closest_point` per touched rule) costs ~160 ms
+  per batch here — the bounding-circle pre-filter keeps the R-tree hits low,
+  but the closest-point-on-big-polygon confirm dominates against country-scale
+  rules. The rich/full path adds nothing over the mask (~164 ms both), so the
+  cost is the distance admission itself, not result materialisation. This is
+  the first surface where the hot path is not relate-bound.
+- **The `$activeAt` window scan is ~free** (single-digit percent over the mask
+  when every rule admits; the cells land within run-to-run noise). A filtering
+  window (some rules out of window) only reduces the relate work further, so a
+  temporal query is never slower than the unfiltered mask.
+- **Aggregation splits cleanly.** The count + numeric fold over the applicable
+  set is a rounding error (+0.1% over the rich gather), but `coverage` is
+  **~13× the rich path (~200 ms)**: it unions the applicable rules'
+  country-scale multipolygons and measures the geodesic intersection per
+  candidate. Coverage is the aggregation to budget for; the numeric/count path
+  is free.
+
 ## Findings
 
-- **Prepared geometry is the lever.** It cuts the core query ~29× (B → E on the
+- **Prepared geometry is the lever.** It cuts the core query ~31× (B → E on the
   separated ladder); the bbox/index filter alone gives ≈0 help at 30 large
   rules (B ≈ C ≈ D). Earlier tables attributed B → C/D to prepared geometry,
   but those rungs ran the full engine — bbox **and** prepared — conflating the

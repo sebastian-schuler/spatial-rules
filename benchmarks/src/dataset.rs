@@ -10,8 +10,8 @@
 
 use std::collections::BTreeMap;
 
-use geo::{Coord, LineString, MultiPolygon, Polygon};
-use spatial_rules_core::{Candidate, PropertyValue, Rule};
+use geo::{Coord, Geometry, LineString, MultiPolygon, Point, Polygon};
+use spatial_rules_core::{Candidate, CandidateClass, PropertyValue, Rule, TemporalInstant, WhereExpr};
 
 pub const RULE_COUNT: usize = 30;
 pub const CANDIDATE_COUNT: usize = 1000;
@@ -187,6 +187,77 @@ pub fn candidates() -> Vec<Candidate> {
     candidates
 }
 
+/// ~1,000 **point** candidates at the polygon candidates' envelope centers —
+/// the same spatial distribution, so the `withinDistance` geofencing cell
+/// compares against the mask cell over identical R-tree hits (the bounding-
+/// circle pre-filter + haversine confirm is the only difference).
+pub fn point_candidates() -> Vec<Candidate> {
+    candidates()
+        .into_iter()
+        .map(|candidate| {
+            let envelope = match candidate.class() {
+                CandidateClass::Valid { envelope } => *envelope,
+                CandidateClass::Invalid { .. } => {
+                    unreachable!("dataset candidates are valid")
+                }
+            };
+            Candidate::new(
+                candidate.id,
+                Geometry::Point(Point::new(
+                    (envelope.min().x + envelope.max().x) / 2.0,
+                    (envelope.min().y + envelope.max().y) / 2.0,
+                )),
+            )
+        })
+        .collect()
+}
+
+/// The 30 production rules extended with `$activeAt` window properties
+/// (ADR-0017): `daysOfWeek` (Mon=1 … Sun=64), `startHour`, `endHour`. Every
+/// rule's window admits at a Monday-10:00 `at`, so the temporal cell measures
+/// the pure per-rule window scan cost — the scan runs over every touched rule
+/// with no pruning benefit, and the mask is byte-identical to the plain query.
+pub fn rules_with_windows() -> Vec<Rule> {
+    let mut rules = rules();
+    for rule in rules.iter_mut() {
+        rule.properties
+            .insert(WINDOW_DAYS_FIELD.to_string(), PropertyValue::Int(1));
+        rule.properties
+            .insert(WINDOW_START_HOUR_FIELD.to_string(), PropertyValue::Int(0));
+        rule.properties
+            .insert(WINDOW_END_HOUR_FIELD.to_string(), PropertyValue::Int(24));
+    }
+    rules
+}
+
+/// The `$activeAt` window property field names on [`rules_with_windows`]
+/// (ADR-0017): a `daysOfWeek` Int bitmask (Mon=1 … Sun=64) plus
+/// `startHour`/`endHour` Int hours (0..=23). Single-sourced here so the
+/// dataset, its tests, and the ladder never drift apart.
+pub const WINDOW_DAYS_FIELD: &str = "daysOfWeek";
+pub const WINDOW_START_HOUR_FIELD: &str = "startHour";
+pub const WINDOW_END_HOUR_FIELD: &str = "endHour";
+
+/// The `$activeAt` where clause over [`WINDOW_DAYS_FIELD`] /
+/// [`WINDOW_START_HOUR_FIELD`] / [`WINDOW_END_HOUR_FIELD`] — the temporal
+/// workload's query ingredient.
+pub fn active_at_clause() -> WhereExpr {
+    WhereExpr::parse(&serde_json::json!({
+        "$activeAt": {
+            "daysOfWeek": WINDOW_DAYS_FIELD,
+            "startHour": WINDOW_START_HOUR_FIELD,
+            "endHour": WINDOW_END_HOUR_FIELD,
+        }
+    }))
+    .expect("$activeAt where clause")
+}
+
+/// The reference time every [`rules_with_windows`] window admits at (a Monday
+/// at 10:00, ADR-0017).
+pub fn monday_ten() -> TemporalInstant {
+    TemporalInstant::parse_iso8601("2026-08-24T10:00").expect("Monday 10:00")
+}
+
 /// Rules as a GeoJSON FeatureCollection (for external cross-checks).
 pub fn rules_geojson() -> String {
     let features: Vec<serde_json::Value> = rules()
@@ -269,7 +340,9 @@ fn ring_coords(line: &LineString<f64>) -> Vec<[f64; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spatial_rules_core::Ruleset;
+    use geo::Point;
+    use spatial_rules_core::CandidateClass;
+    use spatial_rules_core::{Query, Ruleset, SpatialPredicate};
 
     #[test]
     fn generated_rules_build_a_valid_ruleset() {
@@ -281,5 +354,68 @@ mod tests {
     #[test]
     fn generated_candidates_are_supported() {
         assert_eq!(candidates().len(), CANDIDATE_COUNT);
+    }
+
+    #[test]
+    fn point_candidates_are_valid_points_at_candidate_centers() {
+        let points = point_candidates();
+        let candidates = candidates();
+        assert_eq!(points.len(), CANDIDATE_COUNT);
+        for (point, candidate) in points.iter().zip(&candidates) {
+            assert!(
+                matches!(point.geometry, Geometry::Point(_)),
+                "{} must be a point",
+                point.id
+            );
+            assert!(
+                matches!(point.class(), CandidateClass::Valid { .. }),
+                "{} must classify valid",
+                point.id
+            );
+            let CandidateClass::Valid { envelope } = candidate.class() else {
+                unreachable!("dataset candidates are valid")
+            };
+            let expected = Geometry::Point(Point::new(
+                (envelope.min().x + envelope.max().x) / 2.0,
+                (envelope.min().y + envelope.max().y) / 2.0,
+            ));
+            assert_eq!(point.geometry, expected, "{}", point.id);
+        }
+    }
+
+    #[test]
+    fn rules_with_windows_build_a_valid_ruleset() {
+        let generated = rules_with_windows();
+        assert_eq!(generated.len(), RULE_COUNT);
+        Ruleset::build(generated).expect("windowed rules must be valid");
+    }
+
+    #[test]
+    fn rules_with_windows_admit_all_rules_at_monday_ten() {
+        let rules = rules_with_windows();
+        let at = monday_ten();
+        let clause = active_at_clause();
+        for rule in &rules {
+            assert!(
+                clause.eval(&rule.properties, Some(at)),
+                "{} must admit at Monday 10:00",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
+    fn active_at_query_mask_matches_the_plain_mask_when_all_admit() {
+        let ruleset = Ruleset::build(rules_with_windows()).unwrap();
+        let candidates = candidates();
+        let plain = Query::new(SpatialPredicate::Intersects);
+        let temporal = Query::new(SpatialPredicate::Intersects)
+            .with_where(active_at_clause())
+            .with_at(monday_ten());
+        assert_eq!(
+            ruleset.query_mask(&candidates, &temporal),
+            ruleset.query_mask(&candidates, &plain),
+            "an all-admitting window must not change the mask"
+        );
     }
 }
