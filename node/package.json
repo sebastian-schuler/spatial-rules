@@ -1,6 +1,6 @@
 {
     "name": "spatial-rules",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "High-performance spatial rules/query engine (Rust core, Node/Bun binding)",
     "license": "MIT OR Apache-2.0",
     "author": "Sebastian Schuler",
@@ -71,11 +71,11 @@
         "typescript": "^5.9.0"
     },
     "optionalDependencies": {
-        "spatial-rules-win32-x64-msvc": "0.1.1",
-        "spatial-rules-win32-arm64-msvc": "0.1.1",
-        "spatial-rules-linux-x64-gnu": "0.1.1",
-        "spatial-rules-linux-x64-musl": "0.1.1",
-        "spatial-rules-linux-arm64-gnu": "0.1.1",
-        "spatial-rules-linux-arm64-musl": "0.1.1"
+        "spatial-rules-win32-x64-msvc": "0.2.0",
+        "spatial-rules-win32-arm64-msvc": "0.2.0",
+        "spatial-rules-linux-x64-gnu": "0.2.0",
+        "spatial-rules-linux-x64-musl": "0.2.0",
+        "spatial-rules-linux-arm64-gnu": "0.2.0",
+        "spatial-rules-linux-arm64-musl": "0.2.0"
     }
 }
