@@ -1,6 +1,6 @@
 {
     "name": "spatial-rules",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "High-performance spatial rules/query engine (Rust core, Node/Bun binding)",
     "license": "MIT OR Apache-2.0",
     "author": "Sebastian Schuler",
@@ -62,7 +62,6 @@
         "artifacts": "napi artifacts",
         "build:ts": "tsc -p tsconfig.build.json",
         "prepack": "node scripts/sync-docs.mjs && npm run build:ts",
-        "prepublishOnly": "napi prepublish -t npm",
         "typecheck": "tsc --noEmit",
         "test": "node --experimental-strip-types test/smoke.ts"
     },
@@ -72,11 +71,11 @@
         "typescript": "^5.9.0"
     },
     "optionalDependencies": {
-        "spatial-rules-win32-x64-msvc": "0.1.0",
-        "spatial-rules-win32-arm64-msvc": "0.1.0",
-        "spatial-rules-linux-x64-gnu": "0.1.0",
-        "spatial-rules-linux-x64-musl": "0.1.0",
-        "spatial-rules-linux-arm64-gnu": "0.1.0",
-        "spatial-rules-linux-arm64-musl": "0.1.0"
+        "spatial-rules-win32-x64-msvc": "0.1.1",
+        "spatial-rules-win32-arm64-msvc": "0.1.1",
+        "spatial-rules-linux-x64-gnu": "0.1.1",
+        "spatial-rules-linux-x64-musl": "0.1.1",
+        "spatial-rules-linux-arm64-gnu": "0.1.1",
+        "spatial-rules-linux-arm64-musl": "0.1.1"
     }
 }

@@ -11,62 +11,83 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - host: ubuntu-latest
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: linux-x64-gnu
-            artifact: spatial-rules.linux-x64-gnu.node
-          - host: ubuntu-latest
+            musl: false
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             platform: linux-x64-musl
-            artifact: spatial-rules.linux-x64-musl.node
-            cross: true
-          - host: ubuntu-latest
+            musl: true
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64-gnu
-            artifact: spatial-rules.linux-arm64-gnu.node
-          - host: ubuntu-latest
+            musl: false
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             platform: linux-arm64-musl
-            artifact: spatial-rules.linux-arm64-musl.node
-            cross: true
-          - host: windows-latest
+            musl: true
+          - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: win32-x64-msvc
-            artifact: spatial-rules.win32-x64-msvc.node
-          - host: windows-latest
+            musl: false
+          - os: windows-latest
             target: aarch64-pc-windows-msvc
             platform: win32-arm64-msvc
-            artifact: spatial-rules.win32-arm64-msvc.node
+            musl: false
 
-    runs-on: ${{ matrix.host }}
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Install cross (musl)
-        if: matrix.cross
-        run: cargo install cross --locked
-      - name: Build addon
-        shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release -p spatial-rules-node --target ${{ matrix.target }}
-          else
-            cargo build --release -p spatial-rules-node --target ${{ matrix.target }}
-          fi
-      - name: Stage artifact
-        shell: bash
+      - name: Install zig + cargo-zigbuild (musl)
+        if: matrix.musl
         run: |
           set -euxo pipefail
-          if [[ "${{ matrix.host }}" == windows-* ]]; then
-            src="target/${{ matrix.target }}/release/spatial_rules_node.dll"
+          curl -fsSL -o /tmp/zig.tar.xz \
+            https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+          tar -C /tmp -xf /tmp/zig.tar.xz
+          echo "/tmp/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
+          cargo install cargo-zigbuild --locked
+      - name: Install aarch64 glibc cross-gcc
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build addon
+        shell: bash
+        working-directory: node
+        run: |
+          set -euxo pipefail
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-gnu)
+              # zig rejects rustc's --fix-cortex-a53-843419; use a real glibc
+              # cross-gcc, which supports it.
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+                cargo build --release --target ${{ matrix.target }} -p spatial-rules-node
+              ;;
+            *-musl)
+              # musl cdylib needs a dynamic crt; cargo-zigbuild handles the
+              # aarch64 linker flag too.
+              RUSTFLAGS="-C target-feature=-crt-static" \
+                cargo zigbuild --release --target ${{ matrix.target }} -p spatial-rules-node
+              ;;
+            *)
+              cargo build --release --target ${{ matrix.target }} -p spatial-rules-node
+              ;;
+          esac
+          # Stage the cdylib as the platform package's .node. Cargo writes to
+          # the workspace-root target dir (../target), and napi build does NOT
+          # drop the binary into npm/<platform>/ on its own.
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            ARTIFACT=spatial_rules_node.dll
           else
-            src="target/${{ matrix.target }}/release/libspatial_rules_node.so"
+            ARTIFACT=libspatial_rules_node.so
           fi
-          mkdir -p "node/npm/${{ matrix.platform }}"
-          cp "$src" "node/npm/${{ matrix.platform }}/${{ matrix.artifact }}"
-      - uses: actions/upload-artifact@v4
+          mkdir -p "npm/${{ matrix.platform }}"
+          cp "../target/${{ matrix.target }}/release/$ARTIFACT" \
+            "npm/${{ matrix.platform }}/spatial-rules.${{ matrix.platform }}.node"
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.platform }}
           path: node/npm/${{ matrix.platform }}
@@ -76,12 +97,17 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@v4
+      - name: Install dev dependencies
+        # Needed so the root package's prepack (tsc emit to dist/) works during
+        # npm publish.
+        working-directory: node
+        run: npm install
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Restore platform binaries
@@ -92,10 +118,16 @@ jobs:
             cp "$dir"/*.node "node/npm/$platform/"
           done
       - name: Publish platform packages
-        working-directory: node/npm
+        working-directory: node
         run: |
-          for dir in */; do
-            (cd "$dir" && npm publish --access public)
+          VERSION="$(node -p "require('./package.json').version")"
+          for dir in npm/*/; do
+            name="$(node -p "require('./${dir}package.json').name")"
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "skip $name@$VERSION (already published)"
+            else
+              (cd "$dir" && npm publish --access public)
+            fi
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
