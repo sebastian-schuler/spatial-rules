@@ -1,17 +1,18 @@
 # Releasing
 
-`spatial-rules` is published to npm from GitHub Actions. The release pipeline
-is largely automated with [release-please](https://github.com/googleapis/release-please).
+`spatial-rules` (Node/Bun), `spatial-rules-wasm` (npm), and `spatial-rules`
+(PyPI) are published from GitHub Actions. The release pipeline is largely
+automated with [release-please](https://github.com/googleapis/release-please).
 
 ## How it works
 
 ```
 commit on main (Conventional Commits)
-   └─ test.yml          (gate: Rust tests, clippy, TS typecheck, Node/Bun smoke)
+   └─ test.yml          (gate: Rust tests, clippy, TS typecheck, Node/Bun/wasm/deno/python smoke)
         └─ release-please (on main) opens a Release PR:
-             - bumps versions in node/package.json
+             - bumps versions in node/package.json, wasm/package.json, python/
              - keeps node/package-lock.json in sync (commit it first)
-             - generates CHANGELOG.md at the repo root (keep-a-changelog)
+             - generates CHANGELOG.md at the repo root, wasm/CHANGELOG.md, python/CHANGELOG.md
              - bumps the 6 platform packages in lockstep via extra-files (version-locked)
         └─ merge the Release PR
              └─ release-please creates a vX.Y.Z tag + GitHub Release
@@ -19,10 +20,12 @@ commit on main (Conventional Commits)
                        - builds the 6 platform addons (cargo/cross)
                        - publishes the 6 platform packages
                        - publishes the root package
+                       - publishes spatial-rules-wasm to npm
+                       - publishes spatial-rules to PyPI
 ```
 
 The npm version and the Rust workspace version are **independent** — release-please
-only manages the npm packages. Nothing is published until you merge the
+only manages the packages. Nothing is published until you merge the
 Release PR, so releases are deliberate.
 
 ## One-time setup (before the first release)

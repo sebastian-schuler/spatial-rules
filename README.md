@@ -6,7 +6,8 @@
 
 A high-performance spatial rules/query engine: evaluate batches of candidate
 GeoJSON geometries against an indexed, attribute-bearing ruleset, with a Rust
-core and a zero-toolchain Node/Bun native addon.
+core distributed three ways — a zero-toolchain Node/Bun native addon, a wasm
+build for Deno/browser/edge, and a PyO3 wheel for Python (ADR-0019).
 
 The motivating use case is a batch of candidate geometries checked against a set
 of geometry-bearing rules with queryable properties; the library is generic and
@@ -95,13 +96,76 @@ The short version:
 ## Install
 
 ```bash
-npm install spatial-rules
+npm install spatial-rules           # Node/Bun native addon (npm)
+npm install spatial-rules-wasm      # wasm: Deno/browser/edge/Node ESM (npm)
+pip install spatial-rules           # Python (PyPI)
 ```
 
-> Not yet published to npm — the prebuilt-distribution pipeline (per-platform
-> optional dependencies + CI matrix + release-please) is in place; pushing a
-> `v*` tag triggers the publish. Until then, build the addon from source (see
-> [DEVELOPMENT.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/DEVELOPMENT.md)).
+The engine ships in three flavors (ADR-0019): the zero-toolchain Node/Bun
+native addon `spatial-rules`, a wasm build `spatial-rules-wasm` for
+Deno/browser/edge, and a PyO3 native wheel `spatial-rules` on PyPI. The wasm
+and Python packages publish from the same release pipeline (see
+[RELEASING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/RELEASING.md)).
+
+## Distributions
+
+The same Rust core, three surfaces (ADR-0019). Every surface shares the query
+shape, result contracts, and `SR_*` error model; they differ in packaging and
+which Engine methods are in scope.
+
+### Node/Bun — `spatial-rules` (native addon)
+
+The full engine: `SpatialRuleset` with `query`/`queryAsync`/`resolve`/
+`resolveAsync`, atomic `replace`, `stats`, `toCanonical`/`fromCanonical`, and
+the `QueryResult`/`ResolutionResult` chainable views. This README's examples
+use this surface.
+
+### Deno / browser / edge — `spatial-rules-wasm` (wasm)
+
+```bash
+npm install spatial-rules-wasm
+```
+
+```ts
+import { SpatialRuleset } from 'spatial-rules-wasm';
+
+const ruleset = new SpatialRuleset(rules); // GeoJSON string | Uint8Array | object
+const result = ruleset.query(candidates, query); // mask via result.mask()
+console.log(result.toOutcomesJson());
+```
+
+The **Ruleset-level subset** of the wrapper: `build` (`new SpatialRuleset`),
+`query`/`resolve` (mask as `Uint8Array`), the rich JSON views
+(`toOutcomesJson`/`toJson`), and `toCanonical`. Inputs accept
+`GeoJSON string | Uint8Array | object` and queries accept `string | object`
+(reimplemented in-package). **No `replace`/`stats`** — their clock-backed
+observability is degenerate on wasm (no clock) — and **no async** (the engine
+is sync and whole-buffer). Errors surface as `SpatialRulesError` with the same
+`SR_*` codes. Release wasm blob: 829 KB.
+
+### Python — `spatial-rules` (PyPI)
+
+```bash
+pip install spatial-rules
+```
+
+```python
+from spatial_rules import Ruleset
+
+ruleset = Ruleset.from_geojson(rules)  # bytes | str | dict
+mask = ruleset.query(candidates, query)   # list[int]: 0 no match, 1 matched, 2 invalid
+rich = ruleset.query_rich(candidates, query)  # list[dict]
+resolved = ruleset.resolve_rich(candidates, query)
+print(ruleset.replace(rules))  # dict report
+```
+
+The **full Engine surface** with Pythonic types: `Ruleset.from_geojson`
+(`bytes | str | dict`), `query`/`resolve` (mask as `list[int]`),
+`query_rich`/`resolve_rich` (`list[dict]`), `replace`, `to_canonical`, and
+`stats` — dicts/lists in and out. Python runs natively, so the clock-backed
+`replace`/`stats` observability is real. JSON serialization is identical to
+the napi/wasm paths. Errors raise `SpatialRulesError` with the `SR_*` code in
+the message.
 
 ## Usage
 
@@ -324,7 +388,10 @@ an `invalid` outcome with a reason.
 
 ## Requirements
 
-- Node.js **>= 18** (Bun is also supported via the same prebuilt binaries).
+- Node/Bun (`spatial-rules`): Node.js **>= 18** (Bun also supported via the
+  same prebuilt binaries).
+- Deno/browser/edge (`spatial-rules-wasm`): any runtime with wasm ESM support.
+- Python (`spatial-rules`): CPython **3.9–3.13** (abi3 wheel).
 
 ## Changelog
 

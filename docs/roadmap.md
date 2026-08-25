@@ -96,6 +96,34 @@ ADR-0016: spherical great-circle (Haversine) meters, antimeridian-safe for
 conformant (in-range) coordinates; the ellipsoidal Karney geodesic is the
 documented higher-accuracy additive alternative.
 
+## Aggregation (shipped)
+
+Per-candidate analytics over the applicable rule set — `count`, `min`/`max`/
+`sum`/`avg` over a named rule property, and `coverage` (geodesic union
+fraction) — requested as a query-level `aggregate` spec and carried on the
+rich path (ADR-0018, `.scratch/aggregation/`). Removed from fog.
+
+## Distribution — WASM + Python (shipped 2026-08-25)
+
+The engine now distributes beyond the Node napi addon (ADR-0019,
+`.scratch/wasm/`):
+
+- **Wasm** — npm `spatial-rules-wasm` (`wasm/`): a `wasm-bindgen` build
+  (`wasm-pack --release --target bundler`) exposing the Ruleset-level subset —
+  `build`/`query`/`resolve` (mask as `Uint8Array`), the rich JSON views, and
+  `toCanonical`. No `replace`/`stats` (their clock observability is degenerate
+  on wasm — no clock) and no async. Consumable by browser bundlers, Node ESM,
+  and Deno; release blob 829 KB (≤ 2 MB budget). Smoke runs under node and
+  deno.
+- **Python** — PyPI `spatial-rules` (`python/`): PyO3 + maturin, abi3
+  `cp39-abi3` wheels covering CPython 3.9–3.13. The **full** Engine surface —
+  `query`/`resolve`/`query_rich`/`resolve_rich`/`replace`/`to_canonical`/
+  `stats` — with Pythonic dict/list in/out. JSON serialization is identical to
+  the napi/wasm paths (shared `spatial-rules-bindings-common`). pytest smoke on
+  CPython 3.11 + 3.13.
+- **CI/release** — `wasm` and `python` CI jobs build + smoke both packages;
+  release-please tags/releases both from the same Conventional-Commits feed.
+
 ## P3 — PostgreSQL loader (deferred 2026-08-24)
 
 Load rules directly from PostGIS without GeoJSON serialization
@@ -125,14 +153,10 @@ Suspected directions that hang on open questions; graduate when sharp:
   diffable, auditable. Depends on composition and derived values existing.
 - **Temporal indexing** — time as first-class indexable dimension (beyond the
   P2 filter).
-- **Aggregation** — count/min/max/coverage over matched rules; analytics use
-  cases.
 - **Route-aware queries** — zone segments along a LineString with fractional
   start/end; a higher-level module for routing engines.
 - **CRS/geodesic correctness beyond the documented semantics** — geodesic
   distance models, polar regions.
-- **WASM build** — same engine in Node/Bun/Deno/browser/edge/Python.
-  Distribution concern, not a design one; the Rust core is ready whenever.
 - **Compiled/mmap persisted format** — canonical JSON with recompile-on-load
   is decided (ADR-0013); a fully-compiled binary/mmap format was rejected for
   current scale. Revisit if ruleset sizes or boot-time demands grow by orders
