@@ -15,15 +15,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # The python crate is a workspace member; its abi3 cdylib needs no
-      # interpreter to compile, so skip pyo3's interpreter detection.
+      # interpreter to compile, so skip pyo3's interpreter detection. Its
+      # Rust unit tests link libpython, which is not available here — the
+      # crate is exercised by the dedicated `python` job (maturin + pytest).
       PYO3_NO_PYTHON: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Unit + integration tests (includes proptest)
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude spatial-rules-python
       - name: Lint
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets --exclude spatial-rules-python
 
   node:
     strategy:

@@ -11,7 +11,7 @@ name = "spatial_rules_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
 serde_json.workspace = true
 spatial-rules-bindings-common = { path = "../bindings-common" }
 spatial-rules-core = { path = "../core" }

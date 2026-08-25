@@ -3,9 +3,11 @@
 // Defines `SpatialRulesError extends Error` with a `.code` property, and
 // re-throws native errors (which carry `SR_*` codes) as that class.
 //
-// The native binary resolves from the per-platform optionalDependency package
-// (`spatial-rules-<triple>`) when installed from npm, and falls back to a
-// locally built `spatial_rules.node` during development.
+// The native binary resolves from a locally built `spatial_rules.node` when
+// present (development/CI — the addon is built and staged there), and falls
+// back to the per-platform optionalDependency package (`spatial-rules-<triple>`)
+// installed from npm. Preferring the local build means CI tests the freshly
+// built addon, never a stale published platform package.
 //
 // Erasable-only TS (spec constraint): these sources run under both Node
 // (type stripping) and Bun (native TS), and are compiled to `dist/` for
@@ -78,16 +80,20 @@ function platformPackage(): string | null {
 }
 
 function loadNative(): NativeModule {
+  const local = join(here, 'spatial_rules.node');
+  try {
+    // Development/CI: the addon built and staged into `node/` must be the one
+    // tested — never shadowed by a published platform package (which may lag
+    // the source, e.g. the 0.1.1 release predates resolution).
+    return require(local) as NativeModule;
+  } catch {
+    // No local build — fall through to the published platform package.
+  }
   const pkg = platformPackage();
   if (pkg) {
-    try {
-      return require(pkg) as NativeModule;
-    } catch {
-      // Platform package present in `optionalDependencies` but not installed
-      // (or failed to load) — fall back to a local build below.
-    }
+    return require(pkg) as NativeModule;
   }
-  return require(join(here, 'spatial_rules.node')) as NativeModule;
+  throw new Error(`no native addon found for ${process.platform}/${process.arch}`);
 }
 
 const native = loadNative();
