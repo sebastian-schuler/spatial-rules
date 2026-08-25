@@ -17,7 +17,7 @@
         "pkg/"
     ],
     "scripts": {
-        "build:wasm": "wasm-pack build --release --target bundler --out-dir pkg",
+        "build:wasm": "wasm-pack build --release --target bundler --out-dir pkg --no-gitignore",
         "build:ts": "tsc -p tsconfig.build.json",
         "prepack": "npm run build:wasm && npm run build:ts",
         "typecheck": "tsc --noEmit",
