@@ -1,6 +1,6 @@
 {
     "name": "spatial-rules-wasm",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "type": "module",
     "description": "WASM distribution of the spatial rules engine core (Deno/browser/edge/Node)",
     "license": "MIT OR Apache-2.0",

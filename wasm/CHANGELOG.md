@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-wasm-v0.2.1...spatial-rules-wasm-v0.2.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **wasm:** drop --no-gitignore (unavailable in wasm-pack 0.15), remove pkg/.gitignore so npm packs the wasm binary ([4b325c6](https://github.com/sebastian-schuler/spatial-rules/commit/4b325c6ccaf1868d8a1425f139eaab0de610cd03))
+* **wasm:** pack the wasm binary (drop unsupported --no-gitignore) ([2d24017](https://github.com/sebastian-schuler/spatial-rules/commit/2d2401793e1d4abccbc90fe21cfe841e0470034c))
+
 ## [0.2.1](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-wasm-v0.2.0...spatial-rules-wasm-v0.2.1) (2026-08-25)
 
 
