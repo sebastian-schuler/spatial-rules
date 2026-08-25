@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/sebastian-schuler/spatial-rules/compare/v0.2.0...v0.2.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **release:** drop linked-versions (broken with node tag scheme), bump packages to 0.2.1 ([bea032d](https://github.com/sebastian-schuler/spatial-rules/commit/bea032dc3721bce3db8d287403494c3d76ce4225))
+* **release:** drop linked-versions, bump packages to 0.2.1 ([6023158](https://github.com/sebastian-schuler/spatial-rules/commit/60231581d81e6a62e84469c6a3dd13bc8f30224c))
+
 ## [0.2.0](https://github.com/sebastian-schuler/spatial-rules/compare/v0.1.1...v0.2.0) (2026-08-25)
 
 
