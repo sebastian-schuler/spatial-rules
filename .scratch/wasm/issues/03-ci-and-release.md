@@ -59,4 +59,11 @@ published npm and PyPI packages.
 > publishes `spatial-rules-wasm` to npm (wasm-pack build + tsc emit via the
 > `prepack` hook) and `spatial-rules` to PyPI (maturin `publish --release
 > --skip-existing`, `PYPI_TOKEN` secret) on `v*` tags — the release-automation
-> criterion is fully met.*
+> criterion is fully met. 2026-08-25 PR-3 CI fixes (`3d3f907`): the node/bun
+> smoke loaded the **published 0.1.1 platform package** (npm install / bun
+> auto-install) instead of the freshly built `spatial_rules.node`, so the
+> smoke now prefers the local build (`loadNative` order flipped); the rust job
+> excludes `spatial-rules-python` (`cargo test/clippy --workspace
+> --exclude spatial-rules-python`) because its lib-test links libpython
+> (absent under `PYO3_NO_PYTHON`); the python crate enables pyo3
+> `extension-module` so the maturin wheel does not link libpython.*
