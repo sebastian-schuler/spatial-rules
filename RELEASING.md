@@ -24,9 +24,9 @@ commit on main (Conventional Commits)
                        - publishes spatial-rules to PyPI
 ```
 
-The npm version and the Rust workspace version are **independent** — release-please
-only manages the packages. Nothing is published until you merge the
-Release PR, so releases are deliberate.
+All three packages share **one version** (release-please `linked-versions`
+plugin); the Rust workspace version tracks it. Nothing is published until you
+merge the Release PR, so releases are deliberate.
 
 ## One-time setup (before the first release)
 
@@ -59,8 +59,10 @@ Follow [SemVer](https://semver.org). `feat` → minor, `fix` → patch;
 the minor version (release-please config sets `bump-minor-pre-major: true` for
 all three packages).
 
-The npm/PyPI versions and the Rust workspace version are **independent** —
-release-please manages the packages. Per-package version sources:
+The three packages share **one version** (a `linked-versions` release-please
+plugin keeps `spatial-rules`, `spatial-rules-wasm`, and `spatial-rules-python`
+in lockstep), and the Rust workspace version tracks it too. Per-package
+version sources, all updated by release-please on a release:
 
 - **node** — `node/package.json` (+ the 6 platform packages in lockstep via
   `extra-files`), tags `vX.Y.Z`.

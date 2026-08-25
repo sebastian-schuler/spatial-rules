@@ -1,5 +1,16 @@
 {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+    "plugins": [
+        {
+            "type": "linked-versions",
+            "groupName": "spatial-rules",
+            "components": [
+                "spatial-rules",
+                "spatial-rules-wasm",
+                "spatial-rules-python"
+            ]
+        }
+    ],
     "packages": {
         "node": {
             "release-type": "node",
