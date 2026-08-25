@@ -15,11 +15,19 @@
 //!
 //! **A** (the existing JS implementation) is the turf.js baseline in
 //! `bun run bench perf` (`benchmarks/js/server-bench.mjs`).
+//!
+//! The surfaces that shipped after the ladder (P1 resolution, P2 temporal +
+//! `withinDistance`, aggregation) are additive on top of the F mask path and
+//! are measured in `bench_surfaces` — each with a mask/rich-path baseline, so
+//! the cost of each surface is the delta over its baseline.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use geo::{PreparedGeometry, Relate};
 use spatial_rules_benchmarks::dataset;
-use spatial_rules_core::{Candidate, CandidateClass, Ruleset, SpatialIndexKind};
+use spatial_rules_core::{
+    AggregateSpec, Candidate, CandidateClass, CandidateOutcome, Query, Ruleset, SpatialIndexKind,
+    SpatialPredicate,
+};
 
 /// The precomputed candidate envelope (architecture-hardening 01). The ladder
 /// reads it instead of re-deriving `bounding_rect` per candidate.
@@ -153,6 +161,132 @@ fn bench_ladder(criterion: &mut Criterion) {
     prepare.finish();
 }
 
-criterion_group!(benches, bench_ladder);
+/// Benchmarks for the surfaces shipped after the ladder's mask rungs (P1
+/// resolution, P2 temporal + `withinDistance`, aggregation). All four paths are
+/// **additive** on top of the F mask relate loop; each group measures its cell
+/// against a mask/rich-path baseline so the surface's own cost is the delta.
+///
+/// - **resolution** — `resolve_mask` (the admission loop; no winner/values
+///   materialised) and `resolve_full` (the ordered applicable-set gather +
+///   precedence sort + winner + first-provider-wins values) over the
+///   `~1k×30` workload.
+/// - **withinDistance** — a geofencing workload: 1,000 point candidates at the
+///   polygon candidates' envelope centers (`dataset::point_candidates`), radius
+///   100 km — the bounding-circle pre-filter over the R-tree plus the exact
+///   haversine minimum-distance confirm, vs the same points through the mask.
+/// - **temporal** — a `$activeAt` where clause at a Monday-10:00 `at` over the
+///   window-bearing rules (`dataset::rules_with_windows`): the per-rule window
+///   scan cost. The dataset's windows all admit at that `at`, so the scan runs
+///   over every touched rule with no pruning benefit — the delta vs the
+///   no-where mask is the pure window-scan cost, and the masks are
+///   byte-identical.
+/// - **aggregation** — the rich-path aggregate over the applicable set: the
+///   count + numeric (`priority`) fold, and the union-coverage geodesic measure
+///   (the expensive BooleanOps/geodesic cell), each vs the mask and the rich
+///   `query` gather.
+fn bench_surfaces(criterion: &mut Criterion) {
+    let candidates = dataset::candidates();
+    let points = dataset::point_candidates();
+    let rstar =
+        Ruleset::build_with(dataset::rules(), SpatialIndexKind::RStar).expect("rstar ruleset");
+    let window_rstar = Ruleset::build_with(dataset::rules_with_windows(), SpatialIndexKind::RStar)
+        .expect("window rstar ruleset");
+    let candidate_count = candidates.len() as u64;
+
+    let intersects = Query::new(SpatialPredicate::Intersects);
+    let within_distance =
+        Query::new(SpatialPredicate::WithinDistance).with_distance(100_000.0);
+    let temporal = Query::new(SpatialPredicate::Intersects)
+        .with_where(dataset::active_at_clause())
+        .with_at(dataset::monday_ten());
+    let count_numeric = AggregateSpec::from_json(&serde_json::json!({
+        "count": true,
+        "min": "priority", "max": "priority", "sum": "priority", "avg": "priority",
+    }))
+    .expect("count/numeric aggregate spec");
+    let coverage =
+        AggregateSpec::from_json(&serde_json::json!({ "coverage": true })).expect("coverage spec");
+
+    let mut resolve = criterion.benchmark_group("batch_resolve");
+    resolve.throughput(Throughput::Elements(candidate_count));
+    resolve.bench_function("mask_baseline", |bencher| {
+        bencher.iter(|| black_box(rstar.query_mask(&candidates, &intersects)))
+    });
+    resolve.bench_function("resolve_mask", |bencher| {
+        bencher.iter(|| black_box(rstar.resolve_mask(&candidates, &intersects)))
+    });
+    resolve.bench_function("resolve_full", |bencher| {
+        bencher.iter(|| black_box(rstar.resolve(&candidates, &intersects)))
+    });
+    resolve.finish();
+
+    let mut within = criterion.benchmark_group("batch_within_distance");
+    within.throughput(Throughput::Elements(candidate_count));
+    within.bench_function("mask_baseline", |bencher| {
+        bencher.iter(|| black_box(rstar.query_mask(&points, &intersects)))
+    });
+    within.bench_function("within_distance_mask", |bencher| {
+        bencher.iter(|| black_box(rstar.query_mask(&points, &within_distance)))
+    });
+    within.bench_function("within_distance_full", |bencher| {
+        bencher.iter(|| black_box(rstar.query(&points, &within_distance)))
+    });
+    within.finish();
+
+    let mut temporal_group = criterion.benchmark_group("batch_temporal");
+    temporal_group.throughput(Throughput::Elements(candidate_count));
+    temporal_group.bench_function("mask_no_where", |bencher| {
+        bencher.iter(|| black_box(window_rstar.query_mask(&candidates, &intersects)))
+    });
+    temporal_group.bench_function("temporal_active_at", |bencher| {
+        bencher.iter(|| black_box(window_rstar.query_mask(&candidates, &temporal)))
+    });
+    temporal_group.bench_function("temporal_active_at_full", |bencher| {
+        bencher.iter(|| black_box(window_rstar.query(&candidates, &temporal)))
+    });
+    temporal_group.finish();
+
+    let mut aggregate = criterion.benchmark_group("batch_aggregation");
+    aggregate.throughput(Throughput::Elements(candidate_count));
+    aggregate.bench_function("mask_baseline", |bencher| {
+        bencher.iter(|| black_box(rstar.query_mask(&candidates, &intersects)))
+    });
+    aggregate.bench_function("query_rich_baseline", |bencher| {
+        bencher.iter(|| black_box(rstar.query(&candidates, &intersects)))
+    });
+    aggregate.bench_function("aggregate_count_numeric", |bencher| {
+        bencher.iter(|| {
+            let outcomes = rstar.query(&candidates, &intersects);
+            let mut total = 0u64;
+            for (candidate, outcome) in candidates.iter().zip(&outcomes) {
+                if let CandidateOutcome::Matched { rule_ids, .. } = outcome {
+                    total += count_numeric
+                        .compute(candidate, rule_ids, &rstar)
+                        .count
+                        .unwrap_or(0) as u64;
+                }
+            }
+            black_box(total)
+        })
+    });
+    aggregate.bench_function("aggregate_coverage", |bencher| {
+        bencher.iter(|| {
+            let outcomes = rstar.query(&candidates, &intersects);
+            let mut total = 0.0f64;
+            for (candidate, outcome) in candidates.iter().zip(&outcomes) {
+                if let CandidateOutcome::Matched { rule_ids, .. } = outcome {
+                    total += coverage
+                        .compute(candidate, rule_ids, &rstar)
+                        .coverage
+                        .unwrap_or(0.0);
+                }
+            }
+            black_box(total)
+        })
+    });
+    aggregate.finish();
+}
+
+criterion_group!(benches, bench_ladder, bench_surfaces);
 criterion_main!(benches);
 

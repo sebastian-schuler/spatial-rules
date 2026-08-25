@@ -9,7 +9,7 @@ use geo::{LineString, Point, Polygon};
 use spatial_rules_core::{
     candidate_from_feature, candidates_from_geojson, ensure_supported_geometry, feature_geometry,
     parse_geojson, rule_from_feature, rules_from_geojson, validate_rule_geometry, Candidate,
-    ErrorCode, PropertyValue, Rule,
+    ErrorCode, PropertyValue, Rule, Ruleset,
 };
 
 mod common;
@@ -270,6 +270,7 @@ fn rule_and_candidate_constructors_work_directly() {
         id: "rule-1".to_string(),
         properties: Default::default(),
         geometry: geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)),
+        priority: 0,
     };
     let candidate = candidate_geometry(
         "candidate-1",
@@ -291,4 +292,92 @@ fn rule_and_candidate_constructors_work_directly() {
     };
     assert!(rule_from_feature(&feature).is_ok());
     assert!(candidate_from_feature(&feature).is_ok());
+}
+
+// --- Ticket 01: top-level priority field (ADR-0015) ---
+
+fn rule_with_top_level_priority(priority: &str) -> Rule {
+    let input = format!(
+        r#"{{
+          "type": "FeatureCollection",
+          "features": [
+            {{ "type": "Feature", "id": "priority-rule", "priority": {priority},
+              "properties": {{}},
+              "geometry": {{ "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] }} }}
+          ]
+        }}"#
+    );
+    rules_from_geojson(&input).unwrap().remove(0)
+}
+
+#[test]
+fn rule_with_top_level_priority_reads_integer() {
+    let rule = rule_with_top_level_priority("10");
+    assert_eq!(rule.priority, 10);
+}
+
+#[test]
+fn rule_without_priority_defaults_to_zero() {
+    let input = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        { "type": "Feature", "id": "plain-rule", "properties": {},
+          "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] } }
+      ]
+    }"#;
+    let rule = rules_from_geojson(input).unwrap().remove(0);
+    assert_eq!(rule.priority, 0);
+}
+
+#[test]
+fn wrong_typed_priority_fails_construction_naming_the_rule() {
+    for bad in ["\"high\"", "2.5", "true"] {
+        let input = format!(
+            r#"{{
+              "type": "FeatureCollection",
+              "features": [
+                {{ "type": "Feature", "id": "priority-rule", "priority": {bad},
+                  "properties": {{}},
+                  "geometry": {{ "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] }} }}
+              ]
+            }}"#
+        );
+        let err = rules_from_geojson(&input).unwrap_err();
+        assert_eq!(err.code, ErrorCode::RulesetConstructionFailed, "for priority {bad}");
+        assert!(err.message.contains("priority-rule"), "for priority {bad}: {} ", err.message);
+    }
+}
+
+#[test]
+fn negative_priority_fails_construction_naming_the_rule() {
+    // A negative integer would silently sort below unprioritized (0) rules,
+    // breaking ADR-0015's "unprioritized rules sort below any explicit
+    // priority" invariant — so it fails the build gate like a wrong type.
+    let input = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        { "type": "Feature", "id": "priority-rule", "priority": -3,
+          "properties": {},
+          "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] } }
+      ]
+    }"#;
+    let err = Ruleset::from_geojson(input).unwrap_err();
+    assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
+    assert!(err.message.contains("priority-rule"));
+}
+
+#[test]
+fn top_level_priority_and_properties_priority_are_distinct() {
+    let input = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        { "type": "Feature", "id": "both", "priority": 7,
+          "properties": { "priority": 10 },
+          "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]] } }
+      ]
+    }"#;
+    let rule = rules_from_geojson(input).unwrap().remove(0);
+    // The top-level member is precedence; the properties one stays metadata.
+    assert_eq!(rule.priority, 7);
+    assert_eq!(rule.properties.get("priority"), Some(&PropertyValue::Int(10)));
 }

@@ -29,10 +29,10 @@ Return-shape variants discussed 2026-08-19 — deferred pending a concrete consu
 
 - `filteredGeojson(candidates, query) -> String` — kept features as a GeoJSON string (pass-through `res.send`). **Most likely to be ticketed** if the endpoint returns the filtered FeatureCollection.
 - `filteredFeatures(candidates, query) -> FeatureCollection` (JS objects) — convenience for consumers that transform the data.
-- `queryRich` object variant — JS array of objects instead of a string.
+- `queryRich`/`queryOutcomes` object variant — JS array of objects instead of a JSON string (`query().toOutcomesJson()` currently returns a string).
 - `keep`-indices helper — kept feature indices for cheap slicing.
 
-Trigger: the real endpoint's response contract — if it returns the filtered GeoJSON, ticket `filteredGeojson`; if consumers need objects, ticket the object variant. Callers already hold the primitives (mask + buffered bytes; `queryRich` string), so these are ergonomics, not capability.
+Trigger: the real endpoint's response contract — if it returns the filtered GeoJSON, ticket `filteredGeojson`; if consumers need objects, ticket the object variant. Callers already hold the primitives (mask + buffered bytes; `toOutcomesJson()` string), so these are ergonomics, not capability.
 
 ## Ticket index
 
@@ -41,5 +41,5 @@ Trigger: the real endpoint's response contract — if it returns the filtered Ge
 - `issues/03-overlap-area-ratio.md` — ready-for-agent (blocked by 02)
 - `issues/04-canonical-rulesets.md` — ready-for-agent
 - `issues/05-geo-034-upgrade.md` — needs-triage (gated on geo 0.34 release)
-- `issues/06-query-async.md` — ready-for-agent (opt-in, off-main-thread)
+- `issues/06-query-async.md` — resolved (2026-08-21: returns `Promise<QueryResult>`, same as `query()`)
 - `issues/07-test-comprehensiveness.md` — ready-for-agent (broad; may split)

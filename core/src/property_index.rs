@@ -98,6 +98,7 @@ impl PropertyIndex for EqualityIndex {
             }
             WhereExpr::Or(_) => None,
             WhereExpr::Nor(_) => None,
+            WhereExpr::ActiveAt(_) => None,
         }
     }
 }

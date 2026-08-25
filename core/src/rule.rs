@@ -14,6 +14,13 @@ use crate::properties::PropertyValue;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) u32);
 
+impl RuleId {
+    /// The positional index this id was assigned from (crate-internal).
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// A geometry-bearing rule with queryable properties (CONTEXT.md §4.1).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rule {
@@ -23,4 +30,9 @@ pub struct Rule {
     pub properties: BTreeMap<String, PropertyValue>,
     /// The rule's geometry (Polygon or MultiPolygon once validated).
     pub geometry: Geometry<f64>,
+    /// Top-level precedence for resolution (ADR-0015): higher wins; a missing
+    /// field is `0` (unprioritized rules sort below any explicit priority).
+    /// A `priority` inside `properties` is plain metadata, never read here.
+    #[serde(default)]
+    pub priority: i64,
 }

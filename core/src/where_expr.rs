@@ -2,15 +2,16 @@
 //!
 //! Subset: implicit top-level `AND`, plain-value equality, `$eq`, `$ne`,
 //! `$gt/$gte/$lt/$lte`, `$in`, `$nin`, `$exists`, field-level `$not`,
-//! `$and`/`$or`, and whole-clause `$nor`. A missing property or a type
-//! mismatch evaluates as non-match (even for `$ne`); only malformed
-//! predicates error.
+//! `$and`/`$or`, whole-clause `$nor`, and the whole-clause temporal
+//! `$activeAt` (ADR-0017). A missing property or a type mismatch evaluates as
+//! non-match (even for `$ne`); only malformed predicates error.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use crate::error::SpatialError;
 use crate::properties::PropertyValue;
+use crate::temporal::TemporalInstant;
 
 /// A boolean property predicate tree.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +22,20 @@ pub enum WhereExpr {
     /// negation (filtering-scale ticket 02).
     Nor(Vec<WhereExpr>),
     Predicate(FieldPredicate),
+    /// `$activeAt`: the rule's window fields contain the query-supplied
+    /// reference time (ADR-0017). The fields are named explicitly, so no
+    /// rule-schema key is reserved.
+    ActiveAt(ActiveAtClause),
+}
+
+/// The rule window a `$activeAt` predicate tests (ADR-0017): a `daysOfWeek`
+/// Int bitmask (Mon=1 … Sun=64) and `startHour`/`endHour` Int hours
+/// (0..=23), start-inclusive / end-exclusive with midnight wrap.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveAtClause {
+    pub days_of_week_field: String,
+    pub start_hour_field: String,
+    pub end_hour_field: String,
 }
 
 /// A single field predicate: `field OP value`.
@@ -78,6 +93,7 @@ impl WhereExpr {
                 "$and" => Ok(WhereExpr::And(parse_expr_list(value)?)),
                 "$or" => Ok(WhereExpr::Or(parse_expr_list(value)?)),
                 "$nor" => Ok(WhereExpr::Nor(parse_expr_list(value)?)),
+                "$activeAt" => Ok(WhereExpr::ActiveAt(parse_active_at(value)?)),
                 _ if key.starts_with('$') => Err(SpatialError::unsupported_property_operator(
                     format!("unsupported operator: {key}"),
                 )),
@@ -88,13 +104,29 @@ impl WhereExpr {
         }
     }
 
-    /// Evaluate against a rule's properties.
-    pub fn eval(&self, properties: &BTreeMap<String, PropertyValue>) -> bool {
+    /// Whether any `$activeAt` clause appears anywhere in the tree — the query
+    /// validator uses this to require the reference time (`at`, ADR-0017).
+    pub fn has_active_at(&self) -> bool {
         match self {
-            WhereExpr::And(exprs) => exprs.iter().all(|expr| expr.eval(properties)),
-            WhereExpr::Or(exprs) => exprs.iter().any(|expr| expr.eval(properties)),
-            WhereExpr::Nor(exprs) => !exprs.iter().any(|expr| expr.eval(properties)),
+            WhereExpr::ActiveAt(_) => true,
+            WhereExpr::And(exprs) | WhereExpr::Or(exprs) | WhereExpr::Nor(exprs) => {
+                exprs.iter().any(WhereExpr::has_active_at)
+            }
+            WhereExpr::Predicate(_) => false,
+        }
+    }
+
+    /// Evaluate against a rule's properties. `at` is the query's reference time
+    /// for temporal predicates (ADR-0017); it is `None` only when the query
+    /// carries none, in which case any `$activeAt` clause is a non-match (the
+    /// query validator prevents this combination).
+    pub fn eval(&self, properties: &BTreeMap<String, PropertyValue>, at: Option<TemporalInstant>) -> bool {
+        match self {
+            WhereExpr::And(exprs) => exprs.iter().all(|expr| expr.eval(properties, at)),
+            WhereExpr::Or(exprs) => exprs.iter().any(|expr| expr.eval(properties, at)),
+            WhereExpr::Nor(exprs) => !exprs.iter().any(|expr| expr.eval(properties, at)),
             WhereExpr::Predicate(predicate) => predicate.eval(properties),
+            WhereExpr::ActiveAt(clause) => eval_active_at(clause, properties, at),
         }
     }
 }
@@ -194,6 +226,71 @@ fn parse_expr_list(value: &serde_json::Value) -> Result<Vec<WhereExpr>, SpatialE
         .as_array()
         .ok_or_else(|| invalid_predicate("$and/$or/$nor requires an array of predicates"))?;
     array.iter().map(WhereExpr::parse).collect()
+}
+
+/// Parse `{ "$activeAt": { "daysOfWeek": <field>, "startHour": <field>, "endHour": <field> } }`
+/// (ADR-0017). The values are the rule property names that declare the window;
+/// no rule-schema key is reserved.
+fn parse_active_at(value: &serde_json::Value) -> Result<ActiveAtClause, SpatialError> {
+    let map = value
+        .as_object()
+        .ok_or_else(|| invalid_predicate("$activeAt requires an object of window field names"))?;
+    let field = |name: &str| -> Result<String, SpatialError> {
+        map.get(name)
+            .and_then(|value| value.as_str())
+            .map(String::from)
+            .ok_or_else(|| {
+                invalid_predicate(format!("$activeAt requires a string '{name}' field name"))
+            })
+    };
+    Ok(ActiveAtClause {
+        days_of_week_field: field("daysOfWeek")?,
+        start_hour_field: field("startHour")?,
+        end_hour_field: field("endHour")?,
+    })
+}
+
+/// A `$activeAt` admission (ADR-0017): the rule's `daysOfWeek` bitmask
+/// (Mon=1 … Sun=64) contains the reference day and its hour falls in
+/// `[startHour, endHour)` (midnight-wrapping when `startHour > endHour`). A
+/// missing or non-Int temporal field is a non-match; `daysOfWeek = 0` never
+/// admits; `startHour == endHour` is an empty window.
+fn eval_active_at(
+    clause: &ActiveAtClause,
+    properties: &BTreeMap<String, PropertyValue>,
+    at: Option<TemporalInstant>,
+) -> bool {
+    let Some(at) = at else {
+        return false;
+    };
+    let get_int = |field: &str| match properties.get(field) {
+        Some(PropertyValue::Int(value)) => Some(*value),
+        _ => None,
+    };
+    let Some(days) = get_int(&clause.days_of_week_field) else {
+        return false;
+    };
+    let Some(start) = get_int(&clause.start_hour_field) else {
+        return false;
+    };
+    let Some(end) = get_int(&clause.end_hour_field) else {
+        return false;
+    };
+    // The parse always yields a valid day (1..=7); guard anyway so a malformed
+    // programmatic `TemporalInstant` evaluates as a non-match, never underflowing
+    // the bit shift below (no-panic stance).
+    if !(1..=7).contains(&at.day_of_week) {
+        return false;
+    }
+    if days & (1 << (at.day_of_week - 1)) == 0 {
+        return false;
+    }
+    let hour = at.hour as i64;
+    if start <= end {
+        start <= hour && hour < end
+    } else {
+        hour >= start || hour < end
+    }
 }
 
 fn parse_implicit_and(

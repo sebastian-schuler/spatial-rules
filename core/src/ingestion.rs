@@ -6,7 +6,7 @@
 use geo::Geometry;
 
 use crate::candidate::Candidate;
-use crate::error::SpatialError;
+use crate::error::{ErrorCode, SpatialError};
 use crate::properties::properties_from_json;
 use crate::rule::Rule;
 
@@ -40,10 +40,12 @@ pub fn rule_from_feature(feature: &geojson::Feature) -> Result<Rule, SpatialErro
         .as_ref()
         .map(properties_from_json)
         .unwrap_or_default();
+    let priority = extract_feature_priority(feature, &id)?;
     Ok(Rule {
         id,
         properties,
         geometry,
+        priority,
     })
 }
 
@@ -97,4 +99,40 @@ fn id_to_string(id: &geojson::feature::Id) -> String {
         geojson::feature::Id::String(s) => s.clone(),
         geojson::feature::Id::Number(n) => n.to_string(),
     }
+}
+
+/// Read the top-level `priority` foreign member (ADR-0015). Missing → `0`.
+/// A present value that is not an integer (string/float/bool) → a construction
+/// error naming the rule. (Non-negativity is enforced at compile —
+/// [`Ruleset::build_with`](crate::ruleset::Ruleset::build_with) — the single
+/// authoritative gate every construction path passes through.)
+fn extract_feature_priority(
+    feature: &geojson::Feature,
+    rule_id: &str,
+) -> Result<i64, SpatialError> {
+    let Some(foreign_members) = &feature.foreign_members else {
+        return Ok(0);
+    };
+    let Some(priority) = foreign_members.get("priority") else {
+        return Ok(0);
+    };
+    validate_priority(rule_id, priority)
+}
+
+/// Validate that a present top-level `priority` is an integer (ADR-0015),
+/// so it can become the `Rule.priority` field. Shared by the GeoJSON
+/// ingestion gate and the canonical load gate so both fail with the same
+/// `SR_RULESET_CONSTRUCTION_FAILED` code and name the rule. This is the
+/// **typedness** gate only — non-negativity is enforced once, at compile
+/// (`Ruleset::build_with`), which every construction path passes through.
+pub(crate) fn validate_priority(
+    rule_id: &str,
+    found: &serde_json::Value,
+) -> Result<i64, SpatialError> {
+    found.as_i64().ok_or_else(|| {
+        SpatialError::new(
+            ErrorCode::RulesetConstructionFailed,
+            format!("rule '{rule_id}': top-level 'priority' must be an integer, found {found}"),
+        )
+    })
 }

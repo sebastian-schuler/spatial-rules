@@ -2,6 +2,8 @@ name: test
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 jobs:
@@ -11,13 +13,19 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # The python crate is a workspace member; its abi3 cdylib needs no
+      # interpreter to compile, so skip pyo3's interpreter detection. Its
+      # Rust unit tests link libpython, which is not available here — the
+      # crate is exercised by the dedicated `python` job (maturin + pytest).
+      PYO3_NO_PYTHON: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Unit + integration tests (includes proptest)
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude spatial-rules-python
       - name: Lint
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets --exclude spatial-rules-python
 
   node:
     strategy:
@@ -70,6 +78,62 @@ jobs:
       - name: Smoke test (Bun)
         working-directory: node
         run: bun test/smoke.ts
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: taiki-e/install-action@wasm-pack
+      - name: Build wasm package
+        working-directory: wasm
+        run: wasm-pack build --release --target bundler --out-dir pkg
+      - name: Install dev dependencies
+        working-directory: wasm
+        run: npm install
+      - name: Typecheck (tsc --noEmit)
+        working-directory: wasm
+        run: npm run typecheck
+      - name: Smoke test (Node)
+        working-directory: wasm
+        run: node --experimental-strip-types --experimental-wasm-modules test/smoke.ts
+      - name: Smoke test (Deno)
+        working-directory: wasm
+        run: deno run --allow-read test/smoke.ts
+
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          working-directory: python
+      - name: Install wheel + pytest
+        working-directory: python
+        run: |
+          pip install --force-reinstall dist/spatial_rules-*.whl
+          pip install pytest
+      - name: Smoke test (pytest)
+        working-directory: python
+        run: python -m pytest tests -q
 
   clean-install:
     # Zero-toolchain install path (ticket 18 / ticket 07): install the packed

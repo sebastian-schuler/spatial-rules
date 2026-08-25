@@ -77,6 +77,7 @@ mod tests {
             id: "zone".to_string(),
             properties: Default::default(),
             geometry: geometry.clone(),
+            priority: 0,
         }])
         .unwrap();
         let query = Query::new(SpatialPredicate::Intersects);

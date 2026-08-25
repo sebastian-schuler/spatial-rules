@@ -23,12 +23,16 @@ below is unchanged; only the duplication moved into that module.
 | Property invariants | `core/tests/proptest.rs` | DE-9IM identities, `WhereExpr` eval totality, batch alignment on random inputs |
 | Public API surface (exported-name seam) | `core/tests/api_surface.rs` | pins every **exported** function directly (so a rename/drop loses coverage loudly); complements the area owners above: `rule_from_feature`/`candidate_from_feature`, numeric feature ids, `build_spatial_index` + concrete index builders + `query_envelope_into` dedup/reuse, `Query` builders, predicate string round-trips, `Engine::new`/`replace`/`query_mask`, `classify_candidate`, `SpatialError` constructors, prepared-geometry handle, `PropertyValue` ordering |
 | Node binding | `node/test/smoke.ts` | mask + rich + overlap + canonical + async + `SR_*` surfacing + dynamic input types + empty batch + single-feature input + `SpatialRulesError` class (Node + Bun) |
+| Wasm binding | `wasm/test/smoke.ts` | the controlled-ruleset literals (withinDistance, temporal Monday/Tuesday, aggregate count + coverage, resolve winner/values/applicable) + production `~1k×30` matched count (481) + `SpatialRulesError` `SR_*` surfacing, run under **Node and Deno**; no native-addon dependency |
+| Python binding | `python/tests/test_smoke.py` | same controlled-ruleset literals + production matched count + full Engine surface (`replace`/`stats`) with Pythonic dict/list types, via pytest |
 
 ## Definition of done
 
 - `cargo test --workspace` green (proptest runs a bounded case count by default).
 - `cargo clippy --workspace --all-targets` green.
 - Node smoke green under the runtime matrix (Node 22/24/26 + Bun) — `.github/workflows/test.yml`.
+- Wasm smoke green under Node and Deno (`wasm-pack build --target bundler`).
+- Python smoke green via pytest on CPython 3.11 and 3.13 (maturin abi3 wheel).
 - turf cross-check green (`bun run bench cross-check`), with DE-9IM/turf
   disagreements recorded as known quirks in `cross_check.mjs` and ADR-0008.
 

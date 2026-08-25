@@ -176,6 +176,7 @@ fn every_predicate_has_a_stable_string_round_trip() {
         SpatialPredicate::CoveredBy,
         SpatialPredicate::Touches,
         SpatialPredicate::Overlaps,
+        SpatialPredicate::WithinDistance,
     ] {
         assert_eq!(SpatialPredicate::from_str(predicate.as_str()).unwrap(), predicate);
     }

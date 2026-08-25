@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::candidate::Candidate;
 use crate::error::SpatialError;
-use crate::query::{CandidateOutcome, Query};
+use crate::query::{CandidateOutcome, Query, ResolutionOutcome};
 use crate::rule::Rule;
 use crate::ruleset::Ruleset;
 
@@ -73,6 +73,19 @@ impl Engine {
     /// without materialising per-match rule ids.
     pub fn query_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
         self.snapshot().query_mask(candidates, query)
+    }
+
+    /// Resolve a batch against the current ruleset (same semantics as
+    /// [`Ruleset::resolve`], ADR-0015).
+    pub fn resolve(&self, candidates: &[Candidate], query: &Query) -> Vec<ResolutionOutcome> {
+        self.snapshot().resolve(candidates, query)
+    }
+
+    /// Resolve a batch and return the compact `0/1/2` mask (`0` no resolution,
+    /// `1` resolved, `2` invalid, ADR-0015), without materialising the winner,
+    /// values, or explanation.
+    pub fn resolve_mask(&self, candidates: &[Candidate], query: &Query) -> Vec<u8> {
+        self.snapshot().resolve_mask(candidates, query)
     }
 
     /// A cheap snapshot of the current ruleset; kept alive by the caller.

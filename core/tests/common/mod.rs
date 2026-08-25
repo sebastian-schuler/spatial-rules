@@ -104,6 +104,7 @@ pub fn rule(id: &str, geometry: Geometry<f64>) -> Rule {
         id: id.to_string(),
         properties: Default::default(),
         geometry,
+        priority: 0,
     }
 }
 
@@ -120,6 +121,7 @@ pub fn rule_with_props(
             .map(|(key, value)| (key.to_string(), value.clone()))
             .collect(),
         geometry: Geometry::Polygon(polygon),
+        priority: 0,
     }
 }
 

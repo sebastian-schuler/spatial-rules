@@ -136,3 +136,32 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Wasm package (npm spatial-rules-wasm): wasm-pack build + tsc emit run
+      # from the `prepack` hook, so this only needs the wasm32 toolchain and
+      # devDependencies on PATH.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@wasm-pack
+      - name: Install wasm dev dependencies
+        working-directory: wasm
+        run: npm install
+      - name: Publish wasm package
+        working-directory: wasm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Python package (PyPI spatial-rules): maturin builds the abi3 wheel and
+      # uploads it. Uses the PYPI_TOKEN secret (username `__token__`).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: PyO3/maturin-action@v1
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          command: publish
+          args: --release --skip-existing
+          working-directory: python

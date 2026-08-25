@@ -68,6 +68,16 @@
                     "jsonpath": "$.optionalDependencies[\"spatial-rules-linux-arm64-musl\"]"
                 }
             ]
+        },
+        "wasm": {
+            "release-type": "node",
+            "package-name": "spatial-rules-wasm",
+            "changelog-path": "wasm/CHANGELOG.md"
+        },
+        "python": {
+            "release-type": "python",
+            "package-name": "spatial-rules",
+            "changelog-path": "python/CHANGELOG.md"
         }
     }
 }

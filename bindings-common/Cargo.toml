@@ -1,0 +1,11 @@
+[package]
+name = "spatial-rules-bindings-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared rich-JSON serialization for the wasm/python bindings"
+
+[dependencies]
+serde_json.workspace = true
+spatial-rules-core = { path = "../core" }

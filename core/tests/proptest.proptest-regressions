@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e5d2de824b90d3a313b54ecbef4117f623118e33f6881d1f604f7c475b3bdd34 # shrinks to rects = [RECT(159.2601376164383 -79.69452208333574,160.2601376164383 -69.96299532572077)], (lon, lat) = (157.79342361968477, -74.28126533638867), distance = 73791.55725308752
