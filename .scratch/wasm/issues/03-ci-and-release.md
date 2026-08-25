@@ -55,4 +55,8 @@ published npm and PyPI packages.
 > manifest extended to `spatial-rules-wasm` (npm, `wasm/` changelog) and
 > `spatial-rules` (PyPI, `python/` changelog). The existing rust job gains
 > `PYO3_NO_PYTHON=1` so the workspace build needs no interpreter; node/bun
-> jobs untouched.*
+> jobs untouched. 2026-08-25 follow-up: `prebuild-publish.yml` now also
+> publishes `spatial-rules-wasm` to npm (wasm-pack build + tsc emit via the
+> `prepack` hook) and `spatial-rules` to PyPI (maturin `publish --release
+> --skip-existing`, `PYPI_TOKEN` secret) on `v*` tags — the release-automation
+> criterion is fully met.*
