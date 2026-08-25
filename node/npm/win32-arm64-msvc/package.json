@@ -1,6 +1,6 @@
 {
     "name": "spatial-rules-win32-arm64-msvc",
-    "version": "0.1.1",
+    "version": "1.0.0",
     "main": "spatial-rules.win32-arm64-msvc.node",
     "files": [
         "spatial-rules.win32-arm64-msvc.node"
