@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-wasm-v0.2.0...spatial-rules-wasm-v0.2.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **release:** auto-publish on release event + wasm/pkg packaging + maturin args ([b1f76bf](https://github.com/sebastian-schuler/spatial-rules/commit/b1f76bf2f29a65cb52146bd6e6906d96548e5a17))
+* **release:** wasm pkg in tarball (--no-gitignore), maturin publish args, idempotent npm publish ([08b198a](https://github.com/sebastian-schuler/spatial-rules/commit/08b198a4353c35635205a66fe915190279e04b5e))
+
 ## [0.2.0](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-wasm-v0.1.1...spatial-rules-wasm-v0.2.0) (2026-08-25)
 
 

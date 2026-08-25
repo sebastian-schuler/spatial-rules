@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-python-v0.2.0...spatial-rules-python-v0.2.1) (2026-08-25)
+
+
+### Miscellaneous Chores
+
+* **spatial-rules-python:** Synchronize spatial-rules versions
+
 ## [0.2.0](https://github.com/sebastian-schuler/spatial-rules/compare/spatial-rules-python-v0.1.1...spatial-rules-python-v0.2.0) (2026-08-25)
 
 
