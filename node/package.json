@@ -1,6 +1,6 @@
 {
     "name": "spatial-rules",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "High-performance spatial rules/query engine (Rust core, Node/Bun binding)",
     "license": "MIT OR Apache-2.0",
     "author": "Sebastian Schuler",
