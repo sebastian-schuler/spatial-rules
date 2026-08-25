@@ -5,6 +5,7 @@
             "release-type": "node",
             "package-name": "spatial-rules",
             "include-component-in-tag": false,
+            "bump-minor-pre-major": true,
             "changelog-path": "/CHANGELOG.md",
             "extra-files": [
                 {
@@ -72,12 +73,22 @@
         "wasm": {
             "release-type": "node",
             "package-name": "spatial-rules-wasm",
-            "changelog-path": "wasm/CHANGELOG.md"
+            "bump-minor-pre-major": true,
+            "changelog-path": "CHANGELOG.md"
         },
         "python": {
             "release-type": "python",
             "package-name": "spatial-rules",
-            "changelog-path": "python/CHANGELOG.md"
+            "component": "spatial-rules-python",
+            "bump-minor-pre-major": true,
+            "changelog-path": "CHANGELOG.md",
+            "extra-files": [
+                {
+                    "type": "toml",
+                    "path": "../Cargo.toml",
+                    "jsonpath": "$.workspace.package.version"
+                }
+            ]
         }
     }
 }
