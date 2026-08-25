@@ -96,8 +96,8 @@
             "extra-files": [
                 {
                     "type": "toml",
-                    "path": "../Cargo.toml",
-                    "jsonpath": "$.workspace.package.version"
+                    "path": "Cargo.toml",
+                    "jsonpath": "$.package.version"
                 }
             ]
         }
