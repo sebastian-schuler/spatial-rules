@@ -66,4 +66,15 @@ published npm and PyPI packages.
 > excludes `spatial-rules-python` (`cargo test/clippy --workspace
 > --exclude spatial-rules-python`) because its lib-test links libpython
 > (absent under `PYO3_NO_PYTHON`); the python crate enables pyo3
-> `extension-module` so the maturin wheel does not link libpython.*
+> `extension-module` so the maturin wheel does not link libpython.
+> 2026-08-25 release-please fixes (`8f6da80`): PR #4 initially proposed node
+> **1.0.0** (breaking changes since 0.1.1) and wasm/python **0.2.0** — both
+> wrong per the repo's pre-1.0 policy and the packages' never-published state.
+> Config now sets `bump-minor-pre-major: true` for all three (node 0.1.1 →
+> 0.2.0), removes the pre-seeded `wasm`/`python` manifest entries so their
+> **first release is 0.1.0** (bootstrap), fixes the doubled changelog paths
+> (`wasm/wasm/` → `wasm/`), and points the python version at its true source
+> (`Cargo.toml` `workspace.package.version` via a toml extra-file, since
+> `pyproject.toml` declares `dynamic = ["version"]`). Python gets a distinct
+> `spatial-rules-python` component so its tags don't collide with the
+> historical node `spatial-rules-v0.1.0` tag.*
