@@ -32,7 +32,9 @@ Release PR, so releases are deliberate.
 
 1. Ensure the `NPM_TOKEN` secret exists on the repository (a token with
    `publish` scope, e.g. from an automation account).
-2. Confirm `release-please.yml`, `release-please-config.json`, and
+2. Ensure the `PYPI_TOKEN` secret exists (a PyPI API token with upload scope for
+   the `spatial-rules` project; maturin publishes with username `__token__`).
+3. Confirm `release-please.yml`, `release-please-config.json`, and
    `.release-please-manifest.json` are present and committed.
 
 ## Making a release
