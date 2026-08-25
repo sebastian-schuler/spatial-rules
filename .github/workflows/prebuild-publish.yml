@@ -1,12 +1,18 @@
 name: prebuild-and-publish
 
 on:
+  # release-please creates tags via the GitHub API, which fires a `release`
+  # event rather than a `push` event — listen for both so a release PR merge
+  # auto-publishes (the publish job guards on refs/tags/v).
+  release:
+    types: [published]
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 jobs:
   build:
+    if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
