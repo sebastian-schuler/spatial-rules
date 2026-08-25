@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "spatial-rules-benchmarks"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "geo",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "spatial-rules-bindings-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "spatial-rules-core",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "spatial-rules-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "geo",
  "geojson",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "spatial-rules-node"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "spatial-rules-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "serde_json",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "spatial-rules-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "spatial-rules-bindings-common",

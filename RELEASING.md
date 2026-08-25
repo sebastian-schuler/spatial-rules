@@ -24,9 +24,9 @@ commit on main (Conventional Commits)
                        - publishes spatial-rules to PyPI
 ```
 
-The npm version and the Rust workspace version are **independent** — release-please
-only manages the packages. Nothing is published until you merge the
-Release PR, so releases are deliberate.
+All three packages share **one version** (release-please `linked-versions`
+plugin); the Rust workspace version tracks it. Nothing is published until you
+merge the Release PR, so releases are deliberate.
 
 ## One-time setup (before the first release)
 
@@ -56,7 +56,23 @@ without release-please, push a `vX.Y.Z` tag to the matching commit.
 
 Follow [SemVer](https://semver.org). `feat` → minor, `fix` → patch;
 `BREAKING CHANGE:` in the commit footer → major. Pre-1.0, breaking changes bump
-the minor version.
+the minor version (release-please config sets `bump-minor-pre-major: true` for
+all three packages).
+
+The three packages share **one version** (a `linked-versions` release-please
+plugin keeps `spatial-rules`, `spatial-rules-wasm`, and `spatial-rules-python`
+in lockstep), and the Rust workspace version tracks it too. Per-package
+version sources, all updated by release-please on a release:
+
+- **node** — `node/package.json` (+ the 6 platform packages in lockstep via
+  `extra-files`), tags `vX.Y.Z`.
+- **wasm** — `wasm/package.json`, tags `spatial-rules-wasm-vX.Y.Z`.
+- **python** — `pyproject.toml` declares `dynamic = ["version"]` and maturin
+  reads the version from the Rust workspace (`[workspace.package] version` in
+  the root `Cargo.toml`); release-please updates that workspace version via
+  `extra-files` (toml, `$.workspace.package.version`). Tags
+  `spatial-rules-python-vX.Y.Z` (a distinct component — the plain
+  `spatial-rules-*` tag namespace predates node's switch to `v*`).
 
 ## Verification
 
