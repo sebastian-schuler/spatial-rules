@@ -71,11 +71,11 @@
         "typescript": "^5.9.0"
     },
     "optionalDependencies": {
-        "spatial-rules-win32-x64-msvc": "0.2.0",
-        "spatial-rules-win32-arm64-msvc": "0.2.0",
-        "spatial-rules-linux-x64-gnu": "0.2.0",
-        "spatial-rules-linux-x64-musl": "0.2.0",
-        "spatial-rules-linux-arm64-gnu": "0.2.0",
-        "spatial-rules-linux-arm64-musl": "0.2.0"
+        "spatial-rules-win32-x64-msvc": "0.2.1",
+        "spatial-rules-win32-arm64-msvc": "0.2.1",
+        "spatial-rules-linux-x64-gnu": "0.2.1",
+        "spatial-rules-linux-x64-musl": "0.2.1",
+        "spatial-rules-linux-arm64-gnu": "0.2.1",
+        "spatial-rules-linux-arm64-musl": "0.2.1"
     }
 }
