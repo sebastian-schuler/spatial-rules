@@ -139,7 +139,13 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish root package
         working-directory: node
-        run: npm publish --access public
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "spatial-rules@$VERSION" version >/dev/null 2>&1; then
+            echo "skip spatial-rules@$VERSION (already published)"
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -155,7 +161,13 @@ jobs:
         run: npm install
       - name: Publish wasm package
         working-directory: wasm
-        run: npm publish --access public
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "spatial-rules-wasm@$VERSION" version >/dev/null 2>&1; then
+            echo "skip spatial-rules-wasm@$VERSION (already published)"
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -169,5 +181,7 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           command: publish
-          args: --release --skip-existing
+          # maturin publish builds in release mode by default; `--release` is a
+          # `build`-only flag and would be rejected here.
+          args: --skip-existing
           working-directory: python
