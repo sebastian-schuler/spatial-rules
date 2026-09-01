@@ -258,3 +258,39 @@ fn aggregate_works_over_the_temporal_applicable_set() {
     assert_eq!(aggregate.min, Some(50.0));
     assert_eq!(aggregate.max, Some(50.0));
 }
+
+/// Card 2: the aggregate rides the outcome — the core computes it and the
+/// matched/resolved outcome carries it (ADR-0018), so a caller never re-derives
+/// rule ids to get the analytics. Absent unless the query requests an
+/// `aggregate` spec.
+#[test]
+fn aggregate_rides_the_matched_and_resolved_outcome() {
+    let ruleset = Ruleset::build(vec![
+        speed_rule("left", 0.0, 4.0, Some(30)),
+        speed_rule("right", 6.0, 10.0, Some(50)),
+    ])
+    .unwrap();
+    let candidate = candidate("c", square(2.0, 2.0, 8.0, 8.0));
+
+    // With the spec, both the match and resolve outcomes carry the aggregate.
+    let matched = &ruleset.query(std::slice::from_ref(&candidate), &aggregate_query())[0];
+    let CandidateOutcome::Matched { aggregate: Some(matched_agg), .. } = matched else {
+        panic!("expected the aggregate to ride the matched outcome");
+    };
+    assert_eq!(matched_agg.count, Some(2));
+    assert_eq!(matched_agg.min, Some(30.0));
+
+    let resolved = &ruleset.resolve(std::slice::from_ref(&candidate), &aggregate_query())[0];
+    let ResolutionOutcome::Resolved { aggregate: Some(resolved_agg), .. } = resolved else {
+        panic!("expected the aggregate to ride the resolved outcome");
+    };
+    assert_eq!(resolved_agg.count, Some(2));
+    assert_eq!(resolved_agg.min, Some(30.0));
+
+    // Without a spec, no aggregate is carried.
+    let plain = Query::new(SpatialPredicate::Intersects);
+    match &ruleset.query(std::slice::from_ref(&candidate), &plain)[0] {
+        CandidateOutcome::Matched { aggregate: None, .. } => {}
+        other => panic!("expected no aggregate on a spec-less match, got {other:?}"),
+    }
+}

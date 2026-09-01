@@ -14,8 +14,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use spatial_rules_bindings_common::{
-    candidate_outcome_to_json, parse_query as parse_query_json, report_to_json,
-    resolution_outcome_to_json, spatial_error_message,
+    parse_query as parse_query_json, query_rich_json, report_to_json, resolve_rich_json,
+    spatial_error_message,
 };
 use spatial_rules_core::{Engine, SpatialError};
 
@@ -108,19 +108,7 @@ impl Ruleset {
         let (candidates, query) = parse_inputs(candidates, query).map_err(to_pyerr)?;
         let ruleset = self.engine.snapshot();
         let outcomes = ruleset.query(&candidates, &query);
-        let rich: Vec<serde_json::Value> = candidates
-            .iter()
-            .zip(&outcomes)
-            .map(|(candidate, outcome)| {
-                candidate_outcome_to_json(&ruleset, candidate, &query, outcome)
-            })
-            .collect();
-        let json_str = serde_json::to_string(&rich).map_err(|e| {
-            to_pyerr(SpatialError::new(
-                spatial_rules_core::ErrorCode::Native,
-                format!("serialize result: {e}"),
-            ))
-        })?;
+        let json_str = query_rich_json(&ruleset, &outcomes);
         json_str_to_py(py, &json_str)
     }
 
@@ -135,19 +123,7 @@ impl Ruleset {
         let (candidates, query) = parse_inputs(candidates, query).map_err(to_pyerr)?;
         let ruleset = self.engine.snapshot();
         let outcomes = ruleset.resolve(&candidates, &query);
-        let rich: Vec<serde_json::Value> = candidates
-            .iter()
-            .zip(&outcomes)
-            .map(|(candidate, outcome)| {
-                resolution_outcome_to_json(&ruleset, candidate, query.aggregate.as_ref(), outcome)
-            })
-            .collect();
-        let json_str = serde_json::to_string(&rich).map_err(|e| {
-            to_pyerr(SpatialError::new(
-                spatial_rules_core::ErrorCode::Native,
-                format!("serialize result: {e}"),
-            ))
-        })?;
+        let json_str = resolve_rich_json(&ruleset, &outcomes);
         json_str_to_py(py, &json_str)
     }
 

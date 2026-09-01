@@ -54,7 +54,8 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
         std::slice::from_ref(&on_ring),
         &Query::new(SpatialPredicate::Intersects),
     );
-    assert_eq!(outcomes, vec![CandidateOutcome::Matched { rule_ids: vec![r0], overlaps: None }]);
+    assert_eq!(        outcomes, vec![CandidateOutcome::Matched { rule_ids: vec![r0], overlaps: None, aggregate: None }]
+);
 
     // Inside the hole: disjoint from r0, and far from r1.
     let in_hole = candidate_geometry("in-hole", square_around(0.0, 0.0, 0.25));
@@ -72,5 +73,6 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
     }))
     .unwrap();
     let outcomes = ruleset.query(std::slice::from_ref(&on_ring), &query);
-    assert_eq!(outcomes, vec![CandidateOutcome::Matched { rule_ids: vec![r0], overlaps: None }]);
+    assert_eq!(        outcomes, vec![CandidateOutcome::Matched { rule_ids: vec![r0], overlaps: None, aggregate: None }]
+);
 }

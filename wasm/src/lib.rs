@@ -8,12 +8,11 @@
 //! reconstructed by the TS wrapper's `SpatialRulesError` — the same contract
 //! the napi async path uses.
 //!
-//! The rich-JSON serializers are shared with the Python binding via
-//! `spatial-rules-bindings-common` (identical payload shapes across all three
-//! bindings; `node`'s copy stays inline because its crate is out of scope).
+//! The rich-JSON serializers are shared by all three bindings (node, wasm,
+//! python) via `spatial-rules-bindings-common` — identical payload shapes.
 
 use spatial_rules_bindings_common::{
-    candidate_outcome_to_json, parse_query, resolution_outcome_to_json, spatial_error_message,
+    parse_query, query_rich_json, resolve_rich_json, spatial_error_message,
 };
 use spatial_rules_core::{candidates_from_geojson, Candidate, ErrorCode, Query, Ruleset, SpatialError};
 use wasm_bindgen::prelude::*;
@@ -64,16 +63,7 @@ impl SpatialRuleset {
     pub fn query_rich(&self, candidates: &str, query: &str) -> Result<String, JsError> {
         let (candidates, query) = parse_inputs(candidates, query).map_err(spatial_error_to_js)?;
         let outcomes = self.ruleset.query(&candidates, &query);
-        let rich: Vec<serde_json::Value> = candidates
-            .iter()
-            .zip(&outcomes)
-            .map(|(candidate, outcome)| {
-                candidate_outcome_to_json(&self.ruleset, candidate, &query, outcome)
-            })
-            .collect();
-        serde_json::to_string(&rich).map_err(|e| {
-            spatial_error_to_js(SpatialError::new(ErrorCode::Native, format!("serialize result: {e}")))
-        })
+        Ok(query_rich_json(&self.ruleset, &outcomes))
     }
 
     /// Per-candidate resolution outcomes as a JSON string
@@ -81,21 +71,7 @@ impl SpatialRuleset {
     pub fn resolve_rich(&self, candidates: &str, query: &str) -> Result<String, JsError> {
         let (candidates, query) = parse_inputs(candidates, query).map_err(spatial_error_to_js)?;
         let outcomes = self.ruleset.resolve(&candidates, &query);
-        let rich: Vec<serde_json::Value> = candidates
-            .iter()
-            .zip(&outcomes)
-            .map(|(candidate, outcome)| {
-                resolution_outcome_to_json(
-                    &self.ruleset,
-                    candidate,
-                    query.aggregate.as_ref(),
-                    outcome,
-                )
-            })
-            .collect();
-        serde_json::to_string(&rich).map_err(|e| {
-            spatial_error_to_js(SpatialError::new(ErrorCode::Native, format!("serialize result: {e}")))
-        })
+        Ok(resolve_rich_json(&self.ruleset, &outcomes))
     }
 
     /// The validated rules as canonical JSON (ADR-0013).

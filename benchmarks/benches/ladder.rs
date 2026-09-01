@@ -254,16 +254,21 @@ fn bench_surfaces(criterion: &mut Criterion) {
     aggregate.bench_function("query_rich_baseline", |bencher| {
         bencher.iter(|| black_box(rstar.query(&candidates, &intersects)))
     });
+    // The aggregate rides the rich outcome (ADR-0018): query once with the spec
+    // and read `aggregate` off each matched outcome — the realistic path.
+    let query_count = Query::new(SpatialPredicate::Intersects).with_aggregate(count_numeric);
+    let query_coverage = Query::new(SpatialPredicate::Intersects).with_aggregate(coverage);
     aggregate.bench_function("aggregate_count_numeric", |bencher| {
         bencher.iter(|| {
-            let outcomes = rstar.query(&candidates, &intersects);
+            let outcomes = rstar.query(&candidates, &query_count);
             let mut total = 0u64;
-            for (candidate, outcome) in candidates.iter().zip(&outcomes) {
-                if let CandidateOutcome::Matched { rule_ids, .. } = outcome {
-                    total += count_numeric
-                        .compute(candidate, rule_ids, &rstar)
-                        .count
-                        .unwrap_or(0) as u64;
+            for outcome in &outcomes {
+                if let CandidateOutcome::Matched {
+                    aggregate: Some(aggregate),
+                    ..
+                } = outcome
+                {
+                    total += aggregate.count.unwrap_or(0) as u64;
                 }
             }
             black_box(total)
@@ -271,14 +276,15 @@ fn bench_surfaces(criterion: &mut Criterion) {
     });
     aggregate.bench_function("aggregate_coverage", |bencher| {
         bencher.iter(|| {
-            let outcomes = rstar.query(&candidates, &intersects);
+            let outcomes = rstar.query(&candidates, &query_coverage);
             let mut total = 0.0f64;
-            for (candidate, outcome) in candidates.iter().zip(&outcomes) {
-                if let CandidateOutcome::Matched { rule_ids, .. } = outcome {
-                    total += coverage
-                        .compute(candidate, rule_ids, &rstar)
-                        .coverage
-                        .unwrap_or(0.0);
+            for outcome in &outcomes {
+                if let CandidateOutcome::Matched {
+                    aggregate: Some(aggregate),
+                    ..
+                } = outcome
+                {
+                    total += aggregate.coverage.unwrap_or(0.0);
                 }
             }
             black_box(total)

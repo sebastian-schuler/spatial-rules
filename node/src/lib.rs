@@ -12,9 +12,11 @@ use std::sync::Arc;
 use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
+use spatial_rules_bindings_common::{
+    parse_query, query_rich_json, report_to_json, resolve_rich_json,
+};
 use spatial_rules_core::{
-    candidates_from_geojson, AggregateSpec, Candidate, CandidateOutcome, Engine, ErrorCode, Query,
-    ReplaceReport, ResolutionOutcome, RuleId, Ruleset, SpatialError,
+    candidates_from_geojson, Candidate, Engine, ErrorCode, Query, ReplaceReport, SpatialError,
 };
 
 fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
@@ -34,15 +36,6 @@ fn bytes_to_str<'a>(buffer: &'a Buffer, kind: &str) -> Result<&'a str, SpatialEr
         .map_err(|e| SpatialError::invalid_geojson(format!("{kind} are not valid UTF-8: {e}")))
 }
 
-fn parse_query(query_json: &str) -> Result<Query, SpatialError> {
-    let value: serde_json::Value = serde_json::from_str(query_json)
-        .map_err(|e| SpatialError::invalid_query(format!("query is not valid JSON: {e}")))?;
-    Query::from_json(&value)
-}
-
-/// Parse candidate bytes + query JSON into the engine types. The caller maps
-/// the `SpatialError` to the sync (`Error<&'static str>`) or async (`Error`)
-/// napi error shape.
 fn parse_inputs_core(
     candidates: &[u8],
     query: &str,
@@ -54,15 +47,6 @@ fn parse_inputs_core(
     Ok((candidates, query))
 }
 
-fn report_to_json(report: ReplaceReport) -> serde_json::Value {
-    serde_json::json!({
-        "version": report.version,
-        "ruleCount": report.rule_count,
-        "buildDurationMs": report.build_duration_ms,
-        "lastSwapTime": report.last_swap_time_unix_ms,
-    })
-}
-
 fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str> {
     serde_json::to_string(&report_to_json(report)).map_err(|e| {
         spatial_error_to_napi(SpatialError::new(
@@ -70,97 +54,6 @@ fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str>
             format!("serialize report: {e}"),
         ))
     })
-}
-
-/// The requested per-candidate aggregate as the ADR-0018 JSON object — only
-/// the functions the spec asked for (and that produced a value) are emitted.
-fn aggregate_json(
-    spec: &AggregateSpec,
-    candidate: &Candidate,
-    applicable: &[RuleId],
-    ruleset: &Ruleset,
-) -> serde_json::Value {
-    let aggregate = spec.compute(candidate, applicable, ruleset);
-    let mut object = serde_json::Map::new();
-    if let Some(count) = aggregate.count {
-        object.insert("count".to_string(), serde_json::json!(count));
-    }
-    for (key, value) in [
-        ("min", aggregate.min),
-        ("max", aggregate.max),
-        ("sum", aggregate.sum),
-        ("avg", aggregate.avg),
-        ("coverage", aggregate.coverage),
-    ] {
-        if let Some(value) = value {
-            object.insert(key.to_string(), serde_json::json!(value));
-        }
-    }
-    serde_json::Value::Object(object)
-}
-
-/// One `ResolutionOutcome` as the ADR-0015 JSON shape: `{outcome, winner,
-/// values, applicable}` for resolved, `{outcome: notMatched}`, or
-/// `{outcome: invalid, reason}`. Rule ids are the application's original
-/// strings (mapped via the snapshot, so a concurrent replace can't tear them
-/// apart). `values` uses the rules' compact typed properties, which serialize
-/// to the plain JSON scalars they wrap (ADR-0013).
-fn resolution_outcome_to_json(
-    ruleset: &Ruleset,
-    candidate: &Candidate,
-    aggregate: Option<&AggregateSpec>,
-    outcome: &ResolutionOutcome,
-) -> serde_json::Value {
-    match outcome {
-        ResolutionOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
-        ResolutionOutcome::Invalid { reason } => {
-            serde_json::json!({ "outcome": "invalid", "reason": reason })
-        }
-        ResolutionOutcome::Resolved {
-            winner,
-            values,
-            applicable,
-        } => {
-            let applicable_json: Vec<serde_json::Value> = applicable
-                .iter()
-                .map(|rule| {
-                    serde_json::json!({
-                        "ruleId": ruleset.string_id(rule.rule_id),
-                        "priority": rule.priority,
-                        "spatialMatched": rule.spatial_matched,
-                        "propertyMatched": rule.property_matched,
-                    })
-                })
-                .collect();
-            let mut object = serde_json::Map::new();
-            object.insert("outcome".to_string(), serde_json::json!("resolved"));
-            object.insert(
-                "winner".to_string(),
-                serde_json::json!(ruleset.string_id(*winner)),
-            );
-            let mut values_json = serde_json::Map::new();
-            for (key, value) in values {
-                values_json.insert(
-                    key.clone(),
-                    serde_json::to_value(value)
-                        .expect("property values always serialize to JSON scalars"),
-                );
-            }
-            object.insert("values".to_string(), serde_json::Value::Object(values_json));
-            object.insert(
-                "applicable".to_string(),
-                serde_json::Value::Array(applicable_json),
-            );
-            if let Some(spec) = aggregate {
-                let rule_ids: Vec<RuleId> = applicable.iter().map(|rule| rule.rule_id).collect();
-                object.insert(
-                    "aggregate".to_string(),
-                    aggregate_json(spec, candidate, &rule_ids, ruleset),
-                );
-            }
-            serde_json::Value::Object(object)
-        }
-    }
 }
 
 #[napi]
@@ -253,19 +146,7 @@ impl SpatialRuleset {
         // ruleset (a concurrent replace can't tear them apart, ADR-0007).
         let ruleset = self.engine.snapshot();
         let outcomes = ruleset.resolve(&candidates, &query);
-        let rich: Vec<serde_json::Value> = outcomes
-            .iter()
-            .zip(candidates.iter())
-            .map(|(outcome, candidate)| {
-                resolution_outcome_to_json(&ruleset, candidate, query.aggregate.as_ref(), outcome)
-            })
-            .collect();
-        serde_json::to_string(&rich).map_err(|e| {
-            spatial_error_to_napi(SpatialError::new(
-                ErrorCode::Native,
-                format!("serialize result: {e}"),
-            ))
-        })
+        Ok(resolve_rich_json(&ruleset, &outcomes))
     }
 
     /// Rich per-candidate outcomes as a JSON string (string rule ids, invalid
@@ -280,52 +161,7 @@ impl SpatialRuleset {
         // ruleset (a concurrent replace can't tear them apart, ADR-0007).
         let ruleset = self.engine.snapshot();
         let outcomes = ruleset.query(&candidates, &query);
-        let rich: Vec<serde_json::Value> = outcomes
-            .iter()
-            .zip(candidates.iter())
-            .map(|(outcome, candidate)| match outcome {
-                CandidateOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
-                CandidateOutcome::Matched { rule_ids, overlaps } => {
-                    let ids: Vec<&str> = rule_ids
-                        .iter()
-                        .map(|id| ruleset.string_id(*id))
-                        .collect();
-                    let mut object = serde_json::Map::new();
-                    object.insert("outcome".to_string(), serde_json::json!("matched"));
-                    object.insert("ruleIds".to_string(), serde_json::json!(ids));
-                    if let Some(overlaps) = overlaps {
-                        let per_rule: Vec<serde_json::Value> = rule_ids
-                            .iter()
-                            .zip(overlaps)
-                            .map(|(id, metric)| {
-                                serde_json::json!({
-                                    "ruleId": ruleset.string_id(*id),
-                                    "overlapArea": metric.overlap_area,
-                                    "overlapRatio": metric.overlap_ratio,
-                                })
-                            })
-                            .collect();
-                        object.insert("overlaps".to_string(), serde_json::Value::Array(per_rule));
-                    }
-                    if let Some(spec) = &query.aggregate {
-                        object.insert(
-                            "aggregate".to_string(),
-                            aggregate_json(spec, candidate, rule_ids, &ruleset),
-                        );
-                    }
-                    serde_json::Value::Object(object)
-                }
-                CandidateOutcome::Invalid { reason } => {
-                    serde_json::json!({ "outcome": "invalid", "reason": reason })
-                }
-            })
-            .collect();
-        serde_json::to_string(&rich).map_err(|e| {
-            spatial_error_to_napi(SpatialError::new(
-                ErrorCode::Native,
-                format!("serialize result: {e}"),
-            ))
-        })
+        Ok(query_rich_json(&ruleset, &outcomes))
     }
 
     /// Replace the active ruleset from a GeoJSON FeatureCollection `Buffer`,

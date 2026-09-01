@@ -169,7 +169,7 @@ fn where_equality_index_filters_by_property() {
     .unwrap();
     assert_eq!(
         ruleset.query(std::slice::from_ref(&inside_a), &restricted),
-        vec![CandidateOutcome::Matched { rule_ids: vec![zone_a], overlaps: None }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![zone_a], overlaps: None, aggregate: None }]
     );
 
     // A value absent from every spatially-matching rule is a non-match.

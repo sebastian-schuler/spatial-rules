@@ -69,6 +69,7 @@ fn winner_is_the_max_priority_applicable_rule() {
         winner,
         values,
         applicable,
+        ..
     } = &outcomes[0]
     else {
         panic!("expected a resolved outcome");
@@ -143,6 +144,7 @@ fn equal_priorities_resolve_by_declaration_order() {
         winner,
         values,
         applicable,
+        ..
     } = &outcomes[0]
     else {
         panic!("expected a resolved outcome");
@@ -186,6 +188,7 @@ fn where_clause_admission_removes_rules_from_the_applicable_set() {
         winner,
         values,
         applicable,
+        ..
     } = &outcomes[0]
     else {
         panic!("expected a resolved outcome");
@@ -412,6 +415,7 @@ fn single_rule_candidate_resolves_to_that_rule() {
         winner,
         values,
         applicable,
+        ..
     } = &outcomes[0]
     else {
         panic!("expected a resolved outcome");

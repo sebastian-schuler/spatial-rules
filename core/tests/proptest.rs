@@ -233,7 +233,12 @@ proptest! {
         }
 
         for outcome in &outcomes {
-            let ResolutionOutcome::Resolved { winner, values, applicable } = outcome else {
+            let ResolutionOutcome::Resolved {
+                winner,
+                values,
+                applicable,
+                ..
+            } = outcome else {
                 continue;
             };
 

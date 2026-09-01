@@ -12,3 +12,12 @@ Semantics to keep in mind: aggregation is a **separate merge** over the applicab
 - **Wrapper-computed aggregation** — rejected: the rich JSON carries rule ids, not rule properties, so the wrapper cannot compute min/max/coverage without shipping the whole ruleset to JS.
 - **A separate `aggregate()` API** — rejected: a query-level spec on the existing rich path (the `includeOverlap` pattern) needs no new API surface.
 - **Max per-rule overlap ratio as coverage** — rejected: it double-counts when several rules cover the same area; the union is the honest "fraction covered" (per-rule overlap remains available via `includeOverlap`).
+
+## Where it is computed (2026-09-01)
+
+The aggregate is computed in the **core engine** (`evaluate`/`evaluate_resolve`)
+and carried on the matched/resolved outcome as `aggregate: Option<Aggregate>`;
+the bindings only serialize it and never re-derive the applicable rule ids. So
+"computed natively on the rich path" is literal — it is not a wrapper or
+binding-layer computation. `AggregateSpec::compute` remains the pure
+implementation, called by the engine internally and by the benchmark suite.

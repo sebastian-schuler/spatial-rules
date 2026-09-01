@@ -7,6 +7,7 @@ use geo::algorithm::relate::IntersectionMatrix;
 use geo::{BooleanOps, GeodesicArea, Geometry, Rect, Relate};
 
 use crate::candidate::{Candidate, CandidateClass};
+use crate::aggregate::AggregateSpec;
 use crate::prepared_cache::PreparedMemo;
 use crate::properties::PropertyValue;
 use crate::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
@@ -170,6 +171,9 @@ pub struct PreparedQuery<'a> {
     distance_meters: Option<f64>,
     /// The reference time for `$activeAt` predicates (ADR-0017).
     at: Option<TemporalInstant>,
+    /// The requested per-candidate analytics (ADR-0018), computed on the rich
+    /// match/resolve paths over the applicable set.
+    aggregate: Option<AggregateSpec>,
     /// Reused across the batch so the spatial-index result is filled into one
     /// buffer instead of allocated per candidate; then filtered in place to
     /// the rules the candidate will relate against (envelope order).
@@ -194,6 +198,7 @@ impl<'a> PreparedQuery<'a> {
             include_overlap: query.include_overlap,
             distance_meters: query.distance_meters,
             at: query.at,
+            aggregate: query.aggregate.clone(),
             scratch: RefCell::new(Vec::new()),
         }
     }
@@ -261,9 +266,14 @@ impl<'a> PreparedQuery<'a> {
         if let Some(reason) = result.invalid {
             CandidateOutcome::Invalid { reason }
         } else if result.matched {
+            let aggregate = self
+                .aggregate
+                .as_ref()
+                .map(|spec| spec.compute(candidate, &result.rule_ids, self.ruleset));
             CandidateOutcome::Matched {
                 rule_ids: result.rule_ids,
                 overlaps: result.overlaps,
+                aggregate,
             }
         } else {
             CandidateOutcome::NotMatched
@@ -542,11 +552,16 @@ impl<'a> PreparedQuery<'a> {
                 values.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
+        let aggregate = self.aggregate.as_ref().map(|spec| {
+            let rule_ids: Vec<RuleId> = applicable.iter().map(|rule| rule.rule_id).collect();
+            spec.compute(candidate, &rule_ids, self.ruleset)
+        });
 
         ResolutionOutcome::Resolved {
             winner,
             values,
             applicable,
+            aggregate,
         }
     }
 

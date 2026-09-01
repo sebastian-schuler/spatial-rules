@@ -1383,6 +1383,7 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "serde_json",
+ "spatial-rules-bindings-common",
  "spatial-rules-core",
 ]
 

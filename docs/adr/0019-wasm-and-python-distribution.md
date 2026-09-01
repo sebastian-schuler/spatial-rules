@@ -71,3 +71,10 @@ identical everywhere; only the packaging and the set of Engine methods differ.
 - Async/streaming wasm surfaces.
 - Any change to `spatial-rules-core` or the Node addon.
 - A headless-browser CI job.
+
+## Note — the node addon's inline serializers
+
+The original scoping kept node's rich-JSON serializers inline ("out of scope").
+**ADR-0020 supersedes that clause**: the rich-outcome wire contract now lives in
+`spatial-rules-bindings-common` and node consumes it, so all three bindings
+share one serializer rather than node carrying its own copy.

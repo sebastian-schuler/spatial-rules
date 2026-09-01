@@ -14,6 +14,7 @@ napi = { version = "3", features = ["napi8", "async"] }
 napi-derive = { version = "3", default-features = false }
 serde_json.workspace = true
 spatial-rules-core = { path = "../core" }
+spatial-rules-bindings-common = { path = "../bindings-common" }
 
 [build-dependencies]
 napi-build = "2"

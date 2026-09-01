@@ -51,6 +51,7 @@ fn matched_outcome(ruleset: &Ruleset) -> CandidateOutcome {
     CandidateOutcome::Matched {
         rule_ids: vec![square_id(ruleset)],
         overlaps: None,
+        aggregate: None,
     }
 }
 
@@ -576,7 +577,7 @@ fn typed_query_builder_produces_expected_struct() {
     let bare = candidate("bare", square(1.0, 1.0, 2.0, 2.0));
     assert_eq!(
         ruleset.query(&[bare], &intersects()),
-        vec![CandidateOutcome::Matched { rule_ids: vec![ruleset.rule_id("bare").unwrap()], overlaps: None }]
+        vec![CandidateOutcome::Matched { rule_ids: vec![ruleset.rule_id("bare").unwrap()], overlaps: None, aggregate: None }]
     );
 }
 
@@ -900,7 +901,7 @@ fn overlap_is_opt_in_on_the_rich_path() {
     }))
     .unwrap();
     let rich = ruleset.query(std::slice::from_ref(&inside), &query);
-    let CandidateOutcome::Matched { rule_ids, overlaps } = &rich[0] else {
+    let CandidateOutcome::Matched { rule_ids, overlaps, .. } = &rich[0] else {
         panic!("expected a match");
     };
     assert_eq!(rule_ids, &vec![square_id(&ruleset)]);
@@ -987,7 +988,7 @@ fn overlap_metrics_align_to_matched_rule_ids() {
     }))
     .unwrap();
     let rich = ruleset.query(std::slice::from_ref(&both), &query);
-    let CandidateOutcome::Matched { rule_ids, overlaps } = &rich[0] else {
+    let CandidateOutcome::Matched { rule_ids, overlaps, .. } = &rich[0] else {
         panic!("expected a match");
     };
     let overlaps = overlaps.as_ref().unwrap();

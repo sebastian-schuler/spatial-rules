@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::aggregate::AggregateSpec;
+use crate::aggregate::{Aggregate, AggregateSpec};
 use crate::error::SpatialError;
 use crate::properties::PropertyValue;
 use crate::rule::RuleId;
@@ -255,11 +255,15 @@ pub struct OverlapMetric {
 ///
 /// `Matched.overlaps` is `Some(per-rule metrics, aligned to `rule_ids`)` only
 /// when the query requested `includeOverlap`; otherwise `None` (ADR-0012).
+/// `Matched.aggregate` is `Some` only when the query requested an
+/// [`AggregateSpec`] (ADR-0018); the analytics are computed over the matched
+/// rule set — the same set resolution calls applicable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CandidateOutcome {
     Matched {
         rule_ids: Vec<RuleId>,
         overlaps: Option<Vec<OverlapMetric>>,
+        aggregate: Option<Aggregate>,
     },
     NotMatched,
     Invalid { reason: String },
@@ -288,13 +292,15 @@ pub struct ApplicableRule {
 /// `Resolved.winner` is the head of the priority-descending applicable order;
 /// `values` is the first-provider-wins merge of the applicable rules'
 /// properties down that order (a field no applicable rule defines is absent);
-/// `applicable` is the ordered set, which is the explanation.
+/// `applicable` is the ordered set, which is the explanation; `aggregate` is
+/// the requested analytics over that set (ADR-0018), `None` when not asked.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolutionOutcome {
     Resolved {
         winner: RuleId,
         values: BTreeMap<String, PropertyValue>,
         applicable: Vec<ApplicableRule>,
+        aggregate: Option<Aggregate>,
     },
     NotMatched,
     Invalid { reason: String },

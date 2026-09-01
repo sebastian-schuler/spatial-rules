@@ -1,14 +1,13 @@
-//! Shared rich-JSON serialization for the wasm/python bindings
-//! (`.scratch/wasm`). The three binding crates — `node` (napi, out of scope),
-//! `wasm`, `python` — all emit the same per-candidate outcome payloads
-//! (`ruleIds`/`winner`/`values`/`applicable`/`aggregate`/`overlaps`); the
-//! serializers and the query parser live here once, instead of once per
-//! binding. Node's inline copy stays in `node/src/lib.rs` (its crate is out of
-//! scope for this effort).
+//! Shared rich-JSON serialization for the language bindings. The three binding
+//! crates — `node` (napi), `wasm`, `python` — all emit the same
+//! per-candidate outcome payloads (`ruleIds`/`winner`/`values`/`applicable`/
+//! `aggregate`/`overlaps`); the serializers and the query parser live here
+//! once, so the rich-outcome wire contract has a single home. The per-outcome
+//! serializers are internal; the `*_rich_json` batch helpers are the interface
+//! every binding crosses.
 
 use spatial_rules_core::{
-    AggregateSpec, Candidate, CandidateOutcome, Query, ReplaceReport, ResolutionOutcome, RuleId,
-    Ruleset, SpatialError,
+    Aggregate, CandidateOutcome, Query, ReplaceReport, ResolutionOutcome, Ruleset, SpatialError,
 };
 
 /// The `"SR_CODE: message"` string a binding throws as its error (the same
@@ -38,13 +37,8 @@ pub fn report_to_json(report: ReplaceReport) -> serde_json::Value {
 
 /// The requested per-candidate aggregate as the ADR-0018 JSON object — only
 /// the functions the spec asked for (and that produced a value) are emitted.
-pub fn aggregate_json(
-    spec: &AggregateSpec,
-    candidate: &Candidate,
-    applicable: &[RuleId],
-    ruleset: &Ruleset,
-) -> serde_json::Value {
-    let aggregate = spec.compute(candidate, applicable, ruleset);
+/// Internal: the outcome already carries the computed [`Aggregate`].
+fn aggregate_json(aggregate: &Aggregate) -> serde_json::Value {
     let mut object = serde_json::Map::new();
     if let Some(count) = aggregate.count {
         object.insert("count".to_string(), serde_json::json!(count));
@@ -64,13 +58,13 @@ pub fn aggregate_json(
 }
 
 /// One `ResolutionOutcome` as the ADR-0015 JSON shape: `{outcome, winner,
-/// values, applicable}` for resolved, `{outcome: notMatched}`, or
+/// values, applicable, aggregate}` for resolved, `{outcome: notMatched}`, or
 /// `{outcome: invalid, reason}`. Rule ids are the application's original
-/// strings; `values` uses the rules' compact typed properties.
-pub fn resolution_outcome_to_json(
+/// strings; `values` uses the rules' compact typed properties; `aggregate` is
+/// the outcome's precomputed analytics (ADR-0018), absent when not requested.
+/// Internal: [`resolve_rich_json`] assembles the batch from these.
+fn resolution_outcome_to_json(
     ruleset: &Ruleset,
-    candidate: &Candidate,
-    aggregate: Option<&AggregateSpec>,
     outcome: &ResolutionOutcome,
 ) -> serde_json::Value {
     match outcome {
@@ -82,6 +76,7 @@ pub fn resolution_outcome_to_json(
             winner,
             values,
             applicable,
+            aggregate,
         } => {
             let applicable_json: Vec<serde_json::Value> = applicable
                 .iter()
@@ -113,24 +108,19 @@ pub fn resolution_outcome_to_json(
                 "applicable".to_string(),
                 serde_json::Value::Array(applicable_json),
             );
-            if let Some(spec) = aggregate {
-                let rule_ids: Vec<RuleId> = applicable.iter().map(|rule| rule.rule_id).collect();
-                object.insert(
-                    "aggregate".to_string(),
-                    aggregate_json(spec, candidate, &rule_ids, ruleset),
-                );
+            if let Some(aggregate) = aggregate {
+                object.insert("aggregate".to_string(), aggregate_json(aggregate));
             }
             serde_json::Value::Object(object)
         }
     }
 }
 
-/// One `CandidateOutcome` as the ADR-0004 JSON shape, with the query's
-/// `aggregate`/`includeOverlap` payloads attached (ADR-0012/0018).
-pub fn candidate_outcome_to_json(
+/// One `CandidateOutcome` as the ADR-0004 JSON shape, with the outcome's
+/// `overlaps`/`aggregate` payloads attached (ADR-0012/0018).
+/// Internal: [`query_rich_json`] assembles the batch from these.
+fn candidate_outcome_to_json(
     ruleset: &Ruleset,
-    candidate: &Candidate,
-    query: &Query,
     outcome: &CandidateOutcome,
 ) -> serde_json::Value {
     match outcome {
@@ -138,7 +128,11 @@ pub fn candidate_outcome_to_json(
         CandidateOutcome::Invalid { reason } => {
             serde_json::json!({ "outcome": "invalid", "reason": reason })
         }
-        CandidateOutcome::Matched { rule_ids, overlaps } => {
+        CandidateOutcome::Matched {
+            rule_ids,
+            overlaps,
+            aggregate,
+        } => {
             let ids: Vec<&str> = rule_ids
                 .iter()
                 .map(|id| ruleset.string_id(*id))
@@ -160,15 +154,38 @@ pub fn candidate_outcome_to_json(
                     .collect();
                 object.insert("overlaps".to_string(), serde_json::Value::Array(per_rule));
             }
-            if let Some(spec) = &query.aggregate {
-                object.insert(
-                    "aggregate".to_string(),
-                    aggregate_json(spec, candidate, rule_ids, ruleset),
-                );
+            if let Some(aggregate) = aggregate {
+                object.insert("aggregate".to_string(), aggregate_json(aggregate));
             }
             serde_json::Value::Object(object)
         }
     }
+}
+
+/// Assemble a whole batch of `CandidateOutcome`s (in input order) into the
+/// JSON string a binding hands off — the wire contract (ADR-0004/0012/0018).
+/// The outcomes are self-contained (rule ids, overlaps, aggregate), so the
+/// candidate and query are not needed here. The payloads are built from domain
+/// types that always serialize, so the call is infallible.
+pub fn query_rich_json(ruleset: &Ruleset, outcomes: &[CandidateOutcome]) -> String {
+    let rich: Vec<serde_json::Value> = outcomes
+        .iter()
+        .map(|outcome| candidate_outcome_to_json(ruleset, outcome))
+        .collect();
+    serde_json::to_string(&rich).expect("candidate outcome payloads are always JSON-serializable")
+}
+
+/// Assemble a whole batch of `ResolutionOutcome`s (in input order) into the
+/// JSON string a binding hands off — the wire contract (ADR-0015/0018).
+/// Internal per-outcome serialization is reused; the batch helper is the
+/// interface callers use. Infallible for the same reason as
+/// [`query_rich_json`].
+pub fn resolve_rich_json(ruleset: &Ruleset, outcomes: &[ResolutionOutcome]) -> String {
+    let rich: Vec<serde_json::Value> = outcomes
+        .iter()
+        .map(|outcome| resolution_outcome_to_json(ruleset, outcome))
+        .collect();
+    serde_json::to_string(&rich).expect("resolution outcome payloads are always JSON-serializable")
 }
 
 #[cfg(test)]
@@ -184,55 +201,16 @@ mod tests {
         {"type":"Feature","id":"c","properties":{},"geometry":{"type":"Polygon","coordinates":[[[2,2],[2,4],[4,4],[4,2],[2,2]]]}},
         {"type":"Feature","id":"far","properties":{},"geometry":{"type":"Polygon","coordinates":[[[50,50],[50,60],[60,60],[60,50],[50,50]]]}}
     ]}"#;
+    const INVALID_CANDIDATES: &str = r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","id":"bad","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[10,10],[0,10],[10,0],[0,0]]]}}
+    ]}"#;
 
-    #[test]
-    fn query_rich_serializes_string_rule_ids() {
-        let ruleset = Ruleset::from_geojson(RULES).unwrap();
-        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
-        let query = Query::new(SpatialPredicate::Intersects);
-        let outcome = &ruleset.query(&candidates, &query)[0];
-        let json = candidate_outcome_to_json(&ruleset, &candidates[0], &query, outcome);
-        assert_eq!(
-            json,
-            serde_json::json!({ "outcome": "matched", "ruleIds": ["zone-a", "zone-b"] })
-        );
-        let not_matched = candidate_outcome_to_json(
-            &ruleset,
-            &candidates[1],
-            &query,
-            &ruleset.query(&candidates, &query)[1],
-        );
-        assert_eq!(not_matched, serde_json::json!({ "outcome": "notMatched" }));
+    fn ruleset() -> Ruleset {
+        Ruleset::from_geojson(RULES).unwrap()
     }
 
-    #[test]
-    fn query_rich_attaches_aggregate_when_requested() {
-        let ruleset = Ruleset::from_geojson(RULES).unwrap();
-        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
-        let query = Query::from_json(&serde_json::json!({
-            "spatial": { "predicate": "intersects" },
-            "aggregate": { "count": true, "min": "speedLimit" }
-        }))
-        .unwrap();
-        let outcome = &ruleset.query(&candidates, &query)[0];
-        let json = candidate_outcome_to_json(&ruleset, &candidates[0], &query, outcome);
-        assert_eq!(json["aggregate"]["count"], serde_json::json!(2));
-        assert_eq!(json["aggregate"]["min"], serde_json::json!(30.0));
-    }
-
-    #[test]
-    fn resolve_rich_serializes_winner_values_and_applicable() {
-        let ruleset = Ruleset::from_geojson(RULES).unwrap();
-        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
-        let query = Query::new(SpatialPredicate::Intersects);
-        let outcome = &ruleset.resolve(&candidates, &query)[0];
-        let json = resolution_outcome_to_json(&ruleset, &candidates[0], query.aggregate.as_ref(), outcome);
-        assert_eq!(json["outcome"], serde_json::json!("resolved"));
-        // Both rules have priority 0: ties break by declaration order.
-        assert_eq!(json["winner"], serde_json::json!("zone-a"));
-        assert_eq!(json["values"]["speedLimit"], serde_json::json!(30));
-        assert_eq!(json["applicable"][0]["ruleId"], serde_json::json!("zone-a"));
-        assert_eq!(json["applicable"][1]["ruleId"], serde_json::json!("zone-b"));
+    fn parsed(json: &str) -> serde_json::Value {
+        serde_json::from_str(json).unwrap()
     }
 
     #[test]
@@ -252,5 +230,131 @@ mod tests {
                 "lastSwapTime": 1234,
             })
         );
+    }
+
+    #[test]
+    fn query_rich_json_serializes_string_rule_ids_without_overlap_by_default() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+        let outcomes = ruleset.query(&candidates, &query);
+
+        let parsed = parsed(&query_rich_json(&ruleset, &outcomes));
+        let array = parsed.as_array().unwrap();
+        assert_eq!(array.len(), 2);
+        assert_eq!(array[0]["outcome"], serde_json::json!("matched"));
+        assert_eq!(array[0]["ruleIds"], serde_json::json!(["zone-a", "zone-b"]));
+        // Overlap metrics are absent unless includeOverlap was requested.
+        assert!(array[0].get("overlaps").is_none());
+        assert_eq!(array[1]["outcome"], serde_json::json!("notMatched"));
+    }
+
+    #[test]
+    fn query_rich_json_attaches_overlap_metrics_when_requested() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects).with_overlap();
+        let outcomes = ruleset.query(&candidates, &query);
+
+        let parsed = parsed(&query_rich_json(&ruleset, &outcomes));
+        let matches = parsed[0]["overlaps"].as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+        for overlap in matches {
+            assert!(overlap["overlapArea"].is_number());
+            assert!(overlap["overlapRatio"].is_number());
+        }
+        // notMatched carries no overlaps payload.
+        assert!(parsed[1].get("overlaps").is_none());
+    }
+
+    #[test]
+    fn query_rich_json_attaches_aggregate_when_requested() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::from_json(&serde_json::json!({
+            "spatial": { "predicate": "intersects" },
+            "aggregate": { "count": true, "min": "speedLimit" }
+        }))
+        .unwrap();
+        let outcomes = ruleset.query(&candidates, &query);
+
+        let parsed = parsed(&query_rich_json(&ruleset, &outcomes));
+        assert_eq!(parsed[0]["aggregate"]["count"], serde_json::json!(2));
+        assert_eq!(parsed[0]["aggregate"]["min"], serde_json::json!(30.0));
+        // notMatched carries no aggregate.
+        assert!(parsed[1].get("aggregate").is_none());
+    }
+
+    #[test]
+    fn query_rich_json_serializes_invalid_candidates() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(INVALID_CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+        let outcomes = ruleset.query(&candidates, &query);
+
+        let parsed = parsed(&query_rich_json(&ruleset, &outcomes));
+        assert_eq!(parsed[0]["outcome"], serde_json::json!("invalid"));
+        assert!(parsed[0]["reason"].is_string());
+    }
+
+    #[test]
+    fn query_rich_json_empty_batch_serializes_empty_array() {
+        let ruleset = ruleset();
+        let json = query_rich_json(&ruleset, &[]);
+        assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn resolve_rich_json_serializes_winner_values_and_applicable() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+        let outcomes = ruleset.resolve(&candidates, &query);
+
+        let parsed = parsed(&resolve_rich_json(&ruleset, &outcomes));
+        let array = parsed.as_array().unwrap();
+        assert_eq!(array.len(), 2);
+        assert_eq!(array[0]["outcome"], serde_json::json!("resolved"));
+        // Both rules have priority 0: ties break by declaration order.
+        assert_eq!(array[0]["winner"], serde_json::json!("zone-a"));
+        assert_eq!(array[0]["values"]["speedLimit"], serde_json::json!(30));
+        assert_eq!(array[0]["applicable"][0]["ruleId"], serde_json::json!("zone-a"));
+        assert_eq!(array[0]["applicable"][1]["ruleId"], serde_json::json!("zone-b"));
+        assert_eq!(array[1]["outcome"], serde_json::json!("notMatched"));
+    }
+
+    #[test]
+    fn resolve_rich_json_attaches_aggregate_when_requested() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::from_json(&serde_json::json!({
+            "spatial": { "predicate": "intersects" },
+            "aggregate": { "count": true }
+        }))
+        .unwrap();
+        let outcomes = ruleset.resolve(&candidates, &query);
+
+        let parsed = parsed(&resolve_rich_json(&ruleset, &outcomes));
+        assert_eq!(parsed[0]["aggregate"]["count"], serde_json::json!(2));
+        assert!(parsed[1].get("aggregate").is_none());
+    }
+
+    #[test]
+    fn resolve_rich_json_serializes_invalid_candidates() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(INVALID_CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+        let outcomes = ruleset.resolve(&candidates, &query);
+
+        let parsed = parsed(&resolve_rich_json(&ruleset, &outcomes));
+        assert_eq!(parsed[0]["outcome"], serde_json::json!("invalid"));
+        assert!(parsed[0]["reason"].is_string());
+    }
+
+    #[test]
+    fn resolve_rich_json_empty_batch_serializes_empty_array() {
+        let ruleset = ruleset();
+        let json = resolve_rich_json(&ruleset, &[]);
+        assert_eq!(json, "[]");
     }
 }
