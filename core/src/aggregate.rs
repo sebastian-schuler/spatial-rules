@@ -154,25 +154,29 @@ fn numeric<'a, R: RuleAccess + ?Sized>(
             let first = values.next()?;
             Some(values.fold(first, f64::max))
         }
-        NumericOp::Sum => {
-            let mut sum = 0.0;
-            let mut n = 0;
-            for value in values {
-                sum += value;
-                n += 1;
-            }
-            (n > 0).then_some(sum)
-        }
-        NumericOp::Avg => {
-            let mut sum = 0.0;
-            let mut n = 0;
-            for value in values {
-                sum += value;
-                n += 1;
-            }
-            (n > 0).then_some(sum / n as f64)
+        NumericOp::Sum | NumericOp::Avg => {
+            // Share one (sum, count) fold; the projection is the only datum
+            // that differs between Sum (the total) and Avg (total / count).
+            let (sum, count) = numeric_sum_count(values);
+            (count > 0).then(|| match op {
+                NumericOp::Sum => sum,
+                NumericOp::Avg => sum / count as f64,
+                // MIN/MAX are handled above, so this arm is unreachable.
+                NumericOp::Min | NumericOp::Max => unreachable!(),
+            })
         }
     }
+}
+
+/// Fold an iterator of numeric values into `(sum, count)` in a single pass.
+fn numeric_sum_count(values: impl Iterator<Item = f64>) -> (f64, usize) {
+    let mut sum = 0.0;
+    let mut count = 0;
+    for value in values {
+        sum += value;
+        count += 1;
+    }
+    (sum, count)
 }
 
 /// Union coverage (ADR-0018): the fraction of the candidate's area covered by
