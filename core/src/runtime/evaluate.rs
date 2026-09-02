@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 
 use geo::algorithm::relate::IntersectionMatrix;
-use geo::{BooleanOps, GeodesicArea, Geometry, Rect, Relate};
+use geo::{BooleanOps, GeodesicArea, Geometry, Intersects, Rect, Relate};
 
 use crate::runtime::access::RuleAccess;
 use crate::model::candidate::{Candidate, CandidateClass};
@@ -294,6 +294,21 @@ impl<'a> PreparedQuery<'a> {
         if self.invalid_query_reason.is_some() {
             return 2;
         }
+        // Mask fast path for the `intersects` predicate. The mask record is
+        // "did ANY admitted rule intersect the candidate", so we only need a
+        // boolean — not the full 9-cell DE-9IM `IntersectionMatrix` that
+        // `relate()` builds for every touched rule. geo's `Intersects` is the
+        // exact, symmetric DE-9IM `intersects` (not FF*FF****), so the mask is
+        // byte-identical to the full-matrix path, and the loop can early-exit
+        // on the first admit without changing the answer. This is the hot path
+        // for the union-find / serve-the-mask workloads (docs/benchmarks §2b).
+        //
+        // Only the mask and only `intersects`: the rich `query()` and
+        // resolution still need the full applicable set (no early exit), and
+        // the six directional predicates need the directional matrix cells.
+        if self.spatial == SpatialPredicate::Intersects {
+            return self.evaluate_mask_intersects(candidate);
+        }
         let result = self.evaluate_result(candidate, false);
         if result.invalid.is_some() {
             2
@@ -302,6 +317,30 @@ impl<'a> PreparedQuery<'a> {
         } else {
             0
         }
+    }
+
+    /// The `intersects`-predicate mask fast path: scan the bbox-touching,
+    /// property-admitted rules and return `1` at the first `intersects` admit
+    /// (early exit), else `0`. Runs the same bbox → property admission pipeline
+    /// as [`PreparedQuery::evaluate_result`], but uses the boolean
+    /// [`Intersects`] predicate on the unprepared geometries instead of
+    /// building a DE-9IM matrix per touched rule, and does not prepare the
+    /// rules (a boolean intersects needs no prepared form).
+    fn evaluate_mask_intersects(&self, candidate: &Candidate) -> u8 {
+        let bbox = match envelope_or_invalid(candidate) {
+            Ok(bbox) => bbox,
+            Err(_) => return 2,
+        };
+        let candidate_geometry = candidate.geometry();
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(&bbox, &mut scratch);
+        scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
+        for &rule_id in scratch.iter() {
+            if candidate_geometry.intersects(self.ruleset.geometry(rule_id)) {
+                return 1;
+            }
+        }
+        0
     }
 
     /// The shared relate step of the fixed pipeline (bbox → property → exact
