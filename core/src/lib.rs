@@ -20,7 +20,7 @@ pub use error::{ErrorCode, SpatialError};
 //   cache.
 // - `runtime`: the ruleset compilation, evaluation, aggregation, engine, and
 //   the GeoJSON ingestion that builds the model.
-mod runtime {
+pub(crate) mod runtime {
     pub(crate) mod access;
     pub(crate) mod aggregate;
     pub(crate) mod engine;
@@ -36,6 +36,7 @@ mod indexing {
 }
 
 mod model {
+    pub(crate) mod aggregate;
     pub(crate) mod candidate;
     pub(crate) mod properties;
     pub(crate) mod query;

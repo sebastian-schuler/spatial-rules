@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::runtime::aggregate::{Aggregate, AggregateSpec};
+use crate::model::aggregate::{Aggregate, AggregateSpec};
 use crate::error::SpatialError;
 use crate::model::properties::PropertyValue;
 use crate::model::rule::RuleId;

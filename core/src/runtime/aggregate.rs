@@ -1,4 +1,9 @@
 //! Per-candidate analytics over the applicable rule set (ADR-0018).
+//!
+//! The [`Aggregate`] and [`AggregateSpec`] data types live in
+//! [`crate::model::aggregate`] (so the domain `Query` type can own a spec
+//! without depending upward); this module holds the parsing and computation,
+//! and re-exports the data types.
 
 use geo::{BooleanOps, GeodesicArea, Geometry, MultiPolygon};
 
@@ -8,18 +13,7 @@ use crate::error::SpatialError;
 use crate::model::properties::PropertyValue;
 use crate::model::rule::RuleId;
 
-/// A query-level request for per-candidate aggregates (ADR-0018). `count` and
-/// `coverage` are booleans; each numeric function names its own rule-property
-/// field (Mongo `$min: "$field"` idiom).
-#[derive(Debug, Clone, PartialEq)]
-pub struct AggregateSpec {
-    pub count: bool,
-    pub min: Option<String>,
-    pub max: Option<String>,
-    pub sum: Option<String>,
-    pub avg: Option<String>,
-    pub coverage: bool,
-}
+pub use crate::model::aggregate::{Aggregate, AggregateSpec};
 
 impl AggregateSpec {
     /// Parse the `aggregate` query member. Strict: an object with unknown
@@ -76,26 +70,6 @@ impl AggregateSpec {
         Ok(spec)
     }
 
-    /// Validate the invariant the JSON shape enforces so a programmatic
-    /// [`AggregateSpec`] or [`Query`] cannot request nothing: at least one
-    /// function (`count`, `coverage`, or a named numeric field) must be set.
-    /// [`Query::validate`] consumes this so a programmatic query surfaces as
-    /// `Invalid` rather than returning a [`Aggregate`] whose fields are all
-    /// `None`.
-    pub fn validate(&self) -> Option<&'static str> {
-        if self.count
-            || self.coverage
-            || self.min.is_some()
-            || self.max.is_some()
-            || self.sum.is_some()
-            || self.avg.is_some()
-        {
-            None
-        } else {
-            Some("'aggregate' must request at least one function")
-        }
-    }
-
     /// Compute the requested aggregates over `applicable` — the candidate's
     /// applicable rule set (ADR-0015) — for a candidate (used for `coverage`).
     /// Each numeric field is `Some` only when the function was requested and at
@@ -122,16 +96,6 @@ impl AggregateSpec {
 /// function was not requested (or, for the numeric fields, when no applicable
 /// rule contributed a numeric value), so serialization emits only requested
 /// results.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Aggregate {
-    pub count: Option<u32>,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    pub sum: Option<f64>,
-    pub avg: Option<f64>,
-    pub coverage: Option<f64>,
-}
-
 #[derive(Clone, Copy)]
 enum NumericOp {
     Min,
