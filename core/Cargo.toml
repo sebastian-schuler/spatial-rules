@@ -17,11 +17,10 @@ serde_json.workspace = true
 proptest = "1"
 
 [features]
-default = ["benchmark"]
+default = []
 # Expose the benchmark-ladder construction seams (alternative spatial indices,
 # Ruleset::build_with, and the rules()/prepared() rule-source accessors) so the
-# benchmark crate and core's own integration tests can swap index
-# implementations. The production bindings depend on core with
-# `default-features = false`, so their API stays the single Ruleset::build
-# boundary.
+# benchmark crate can swap index implementations. This is opt-in: ordinary
+# consumers of spatial-rules-core get the single Ruleset::build boundary, and
+# the benchmark crate plus core's own index-parity tests enable it explicitly.
 benchmark = []

@@ -1,4 +1,4 @@
-//! Python binding for `spatial-rules-core` (`.scratch/wasm`, ticket 02).
+//! Python binding for `spatial-rules-core` (PyO3 + maturin, PyPI `spatial-rules`).
 //!
 //! The full Engine surface — query/resolve (mask `list[int]`), rich outcomes
 //! (`list[dict]`), and the clock-backed `replace`/`to_canonical`/`stats` —

@@ -33,7 +33,7 @@ type PreparedSlots = Rc<RefCell<Vec<PreparedSlot>>>;
 
 /// Dense fully-prepared snapshot (the eager seam's contract): every rule
 /// prepared, indexed by rule position.
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 pub(crate) type PreparedGeometries = Rc<Vec<PreparedGeometryOwned>>;
 
 /// Assigns each `Ruleset` a unique identity, used as the per-thread cache key.
@@ -104,7 +104,7 @@ impl<'a> PreparedMemo<'a> {
     /// order — the eager seam's contract (`len() == rule count`, `get(id)`
     /// valid for any id, minted by `owner`). Called by `Ruleset::prepared`,
     /// never by the query path.
-    #[cfg(feature = "benchmark")]
+    #[cfg(any(test, feature = "benchmark"))]
     pub(crate) fn snapshot_all(&self, owner: u64) -> PreparedGeometries {
         let all: Vec<RuleId> = (0..self.rules.len())
             .map(|index| RuleId::new(index as u32, owner))

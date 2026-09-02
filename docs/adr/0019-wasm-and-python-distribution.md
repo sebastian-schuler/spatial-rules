@@ -34,8 +34,8 @@ identical everywhere; only the packaging and the set of Engine methods differ.
   observability is real, not degenerate.
 - Internally serializes to exactly the JSON the napi/wasm paths use, so
   semantics are identical across Node/wasm/Python. The rich-JSON serializers
-  live in a shared `spatial-rules-bindings-common` crate used by the wasm and
-  Python bindings (the node addon's copy stays inline, out of scope).
+  live in a shared `spatial-rules-bindings-common` crate used by all three
+  bindings (see the superseding note below).
 
 ## Build/CI and release
 

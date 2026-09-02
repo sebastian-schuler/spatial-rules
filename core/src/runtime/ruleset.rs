@@ -7,10 +7,10 @@ use geo::{BoundingRect, Geometry, Rect};
 
 use crate::model::candidate::Candidate;
 pub use crate::runtime::evaluate::PreparedQuery;
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 use geo::PreparedGeometry;
 use crate::error::{ErrorCode, SpatialError};
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 use crate::indexing::prepared_cache::PreparedGeometries;
 use crate::indexing::prepared_cache::{next_ruleset_id, PreparedMemo};
 use crate::indexing::property_index::{EqualityIndex, PropertyIndex};
@@ -67,7 +67,7 @@ impl Ruleset {
     /// Only available behind the `benchmark` cargo feature (and in tests): it
     /// exists so the benchmark crate can swap index implementations; the
     /// production boundary is [`Ruleset::build`].
-    #[cfg(feature = "benchmark")]
+    #[cfg(any(test, feature = "benchmark"))]
     pub fn build_with(
         rules: Vec<Rule>,
         index_kind: SpatialIndexKind,
@@ -316,7 +316,7 @@ impl Ruleset {
     /// ladder consumes (ADR-0002). It replaces the two ladder-only positional
     /// accessors (`rule_ids`/`rule_geometries`); the per-id accessors
     /// (`geometry`, `envelope`, `properties`) remain for the binding.
-    #[cfg(feature = "benchmark")]
+    #[cfg(any(test, feature = "benchmark"))]
     pub fn rules(&self) -> RuleSource<'_> {
         RuleSource {
             rules: &self.rules,
@@ -334,7 +334,7 @@ impl Ruleset {
     /// This is the eager seam: calling it force-prepares every rule. The
     /// query path instead prepares lazily, per rule on first touch
     /// (memory-benchmark ticket 02).
-    #[cfg(feature = "benchmark")]
+    #[cfg(any(test, feature = "benchmark"))]
     pub fn prepared(&self) -> PreparedRuleGeometries {
         PreparedRuleGeometries {
             inner: PreparedMemo::for_ruleset(&self.rules, self.id).snapshot_all(self.id),
@@ -409,7 +409,7 @@ impl Ruleset {
 /// envelope per rule. The seam the benchmark ladder consumes (ADR-0002) — it
 /// replaces raw positional accessors, so the ruleset stops advertising its
 /// storage layout.
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 pub struct RuleSource<'a> {
     rules: &'a [Rule],
     envelopes: &'a [Rect<f64>],
@@ -438,7 +438,7 @@ impl crate::runtime::access::RuleAccess for Ruleset {
     }
 }
 
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 impl<'a> RuleSource<'a> {
     /// Iterate over `(id, geometry, envelope)` in ruleset order.
     pub fn iter(&self) -> impl Iterator<Item = (RuleId, &'a Geometry<f64>, &'a Rect<f64>)> {
@@ -461,13 +461,13 @@ impl<'a> RuleSource<'a> {
 /// A handle to one ruleset's prepared rule geometries (ADR-0010), indexed by
 /// opaque [`RuleId`]. Callers fetch a rule's prepared form by id without ever
 /// reading the numeric position (architecture-hardening 04).
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 pub struct PreparedRuleGeometries {
     inner: PreparedGeometries,
     owner: u64,
 }
 
-#[cfg(feature = "benchmark")]
+#[cfg(any(test, feature = "benchmark"))]
 impl PreparedRuleGeometries {
     /// The prepared DE-9IM geometry for a rule by opaque [`RuleId`], or `None`
     /// for an out-of-range or foreign id.

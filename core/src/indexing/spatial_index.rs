@@ -33,7 +33,7 @@ pub enum SpatialIndexKind {
     RStar,
     /// Linear envelope scan — retained as the ladder baseline (only reachable
     /// behind the `benchmark` feature / in tests).
-    #[cfg_attr(not(feature = "benchmark"), allow(dead_code))]
+    #[cfg_attr(not(any(test, feature = "benchmark")), allow(dead_code))]
     LinearScan,
 }
 

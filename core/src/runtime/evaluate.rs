@@ -306,8 +306,8 @@ impl<'a> PreparedQuery<'a> {
 
     /// The shared relate step of the fixed pipeline (bbox → property → exact
     /// DE-9IM): fill the scratch buffer with the candidate-touching, admitted
-    /// rules, lazily prepare them, and invoke `on_hold(rule_id, matrix)` for
-    /// each in envelope order. Both the match and resolve paths layer their
+    /// rules, lazily prepare them, and invoke `on_touched_rule(rule_id, matrix)`
+    /// for each in envelope order. Both the match and resolve paths layer their
     /// per-rule action on this one loop; the mask hot path is unchanged
     /// because the closure does the same per-rule work it always did.
     ///
@@ -318,7 +318,7 @@ impl<'a> PreparedQuery<'a> {
     /// or not the memo was already warm. Warm batches find everything
     /// prepared: `ensure` skips every slot fill and the loop adds one
     /// predicted `None` check per touched rule.
-    fn relate_touched<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_hold: F)
+    fn relate_touched<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_touched_rule: F)
     where
         F: FnMut(RuleId, &IntersectionMatrix),
     {
@@ -333,7 +333,7 @@ impl<'a> PreparedQuery<'a> {
                     .as_ref()
                     .expect("touched rules are prepared");
                 let matrix = candidate.geometry().relate(prepared);
-                on_hold(rule_id, &matrix);
+                on_touched_rule(rule_id, &matrix);
             }
         }
     }

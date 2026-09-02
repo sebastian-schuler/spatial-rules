@@ -1,4 +1,4 @@
-//! WASM binding for `spatial-rules-core` (`.scratch/wasm`, ticket 01).
+//! WASM binding for `spatial-rules-core` (wasm-bindgen, npm `spatial-rules-wasm`).
 //!
 //! **Ruleset-level surface only**: build once, then `query`/`resolve` (mask +
 //! rich JSON) and `toCanonical`. No `Engine` `replace`/`stats` (their
