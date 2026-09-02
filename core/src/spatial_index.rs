@@ -31,7 +31,9 @@ pub trait SpatialIndex: Send + Sync {
 pub enum SpatialIndexKind {
     /// Packed `rstar` R*-tree (`bulk_load`) — the default.
     RStar,
-    /// Linear envelope scan — retained as the ladder baseline.
+    /// Linear envelope scan — retained as the ladder baseline (only reachable
+    /// behind the `benchmark` feature / in tests).
+    #[cfg_attr(not(feature = "benchmark"), allow(dead_code))]
     LinearScan,
 }
 

@@ -65,7 +65,7 @@ fn bench_ladder(criterion: &mut Criterion) {
             let mut matches = 0usize;
             for candidate in &candidates {
                 for geometry in &geometries {
-                    if candidate.geometry.relate(*geometry).is_intersects() {
+                    if candidate.geometry().relate(*geometry).is_intersects() {
                         matches += 1;
                     }
                 }
@@ -82,7 +82,11 @@ fn bench_ladder(criterion: &mut Criterion) {
                 let bbox = candidate_envelope(candidate);
                 scan.query_envelope_into(&bbox, &mut hits);
                 for &rule_id in &hits {
-                    if candidate.geometry.relate(scan.geometry(rule_id)).is_intersects() {
+                    if candidate
+                        .geometry()
+                        .relate(scan.geometry(rule_id).expect("rule id minted by ruleset"))
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }
@@ -99,7 +103,11 @@ fn bench_ladder(criterion: &mut Criterion) {
                 let bbox = candidate_envelope(candidate);
                 rstar.query_envelope_into(&bbox, &mut hits);
                 for &rule_id in &hits {
-                    if candidate.geometry.relate(rstar.geometry(rule_id)).is_intersects() {
+                    if candidate
+                        .geometry()
+                        .relate(rstar.geometry(rule_id).expect("rule id minted by ruleset"))
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }
@@ -113,7 +121,7 @@ fn bench_ladder(criterion: &mut Criterion) {
             let mut matches = 0usize;
             for candidate in &candidates {
                 for prepared_rule in prepared.iter() {
-                    if candidate.geometry.relate(prepared_rule).is_intersects() {
+                    if candidate.geometry().relate(prepared_rule).is_intersects() {
                         matches += 1;
                     }
                 }
@@ -130,7 +138,11 @@ fn bench_ladder(criterion: &mut Criterion) {
                 let bbox = candidate_envelope(candidate);
                 rstar.query_envelope_into(&bbox, &mut hits);
                 for &rule_id in &hits {
-                    if candidate.geometry.relate(prepared.get(rule_id)).is_intersects() {
+                    if candidate
+                        .geometry()
+                        .relate(prepared.get(rule_id).expect("rule id minted by ruleset"))
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }

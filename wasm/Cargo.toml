@@ -12,5 +12,5 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 serde_json.workspace = true
 spatial-rules-bindings-common = { path = "../bindings-common" }
-spatial-rules-core = { path = "../core" }
+spatial-rules-core = { path = "../core", default-features = false }
 wasm-bindgen.workspace = true

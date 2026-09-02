@@ -38,7 +38,14 @@ pub use ingestion::{
 pub use properties::{properties_from_json, PropertyValue};
 pub use query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
 pub use rule::{Rule, RuleId};
-pub use ruleset::{PreparedQuery, PreparedRuleGeometries, RuleSource, Ruleset};
+pub use ruleset::{PreparedQuery, Ruleset};
+// Benchmark-ladder seams are hidden from the production API: only the
+// spatial-index machinery is needed by the benchmark crate to swap index
+// implementations, and that crate enables the `benchmark` feature (tests enable
+// it implicitly via `cfg(test)`).
+#[cfg(feature = "benchmark")]
+pub use ruleset::{PreparedRuleGeometries, RuleSource};
+#[cfg(feature = "benchmark")]
 pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};
 pub use temporal::TemporalInstant;
 pub use validation::{classify_candidate, ensure_supported_geometry, validate_rule_geometry};

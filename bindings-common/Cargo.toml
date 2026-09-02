@@ -8,4 +8,4 @@ description = "Shared rich-JSON serialization for the wasm/python bindings"
 
 [dependencies]
 serde_json.workspace = true
-spatial-rules-core = { path = "../core" }
+spatial-rules-core = { path = "../core", default-features = false }
