@@ -169,6 +169,7 @@ impl Query {
                 None
             }
         })
+        .or_else(|| self.aggregate.as_ref().and_then(AggregateSpec::validate))
     }
 
     /// Parse the JSON query shape (Initial-plan §22):

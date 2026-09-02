@@ -76,6 +76,26 @@ impl AggregateSpec {
         Ok(spec)
     }
 
+    /// Validate the invariant the JSON shape enforces so a programmatic
+    /// [`AggregateSpec`] or [`Query`] cannot request nothing: at least one
+    /// function (`count`, `coverage`, or a named numeric field) must be set.
+    /// [`Query::validate`] consumes this so a programmatic query surfaces as
+    /// `Invalid` rather than returning a [`Aggregate`] whose fields are all
+    /// `None`.
+    pub fn validate(&self) -> Option<&'static str> {
+        if self.count
+            || self.coverage
+            || self.min.is_some()
+            || self.max.is_some()
+            || self.sum.is_some()
+            || self.avg.is_some()
+        {
+            None
+        } else {
+            Some("'aggregate' must request at least one function")
+        }
+    }
+
     /// Compute the requested aggregates over `applicable` — the candidate's
     /// applicable rule set (ADR-0015) — for a candidate (used for `coverage`).
     /// Each numeric field is `Some` only when the function was requested and at
@@ -249,6 +269,30 @@ mod tests {
         ] {
             let err = AggregateSpec::from_json(&bad).unwrap_err();
             assert_eq!(err.code, ErrorCode::InvalidQuery, "{bad}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_request() {
+        // A programmatic all-false spec (which from_json rejects) must be caught
+        // by validate so Query::validate surfaces it as Invalid.
+        let empty = AggregateSpec {
+            count: false,
+            min: None,
+            max: None,
+            sum: None,
+            avg: None,
+            coverage: false,
+        };
+        assert!(empty.validate().is_some());
+
+        for spec in [
+            AggregateSpec { count: true, ..empty.clone() },
+            AggregateSpec { coverage: true, ..empty.clone() },
+            AggregateSpec { min: Some("m".to_string()), ..empty.clone() },
+            AggregateSpec { sum: Some("s".to_string()), ..empty.clone() },
+        ] {
+            assert_eq!(spec.validate(), None);
         }
     }
 
