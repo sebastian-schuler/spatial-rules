@@ -6,15 +6,15 @@ use std::collections::{BTreeMap, HashSet};
 use geo::algorithm::relate::IntersectionMatrix;
 use geo::{BooleanOps, GeodesicArea, Geometry, Rect, Relate};
 
-use crate::access::RuleAccess;
-use crate::candidate::{Candidate, CandidateClass};
-use crate::aggregate::AggregateSpec;
-use crate::prepared_cache::PreparedMemo;
-use crate::properties::PropertyValue;
-use crate::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
-use crate::rule::RuleId;
-use crate::temporal::TemporalInstant;
-use crate::where_expr::WhereExpr;
+use crate::runtime::access::RuleAccess;
+use crate::model::candidate::{Candidate, CandidateClass};
+use crate::runtime::aggregate::AggregateSpec;
+use crate::indexing::prepared_cache::PreparedMemo;
+use crate::model::properties::PropertyValue;
+use crate::model::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
+use crate::model::rule::RuleId;
+use crate::model::temporal::TemporalInstant;
+use crate::model::where_expr::WhereExpr;
 
 /// Mean Earth radius used by geo's haversine measure (GRS80 mean radius,
 /// IUGG/Moritz 2000) — the same model the exact admission uses, so the

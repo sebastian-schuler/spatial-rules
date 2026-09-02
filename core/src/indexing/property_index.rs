@@ -7,9 +7,9 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::properties::PropertyValue;
-use crate::rule::{Rule, RuleId};
-use crate::where_expr::{FieldPredicate, IndexQuery, WhereExpr};
+use crate::model::properties::PropertyValue;
+use crate::model::rule::{Rule, RuleId};
+use crate::model::where_expr::{FieldPredicate, IndexQuery, WhereExpr};
 
 /// Answers property lookups from a compiled index (ADR-0003). A seam so the
 /// index can be swapped (e.g. a future range index); one adapter today,

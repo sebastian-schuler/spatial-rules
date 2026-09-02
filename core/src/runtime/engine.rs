@@ -3,11 +3,11 @@
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::candidate::Candidate;
+use crate::model::candidate::Candidate;
 use crate::error::SpatialError;
-use crate::query::{CandidateOutcome, Query, ResolutionOutcome};
-use crate::rule::Rule;
-use crate::ruleset::Ruleset;
+use crate::model::query::{CandidateOutcome, Query, ResolutionOutcome};
+use crate::model::rule::Rule;
+use crate::runtime::ruleset::Ruleset;
 
 /// Observability for the active ruleset, returned by `replace()` (ADR-0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,8 +150,8 @@ impl Engine {
 
     /// Observability for the current ruleset.
     ///
-    /// The report is updated **after** the ruleset `Arc` is published in
-    /// [`Engine::swap`], so it never describes a ruleset that is not yet
+    /// The report is updated **after** the ruleset `Arc` is published in the
+    /// `swap` routine, so it never describes a ruleset that is not yet
     /// visible to [`Engine::snapshot`]. `current()` and `snapshot()` are two
     /// independent reads that may straddle a swap; the invariant is that the
     /// counters always move *with* the published ruleset, never ahead of it.

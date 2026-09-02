@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use geo::{Geometry, PreparedGeometry};
 
-use crate::rule::{Rule, RuleId};
+use crate::model::rule::{Rule, RuleId};
 
 type PreparedGeometryOwned = PreparedGeometry<'static, Geometry<f64>>;
 

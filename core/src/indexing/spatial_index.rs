@@ -8,7 +8,7 @@ use geo::Rect;
 use rstar::primitives::GeomWithData;
 use rstar::{AABB, RTree, RTreeObject};
 
-use crate::rule::RuleId;
+use crate::model::rule::RuleId;
 
 /// Answers envelope-intersection queries against indexed rule envelopes.
 pub trait SpatialIndex: Send + Sync {

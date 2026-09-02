@@ -2,11 +2,11 @@
 
 use geo::{BooleanOps, GeodesicArea, Geometry, MultiPolygon};
 
-use crate::access::RuleAccess;
-use crate::candidate::Candidate;
+use crate::runtime::access::RuleAccess;
+use crate::model::candidate::Candidate;
 use crate::error::SpatialError;
-use crate::properties::PropertyValue;
-use crate::rule::RuleId;
+use crate::model::properties::PropertyValue;
+use crate::model::rule::RuleId;
 
 /// A query-level request for per-candidate aggregates (ADR-0018). `count` and
 /// `coverage` are booleans; each numeric function names its own rule-property
@@ -223,9 +223,9 @@ fn coverage_ratio<R: RuleAccess + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::candidate::Candidate;
-    use crate::rule::Rule;
-    use crate::ruleset::Ruleset;
+    use crate::model::candidate::Candidate;
+    use crate::model::rule::Rule;
+    use crate::runtime::ruleset::Ruleset;
     use geo::LineString;
 
     #[test]
@@ -253,7 +253,7 @@ mod tests {
     }
 
     fn rule(id: &str, speed_limit: Option<i64>, tax_rate: Option<f64>) -> Rule {
-        let mut properties = crate::properties::properties_from_json(&serde_json::Map::new());
+        let mut properties = crate::model::properties::properties_from_json(&serde_json::Map::new());
         if let Some(v) = speed_limit {
             properties.insert("speedLimit".to_string(), PropertyValue::Int(v));
         }

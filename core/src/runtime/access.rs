@@ -7,19 +7,19 @@
 //! immutable ruleset's storage layout private while giving the query hot path
 //! the exact methods it needs.
 //!
-//! [`Ruleset`]: crate::ruleset::Ruleset
+//! [`Ruleset`]: crate::runtime::ruleset::Ruleset
 
 use std::collections::BTreeMap;
 
 use geo::{Geometry, Rect};
 
-use crate::properties::PropertyValue;
-use crate::rule::RuleId;
+use crate::model::properties::PropertyValue;
+use crate::model::rule::RuleId;
 
 /// The read-only rule access operations the evaluation and aggregation paths
-/// need. Implemented by [`Ruleset`]; the query hot path and the aggregate
-/// engine consume it as `&dyn RuleAccess` so they never depend on the concrete
-/// ruleset type.
+/// need. Implemented by [`Ruleset`](crate::runtime::ruleset::Ruleset); the
+/// query hot path and the aggregate engine consume it as `&dyn RuleAccess` so
+/// they never depend on the concrete ruleset type.
 pub trait RuleAccess {
     /// Fill `out` with the rule ids whose envelope intersects `envelope`
     /// (sorted ascending, deduplicated).

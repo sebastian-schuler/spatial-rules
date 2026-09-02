@@ -1,14 +1,14 @@
 //! GeoJSON → `geo_types::Geometry<f64>` ingestion.
 //!
 //! Parsing is permissive on geometry; validity is a separate gate — see
-//! [`validate_rule_geometry`](crate::validation::validate_rule_geometry).
+//! [`validate_rule_geometry`](crate::model::validation::validate_rule_geometry).
 
 use geo::Geometry;
 
-use crate::candidate::Candidate;
+use crate::model::candidate::Candidate;
 use crate::error::{ErrorCode, SpatialError};
-use crate::properties::properties_from_json;
-use crate::rule::Rule;
+use crate::model::properties::properties_from_json;
+use crate::model::rule::Rule;
 
 /// Parse a GeoJSON document (permissive geometry; strict on malformed JSON).
 pub fn parse_geojson(input: &str) -> Result<geojson::GeoJson, SpatialError> {
@@ -20,7 +20,7 @@ pub fn parse_geojson(input: &str) -> Result<geojson::GeoJson, SpatialError> {
 /// Extract the geometry of a feature as `geo::Geometry<f64>`.
 ///
 /// The `geojson` crate's parse is permissive; geo validity is checked
-/// separately by [`validate_rule_geometry`](crate::validation::validate_rule_geometry).
+/// separately by [`validate_rule_geometry`](crate::model::validation::validate_rule_geometry).
 pub fn feature_geometry(feature: &geojson::Feature) -> Result<Geometry<f64>, SpatialError> {
     let geometry = feature
         .geometry
@@ -104,7 +104,7 @@ fn id_to_string(id: &geojson::feature::Id) -> String {
 /// Read the top-level `priority` foreign member (ADR-0015). Missing → `0`.
 /// A present value that is not an integer (string/float/bool) → a construction
 /// error naming the rule. (Non-negativity is enforced at compile —
-/// [`Ruleset::build_with`](crate::ruleset::Ruleset::build_with) — the single
+/// [`Ruleset::build_with`](crate::runtime::ruleset::Ruleset::build_with) — the single
 /// authoritative gate every construction path passes through.)
 fn extract_feature_priority(
     feature: &geojson::Feature,

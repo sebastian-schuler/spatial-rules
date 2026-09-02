@@ -4,13 +4,14 @@ use std::collections::BTreeMap;
 
 use geo::Geometry;
 
-use crate::properties::PropertyValue;
+use crate::model::properties::PropertyValue;
 
 /// Internal numeric identifier for a rule, assigned `0..n-1` at ruleset build.
 ///
 /// The numeric index is exposed read-only for stable serialization and
 /// cross-ruleset parity comparison, but callers should otherwise treat a
-/// [`RuleId`] as an opaque handle obtained from the owning [`Ruleset`]. The
+/// [`RuleId`] as an opaque handle obtained from the owning
+/// [`Ruleset`](crate::runtime::ruleset::Ruleset). The
 /// `owner` field — private and deliberately excluded from equality, ordering,
 /// and hashing — binds the id to the one ruleset instance that minted it, so
 /// passing an id from another ruleset can never silently select an unrelated

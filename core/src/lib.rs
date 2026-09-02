@@ -6,47 +6,65 @@
 //! See `CONTEXT.md` for the domain vocabulary and `docs/Initial-plan.md` for
 //! the requirements source of truth.
 
-mod access;
-mod aggregate;
-mod candidate;
-mod engine;
 mod error;
-mod evaluate;
-mod ingestion;
-mod prepared_cache;
-mod properties;
-mod property_index;
-mod query;
-mod rule;
-mod ruleset;
-mod spatial_index;
 #[cfg(test)]
 mod test_support;
-mod temporal;
-mod validation;
-mod where_expr;
 
-pub use access::RuleAccess;
-pub use aggregate::{Aggregate, AggregateSpec};
-pub use candidate::{Candidate, CandidateClass};
-pub use engine::{Engine, ReplaceReport};
 pub use error::{ErrorCode, SpatialError};
-pub use ingestion::{
+
+// Domain layers, grouped so a change lives in one focused module rather than a
+// flat directory spanning every concern:
+// - `model`: the domain types (rules, candidates, queries, properties,
+//   temporal windows, predicates) plus geometry validation.
+// - `indexing`: the spatial and property indexes and the prepared-geometry
+//   cache.
+// - `runtime`: the ruleset compilation, evaluation, aggregation, engine, and
+//   the GeoJSON ingestion that builds the model.
+mod runtime {
+    pub(crate) mod access;
+    pub(crate) mod aggregate;
+    pub(crate) mod engine;
+    pub(crate) mod evaluate;
+    pub(crate) mod ingestion;
+    pub(crate) mod ruleset;
+}
+
+mod indexing {
+    pub(crate) mod prepared_cache;
+    pub(crate) mod property_index;
+    pub(crate) mod spatial_index;
+}
+
+mod model {
+    pub(crate) mod candidate;
+    pub(crate) mod properties;
+    pub(crate) mod query;
+    pub(crate) mod rule;
+    pub(crate) mod temporal;
+    pub(crate) mod validation;
+    pub(crate) mod where_expr;
+}
+
+pub use runtime::access::RuleAccess;
+pub use runtime::aggregate::{Aggregate, AggregateSpec};
+pub use runtime::engine::{Engine, ReplaceReport};
+pub use runtime::ingestion::{
     candidate_from_feature, candidates_from_geojson, feature_geometry, parse_geojson,
     rule_from_feature, rules_from_geojson,
 };
-pub use properties::{properties_from_json, PropertyValue};
-pub use query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
-pub use rule::{Rule, RuleId};
-pub use ruleset::{PreparedQuery, Ruleset};
+pub use runtime::ruleset::{PreparedQuery, Ruleset};
+pub use model::candidate::{Candidate, CandidateClass};
+pub use model::properties::{properties_from_json, PropertyValue};
+pub use model::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
+pub use model::rule::{Rule, RuleId};
+pub use model::temporal::TemporalInstant;
+pub use model::validation::{classify_candidate, ensure_supported_geometry, validate_rule_geometry};
+pub use model::where_expr::{FieldOp, FieldPredicate, WhereExpr};
 // Benchmark-ladder seams are hidden from the production API: only the
 // spatial-index machinery is needed by the benchmark crate to swap index
 // implementations, and that crate enables the `benchmark` feature (tests enable
 // it implicitly via `cfg(test)`).
 #[cfg(feature = "benchmark")]
-pub use ruleset::{PreparedRuleGeometries, RuleSource};
+pub use runtime::ruleset::{PreparedRuleGeometries, RuleSource};
 #[cfg(feature = "benchmark")]
-pub use spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};
-pub use temporal::TemporalInstant;
-pub use validation::{classify_candidate, ensure_supported_geometry, validate_rule_geometry};
-pub use where_expr::{FieldOp, FieldPredicate, WhereExpr};
+pub use indexing::spatial_index::{build_spatial_index, LinearScanIndex, RStarIndex, SpatialIndex, SpatialIndexKind};

@@ -10,8 +10,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use crate::error::SpatialError;
-use crate::properties::PropertyValue;
-use crate::temporal::TemporalInstant;
+use crate::model::properties::PropertyValue;
+use crate::model::temporal::TemporalInstant;
 
 /// A boolean property predicate tree.
 #[derive(Debug, Clone, PartialEq)]

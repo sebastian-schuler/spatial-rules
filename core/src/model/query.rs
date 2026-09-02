@@ -3,12 +3,12 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::aggregate::{Aggregate, AggregateSpec};
+use crate::runtime::aggregate::{Aggregate, AggregateSpec};
 use crate::error::SpatialError;
-use crate::properties::PropertyValue;
-use crate::rule::RuleId;
-use crate::temporal::TemporalInstant;
-use crate::where_expr::WhereExpr;
+use crate::model::properties::PropertyValue;
+use crate::model::rule::RuleId;
+use crate::model::temporal::TemporalInstant;
+use crate::model::where_expr::WhereExpr;
 
 /// A spatial predicate between a candidate and a rule (ADR-0008, ADR-0012).
 ///
@@ -347,7 +347,7 @@ pub enum ResolutionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::where_expr::WhereExpr;
+    use crate::model::where_expr::WhereExpr;
 
     #[test]
     fn well_formed_programmatic_query_has_no_reason() {

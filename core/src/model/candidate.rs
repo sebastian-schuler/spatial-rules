@@ -37,7 +37,7 @@ impl Candidate {
     /// geometry, or record the reason it is invalid. Never fails — an invalid
     /// candidate is stored as such and reported per query (ADR-0005).
     pub fn new(id: String, geometry: Geometry<f64>) -> Self {
-        let class = match crate::validation::classify_candidate(&geometry) {
+        let class = match crate::model::validation::classify_candidate(&geometry) {
             Ok(envelope) => CandidateClass::Valid { envelope },
             Err(error) => CandidateClass::Invalid {
                 reason: error.message,
@@ -69,9 +69,9 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::{Query, SpatialPredicate};
-    use crate::rule::Rule;
-    use crate::ruleset::Ruleset;
+    use crate::model::query::{Query, SpatialPredicate};
+    use crate::model::rule::Rule;
+    use crate::runtime::ruleset::Ruleset;
     use geo::{LineString, Polygon};
 
     #[test]

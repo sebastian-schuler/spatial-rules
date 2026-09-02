@@ -5,20 +5,20 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use geo::{BoundingRect, Geometry, Rect};
 
-use crate::candidate::Candidate;
-pub use crate::evaluate::PreparedQuery;
+use crate::model::candidate::Candidate;
+pub use crate::runtime::evaluate::PreparedQuery;
 #[cfg(feature = "benchmark")]
 use geo::PreparedGeometry;
 use crate::error::{ErrorCode, SpatialError};
 #[cfg(feature = "benchmark")]
-use crate::prepared_cache::PreparedGeometries;
-use crate::prepared_cache::{next_ruleset_id, PreparedMemo};
-use crate::property_index::{EqualityIndex, PropertyIndex};
-use crate::properties::PropertyValue;
-use crate::query::{CandidateOutcome, Query, ResolutionOutcome};
-use crate::rule::{Rule, RuleId};
-use crate::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
-use crate::validation::validate_rule_geometry;
+use crate::indexing::prepared_cache::PreparedGeometries;
+use crate::indexing::prepared_cache::{next_ruleset_id, PreparedMemo};
+use crate::indexing::property_index::{EqualityIndex, PropertyIndex};
+use crate::model::properties::PropertyValue;
+use crate::model::query::{CandidateOutcome, Query, ResolutionOutcome};
+use crate::model::rule::{Rule, RuleId};
+use crate::indexing::spatial_index::{build_spatial_index, SpatialIndex, SpatialIndexKind};
+use crate::model::validation::validate_rule_geometry;
 
 /// An immutable, query-optimized collection of rules (CONTEXT.md §6).
 ///
@@ -53,7 +53,7 @@ impl std::fmt::Debug for Ruleset {
 impl Ruleset {
     /// Parse a GeoJSON FeatureCollection and build a ruleset from it.
     pub fn from_geojson(input: &str) -> Result<Self, SpatialError> {
-        let rules = crate::ingestion::rules_from_geojson(input)?;
+        let rules = crate::runtime::ingestion::rules_from_geojson(input)?;
         Self::build(rules)
     }
 
@@ -303,7 +303,7 @@ impl Ruleset {
                     .get("id")
                     .and_then(|id| id.as_str())
                     .unwrap_or("<unknown>");
-                crate::ingestion::validate_priority(id, priority)?;
+                crate::runtime::ingestion::validate_priority(id, priority)?;
             }
         }
         let rules: Vec<Rule> = serde_json::from_value(value).map_err(|e| {
@@ -401,7 +401,7 @@ impl Ruleset {
             .where_clause
             .as_ref()
             .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
-        PreparedQuery::new(self as &dyn crate::access::RuleAccess, query, excluded, memo, where_filter)
+        PreparedQuery::new(self as &dyn crate::runtime::access::RuleAccess, query, excluded, memo, where_filter)
     }
 }
 
@@ -416,7 +416,7 @@ pub struct RuleSource<'a> {
     owner: u64,
 }
 
-impl crate::access::RuleAccess for Ruleset {
+impl crate::runtime::access::RuleAccess for Ruleset {
     #[inline]
     fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>) {
         self.query_envelope_into(envelope, out)
@@ -499,8 +499,8 @@ impl PreparedRuleGeometries {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::candidate::Candidate;
-    use crate::prepared_cache;
+    use crate::model::candidate::Candidate;
+    use crate::indexing::prepared_cache;
     use geo::LineString;
 
     fn sample_rules() -> Vec<Rule> {
@@ -532,7 +532,7 @@ mod tests {
     fn build_rejects_non_finite_property_floats() {
         let mut rule = sample_rules().remove(0);
         rule.properties
-            .insert("score".to_string(), crate::properties::PropertyValue::Float(f64::NAN));
+            .insert("score".to_string(), crate::model::properties::PropertyValue::Float(f64::NAN));
         let err = Ruleset::build(vec![rule]).unwrap_err();
         assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
         assert!(err.message.contains("non-finite"));
@@ -540,7 +540,7 @@ mod tests {
         // A finite float is accepted.
         let mut rule = sample_rules().remove(0);
         rule.properties
-            .insert("score".to_string(), crate::properties::PropertyValue::Float(4.2));
+            .insert("score".to_string(), crate::model::properties::PropertyValue::Float(4.2));
         assert!(Ruleset::build(vec![rule]).is_ok());
     }
 
@@ -595,7 +595,7 @@ mod tests {
     fn query_prepares_only_the_touched_rules() {
         let ruleset = Ruleset::build(far_apart_rules()).unwrap();
         let candidate = candidate_at(0.5, 0.5); // touches zone-a only
-        let query = Query::new(crate::query::SpatialPredicate::Intersects);
+        let query = Query::new(crate::model::query::SpatialPredicate::Intersects);
 
         let outcomes = ruleset.query(std::slice::from_ref(&candidate), &query);
         assert!(matches!(
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn rule_ids_stay_in_envelope_order_with_a_partially_warm_memo() {
         let ruleset = Ruleset::build(far_apart_rules()).unwrap();
-        let query = Query::new(crate::query::SpatialPredicate::Intersects);
+        let query = Query::new(crate::model::query::SpatialPredicate::Intersects);
 
         // First query touches zone-b only, preparing it in this thread's memo.
         let b_only = candidate_at(100.5, 100.5);
@@ -675,7 +675,7 @@ mod tests {
                 vec![],
             )),
         );
-        let query = Query::new(crate::query::SpatialPredicate::Intersects);
+        let query = Query::new(crate::model::query::SpatialPredicate::Intersects);
 
         let outcomes = ruleset.query(std::slice::from_ref(&candidate), &query);
         assert_eq!(outcomes.len(), 1);
