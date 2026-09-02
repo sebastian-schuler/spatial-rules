@@ -383,7 +383,7 @@ impl Ruleset {
             .where_clause
             .as_ref()
             .and_then(|where_clause| self.property_index.indexable_matches(where_clause));
-        PreparedQuery::new(self, query, excluded, memo, where_filter)
+        PreparedQuery::new(self as &dyn crate::access::RuleAccess, query, excluded, memo, where_filter)
     }
 }
 
@@ -395,6 +395,28 @@ pub struct RuleSource<'a> {
     rules: &'a [Rule],
     envelopes: &'a [Rect<f64>],
     owner: u64,
+}
+
+impl crate::access::RuleAccess for Ruleset {
+    #[inline]
+    fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>) {
+        self.query_envelope_into(envelope, out)
+    }
+
+    #[inline]
+    fn geometry(&self, rule_id: RuleId) -> &Geometry<f64> {
+        self.geometry_checked(rule_id)
+    }
+
+    #[inline]
+    fn properties(&self, rule_id: RuleId) -> &BTreeMap<String, PropertyValue> {
+        self.properties_checked(rule_id)
+    }
+
+    #[inline]
+    fn priority(&self, rule_id: RuleId) -> i64 {
+        self.priority_checked(rule_id)
+    }
 }
 
 impl<'a> RuleSource<'a> {

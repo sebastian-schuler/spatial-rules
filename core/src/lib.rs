@@ -6,6 +6,7 @@
 //! See `CONTEXT.md` for the domain vocabulary and `docs/Initial-plan.md` for
 //! the requirements source of truth.
 
+mod access;
 mod aggregate;
 mod candidate;
 mod engine;
@@ -25,6 +26,7 @@ mod temporal;
 mod validation;
 mod where_expr;
 
+pub use access::RuleAccess;
 pub use aggregate::{Aggregate, AggregateSpec};
 pub use candidate::{Candidate, CandidateClass};
 pub use engine::{Engine, ReplaceReport};

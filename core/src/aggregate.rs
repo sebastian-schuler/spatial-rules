@@ -2,11 +2,11 @@
 
 use geo::{BooleanOps, GeodesicArea, Geometry, MultiPolygon};
 
+use crate::access::RuleAccess;
 use crate::candidate::Candidate;
 use crate::error::SpatialError;
 use crate::properties::PropertyValue;
 use crate::rule::RuleId;
-use crate::ruleset::Ruleset;
 
 /// A query-level request for per-candidate aggregates (ADR-0018). `count` and
 /// `coverage` are booleans; each numeric function names its own rule-property
@@ -81,11 +81,11 @@ impl AggregateSpec {
     /// Each numeric field is `Some` only when the function was requested and at
     /// least one applicable rule contributes a numeric value; `coverage` is
     /// `Some` only when requested.
-    pub fn compute(
+    pub fn compute<R: RuleAccess + ?Sized>(
         &self,
         candidate: &Candidate,
         applicable: &[RuleId],
-        ruleset: &Ruleset,
+        ruleset: &R,
     ) -> Aggregate {
         Aggregate {
             count: self.count.then_some(applicable.len() as u32),
@@ -122,12 +122,12 @@ enum NumericOp {
 
 /// The numeric (Int/Float) values of `field` across the applicable rules; a
 /// rule whose property is missing or non-numeric is skipped (ADR-0018).
-fn numeric_values<'a>(
+fn numeric_values<'a, R: RuleAccess + ?Sized>(
     field: &'a str,
     applicable: &'a [RuleId],
-    ruleset: &'a Ruleset,
+    ruleset: &'a R,
 ) -> impl Iterator<Item = f64> + 'a {
-    applicable.iter().filter_map(move |&rule_id| match ruleset.properties_checked(rule_id).get(field) {
+    applicable.iter().filter_map(move |&rule_id| match ruleset.properties(rule_id).get(field) {
         Some(PropertyValue::Int(value)) => Some(*value as f64),
         Some(PropertyValue::Float(value)) => Some(*value),
         _ => None,
@@ -136,10 +136,10 @@ fn numeric_values<'a>(
 
 /// Apply a numeric aggregate to the field's values across the applicable rules;
 /// `None` when no applicable rule contributes a numeric value.
-fn numeric<'a>(
+fn numeric<'a, R: RuleAccess + ?Sized>(
     field: &'a str,
     applicable: &'a [RuleId],
-    ruleset: &'a Ruleset,
+    ruleset: &'a R,
     op: NumericOp,
 ) -> Option<f64> {
     let values = numeric_values(field, applicable, ruleset);
@@ -179,13 +179,17 @@ fn numeric<'a>(
 /// the union of the applicable rules, via `BooleanOps::union` + `GeodesicArea`
 /// (the same spherical machinery `overlap_metric` uses). Point/MultiPoint
 /// candidates have zero area → `0`.
-fn coverage_ratio(candidate: &Candidate, applicable: &[RuleId], ruleset: &Ruleset) -> f64 {
+fn coverage_ratio<R: RuleAccess + ?Sized>(
+    candidate: &Candidate,
+    applicable: &[RuleId],
+    ruleset: &R,
+) -> f64 {
     if matches!(candidate.geometry(), Geometry::Point(_) | Geometry::MultiPoint(_)) {
         return 0.0;
     }
     let mut union: Option<MultiPolygon<f64>> = None;
     for &rule_id in applicable {
-        let rule = match ruleset.geometry_checked(rule_id) {
+        let rule = match ruleset.geometry(rule_id) {
             Geometry::Polygon(polygon) => MultiPolygon::new(vec![polygon.clone()]),
             Geometry::MultiPolygon(multipolygon) => multipolygon.clone(),
             _ => unreachable!("rules are polygons"),
@@ -217,6 +221,7 @@ mod tests {
     use super::*;
     use crate::candidate::Candidate;
     use crate::rule::Rule;
+    use crate::ruleset::Ruleset;
     use geo::LineString;
 
     #[test]

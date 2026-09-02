@@ -6,13 +6,13 @@ use std::collections::{BTreeMap, HashSet};
 use geo::algorithm::relate::IntersectionMatrix;
 use geo::{BooleanOps, GeodesicArea, Geometry, Rect, Relate};
 
+use crate::access::RuleAccess;
 use crate::candidate::{Candidate, CandidateClass};
 use crate::aggregate::AggregateSpec;
 use crate::prepared_cache::PreparedMemo;
 use crate::properties::PropertyValue;
 use crate::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
 use crate::rule::RuleId;
-use crate::ruleset::Ruleset;
 use crate::temporal::TemporalInstant;
 use crate::where_expr::WhereExpr;
 
@@ -158,7 +158,7 @@ fn expand_envelope(bbox: &Rect<f64>, distance_meters: f64) -> Rect<f64> {
 }
 
 pub struct PreparedQuery<'a> {
-    ruleset: &'a Ruleset,
+    ruleset: &'a dyn RuleAccess,
     spatial: SpatialPredicate,
     where_clause: Option<WhereExpr>,
     excluded: HashSet<RuleId>,
@@ -186,7 +186,7 @@ pub struct PreparedQuery<'a> {
 
 impl<'a> PreparedQuery<'a> {
     pub(crate) fn new(
-        ruleset: &'a Ruleset,
+        ruleset: &'a dyn RuleAccess,
         query: &Query,
         excluded: HashSet<RuleId>,
         memo: PreparedMemo<'a>,
@@ -251,7 +251,7 @@ impl<'a> PreparedQuery<'a> {
             Some(filter) => filter.contains(&rule_id),
             None => match &self.where_clause {
                 Some(where_clause) => {
-                    where_clause.eval(self.ruleset.properties_checked(rule_id), self.at)
+                    where_clause.eval(self.ruleset.properties(rule_id), self.at)
                 }
                 None => true,
             },
@@ -370,7 +370,7 @@ impl<'a> PreparedQuery<'a> {
                     if compute_overlaps {
                         overlaps.push(overlap_metric(
                             candidate.geometry(),
-                            self.ruleset.geometry_checked(rule_id),
+                            self.ruleset.geometry(rule_id),
                         ));
                     }
                 }
@@ -444,7 +444,7 @@ impl<'a> PreparedQuery<'a> {
         }
         scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
         for &rule_id in scratch.iter() {
-            if min_haversine_distance(candidate.geometry(), self.ruleset.geometry_checked(rule_id))
+            if min_haversine_distance(candidate.geometry(), self.ruleset.geometry(rule_id))
                 <= distance
             {
                 on_within(rule_id);
@@ -548,7 +548,7 @@ impl<'a> PreparedQuery<'a> {
             .into_iter()
             .map(|rule_id| ApplicableRule {
                 rule_id,
-                priority: self.ruleset.priority_checked(rule_id),
+                priority: self.ruleset.priority(rule_id),
                 spatial_matched: true,
                 property_matched: true,
             })
@@ -566,7 +566,7 @@ impl<'a> PreparedQuery<'a> {
         let winner = applicable[0].rule_id;
         let mut values: BTreeMap<String, PropertyValue> = BTreeMap::new();
         for rule in &applicable {
-            for (key, value) in self.ruleset.properties_checked(rule.rule_id) {
+            for (key, value) in self.ruleset.properties(rule.rule_id) {
                 values.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
