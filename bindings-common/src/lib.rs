@@ -7,7 +7,8 @@
 //! every binding crosses.
 
 use spatial_rules_core::{
-    Aggregate, CandidateOutcome, Query, ReplaceReport, ResolutionOutcome, Ruleset, SpatialError,
+    candidates_from_geojson, Aggregate, Candidate, CandidateOutcome, Query, ReplaceReport,
+    ResolutionOutcome, Ruleset, SpatialError,
 };
 
 /// The `"SR_CODE: message"` string a binding throws as its error (the same
@@ -23,6 +24,20 @@ pub fn parse_query(query_json: &str) -> Result<Query, SpatialError> {
     let value: serde_json::Value = serde_json::from_str(query_json)
         .map_err(|e| SpatialError::invalid_query(format!("query is not valid JSON: {e}")))?;
     Query::from_json(&value)
+}
+
+/// Parse a batch's candidate GeoJSON and query together — the shared
+/// candidate-ingestion + query-parse handoff every binding performs before
+/// evaluation. Each binding only keeps its own host-language input conversion
+/// (Node `Buffer`, WASM `&str`, Python `str | bytes | dict`) and then crosses
+/// this seam with plain text.
+pub fn parse_inputs(
+    candidates_json: &str,
+    query_json: &str,
+) -> Result<(Vec<Candidate>, Query), SpatialError> {
+    let candidates = candidates_from_geojson(candidates_json)?;
+    let query = parse_query(query_json)?;
+    Ok((candidates, query))
 }
 
 /// The ADR-0007 observability report as its JSON object.

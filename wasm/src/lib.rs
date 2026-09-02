@@ -12,19 +12,13 @@
 //! python) via `spatial-rules-bindings-common` — identical payload shapes.
 
 use spatial_rules_bindings_common::{
-    parse_query, query_rich_json, resolve_rich_json, spatial_error_message,
+    parse_inputs, query_rich_json, resolve_rich_json, spatial_error_message,
 };
-use spatial_rules_core::{candidates_from_geojson, Candidate, ErrorCode, Query, Ruleset, SpatialError};
+use spatial_rules_core::{ErrorCode, Ruleset, SpatialError};
 use wasm_bindgen::prelude::*;
 
 fn spatial_error_to_js(error: SpatialError) -> JsError {
     JsError::new(&spatial_error_message(&error))
-}
-
-fn parse_inputs(candidates: &str, query: &str) -> Result<(Vec<Candidate>, Query), SpatialError> {
-    let candidates = candidates_from_geojson(candidates)?;
-    let query = parse_query(query)?;
-    Ok((candidates, query))
 }
 
 /// A compiled ruleset ready to evaluate candidate batches. Mirrors the Node

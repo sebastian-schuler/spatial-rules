@@ -14,8 +14,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use spatial_rules_bindings_common::{
-    parse_query as parse_query_json, query_rich_json, report_to_json, resolve_rich_json,
-    spatial_error_message,
+    parse_inputs, query_rich_json, report_to_json, resolve_rich_json, spatial_error_message,
 };
 use spatial_rules_core::{Engine, SpatialError};
 
@@ -56,14 +55,7 @@ fn any_to_json_string(
     Ok(text)
 }
 
-/// The JSON string of a Python input parsed by the shared `Query` parser —
-/// the same parser the napi and wasm paths use.
-fn parse_query(query: &Bound<'_, PyAny>) -> Result<spatial_rules_core::Query, SpatialError> {
-    let text = any_to_json_string(query, "query", spatial_rules_core::ErrorCode::InvalidQuery)?;
-    parse_query_json(&text)
-}
-
-fn parse_inputs(
+fn parse_py_inputs(
     candidates: &Bound<'_, PyAny>,
     query: &Bound<'_, PyAny>,
 ) -> Result<(Vec<spatial_rules_core::Candidate>, spatial_rules_core::Query), SpatialError> {
@@ -72,9 +64,8 @@ fn parse_inputs(
         "candidates",
         spatial_rules_core::ErrorCode::InvalidGeoJson,
     )?;
-    let candidates = spatial_rules_core::candidates_from_geojson(&candidates)?;
-    let query = parse_query(query)?;
-    Ok((candidates, query))
+    let query = any_to_json_string(query, "query", spatial_rules_core::ErrorCode::InvalidQuery)?;
+    parse_inputs(&candidates, &query)
 }
 
 /// A JSON string parsed by Python's `json.loads` into the corresponding
@@ -105,14 +96,14 @@ impl Ruleset {
     /// Evaluate `query` against `candidates`; the compact mask as a list of
     /// ints: `0` no match, `1` matched, `2` invalid (ADR-0004).
     fn query(&self, candidates: &Bound<'_, PyAny>, query: &Bound<'_, PyAny>) -> PyResult<Vec<i64>> {
-        let (candidates, query) = parse_inputs(candidates, query).map_err(to_pyerr)?;
+        let (candidates, query) = parse_py_inputs(candidates, query).map_err(to_pyerr)?;
         Ok(self.engine.query_mask(&candidates, &query).into_iter().map(i64::from).collect())
     }
 
     /// Resolve `query` against `candidates`; the compact mask as a list of
     /// ints: `0` no resolution, `1` resolved, `2` invalid (ADR-0015).
     fn resolve(&self, candidates: &Bound<'_, PyAny>, query: &Bound<'_, PyAny>) -> PyResult<Vec<i64>> {
-        let (candidates, query) = parse_inputs(candidates, query).map_err(to_pyerr)?;
+        let (candidates, query) = parse_py_inputs(candidates, query).map_err(to_pyerr)?;
         Ok(self.engine.resolve_mask(&candidates, &query).into_iter().map(i64::from).collect())
     }
 
@@ -124,7 +115,7 @@ impl Ruleset {
         candidates: &Bound<'_, PyAny>,
         query: &Bound<'_, PyAny>,
     ) -> PyResult<PyObject> {
-        let (candidates, query) = parse_inputs(candidates, query).map_err(to_pyerr)?;
+        let (candidates, query) = parse_py_inputs(candidates, query).map_err(to_pyerr)?;
         let ruleset = self.engine.snapshot();
         let outcomes = ruleset.query(&candidates, &query);
         let json_str = query_rich_json(&ruleset, &outcomes);
@@ -139,7 +130,7 @@ impl Ruleset {
         candidates: &Bound<'_, PyAny>,
         query: &Bound<'_, PyAny>,
     ) -> PyResult<PyObject> {
-        let (candidates, query) = parse_inputs(candidates, query).map_err(to_pyerr)?;
+        let (candidates, query) = parse_py_inputs(candidates, query).map_err(to_pyerr)?;
         let ruleset = self.engine.snapshot();
         let outcomes = ruleset.resolve(&candidates, &query);
         let json_str = resolve_rich_json(&ruleset, &outcomes);

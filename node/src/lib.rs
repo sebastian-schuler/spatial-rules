@@ -13,11 +13,9 @@ use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
 use spatial_rules_bindings_common::{
-    parse_query, query_rich_json, report_to_json, resolve_rich_json,
+    parse_inputs, query_rich_json, report_to_json, resolve_rich_json,
 };
-use spatial_rules_core::{
-    candidates_from_geojson, Candidate, Engine, ErrorCode, Query, ReplaceReport, SpatialError,
-};
+use spatial_rules_core::{Candidate, Engine, ErrorCode, Query, ReplaceReport, SpatialError};
 
 fn spatial_error_to_napi(error: SpatialError) -> Error<&'static str> {
     Error::new(error.code.as_str(), error.message)
@@ -42,9 +40,7 @@ fn parse_inputs_core(
 ) -> Result<(Vec<Candidate>, Query), SpatialError> {
     let text = std::str::from_utf8(candidates)
         .map_err(|e| SpatialError::invalid_geojson(format!("candidates are not valid UTF-8: {e}")))?;
-    let candidates = candidates_from_geojson(text)?;
-    let query = parse_query(query)?;
-    Ok((candidates, query))
+    parse_inputs(text, query)
 }
 
 fn report_to_string(report: ReplaceReport) -> napi::Result<String, &'static str> {
