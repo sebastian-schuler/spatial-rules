@@ -15,6 +15,7 @@
 //   memory       container memory harness [--replacements-only]
 //   memory-scale memory scaling & lifecycle benchmark (rules × vertices grid)
 //   memory-turf  engine vs turf.js memory footprint (same synthetic rules)
+//   python       engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
 //   smoke:node   node package smoke test
 //   crit         criterion algorithm ladder
 //   all          full battery (build + gen if needed; then cross-check/scale/fair/complex/crossover/perf/http/memory)
@@ -47,6 +48,8 @@ const CROSS_CHECK = join(REPO_ROOT, 'benchmarks', 'js', 'cross_check.mjs');
 const MEMORY = join(REPO_ROOT, 'integration', 'memory.mjs');
 const MEMORY_SCALE_BIN = join(REPO_ROOT, 'target', 'release', `memory_scaling${process.platform === 'win32' ? '.exe' : ''}`);
 const MEMORY_TURF = join(REPO_ROOT, 'benchmarks', 'js', 'memory-turf.mjs');
+const PY_BENCH = join(REPO_ROOT, 'benchmarks', 'py', 'bench.py');
+const PY_VENV_PYTHON = join(REPO_ROOT, 'python', '.venv', process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python');
 const SERVER = join(REPO_ROOT, 'integration', 'server.mjs');
 const SMOKE = join(REPO_ROOT, 'integration', 'smoke.mjs');
 const NODE_SMOKE = join(REPO_ROOT, 'node', 'test', 'smoke.ts');
@@ -165,12 +168,38 @@ async function cmdAll() {
     { name: 'perf', file: SERVER_BENCH, needsSub: true },
     { name: 'http', file: SERVER_BENCH, needsSub: true },
     { name: 'memory', file: MEMORY, needsSub: false },
+    { name: 'python', file: PY_BENCH, needsSub: false },
   ];
   for (const { name, file, needsSub } of battery) {
     console.log(`\n=== bun run bench ${name} ===`);
-    run('bun', needsSub ? [file, name] : [file]);
+    if (name === 'python') cmdPython([]);
+    else run('bun', needsSub ? [file, name] : [file]);
   }
   console.log('\n`load` (concurrency) needs a running server — `bun run bench server`, then `bun run bench load`.');
+}
+
+function cmdPython(args) {
+  // Build the PyO3 wheel into the dev venv if not already importable.
+  const probe = spawnSync(PY_VENV_PYTHON, ['-c', 'import spatial_rules'], { cwd: REPO_ROOT, stdio: 'pipe' });
+  if (probe.status !== 0) {
+    console.log('spatial-rules not importable in python/.venv — building the wheel (maturin develop --release)...');
+    run(PY_VENV_PYTHON, ['-m', 'maturin', 'develop', '--release'], { cwd: join(REPO_ROOT, 'python') });
+  } else {
+    console.log('spatial-rules already importable — skipping wheel build');
+  }
+
+  // Ensure the Shapely/GEOS baseline dependencies are present.
+  const deps = spawnSync(PY_VENV_PYTHON, ['-c', 'import shapely, numpy'], { cwd: REPO_ROOT, stdio: 'pipe' });
+  if (deps.status !== 0) {
+    console.log('installing shapely + numpy into python/.venv...');
+    run(PY_VENV_PYTHON, ['-m', 'pip', 'install', '--quiet', 'shapely>=2.0', 'numpy']);
+  }
+
+  if (!existsSync(RULES_FILE) || !existsSync(CANDIDATES_FILE)) {
+    console.error(`missing dataset — run \`bun run bench gen\` first`);
+    process.exit(1);
+  }
+  run(PY_VENV_PYTHON, [PY_BENCH, ...args]);
 }
 
 function cmdMemoryScale(args) {
@@ -226,6 +255,7 @@ usage: bun run bench <cmd> [flags]
   memory        container memory harness  [--replacements-only]
   memory-scale  memory scaling & lifecycle benchmark [--cells= --rules= --vertices= --candidates= --query-batches= --replacements=]
   memory-turf   engine vs turf.js memory footprint, same synthetic rules [--cells=]
+  python        engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
   smoke:node    node package smoke test
   crit          criterion algorithm ladder (cargo bench)
   all           full battery (build + gen if needed)
@@ -264,6 +294,7 @@ switch (cmd) {
   case 'memory': ensureNodeBinding(); run('bun', [MEMORY, ...args]); break;
   case 'memory-scale': cmdMemoryScale(args); break;
   case 'memory-turf': run('bun', [MEMORY_TURF, ...args]); break;
+  case 'python': cmdPython(args); break;
   case 'smoke:node': ensureNodeBinding(); run('bun', [NODE_SMOKE, ...args]); break;
   case 'crit': cmdCrit(args); break;
   case 'all': await cmdAll(); break;

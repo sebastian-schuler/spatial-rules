@@ -21,7 +21,9 @@ knows nothing about any specific application domain.
 **One number:** ~18.5 ms to evaluate 1,000 candidates × 30 rules — about **60×
 faster** than the equivalent turf.js check (~1.1 s). See
 [docs/benchmarks.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md)
-and the summary below.
+and the summary below. Note: that 60× is measured against turf.js (a pure-JS
+JSTS engine); against a native C++ baseline (Shapely/GEOS) the engine does not
+win — see [Performance vs Python](#performance-vs-python-shapelygeos) below.
 
 ## Performance vs turf.js
 
@@ -67,6 +69,46 @@ The short version:
   (the 100k×100 serving footprint dropped from ~1.8 GiB to ~282 MiB at 1,000
   candidates). Worst case (touch-everything workloads) and the per-thread
   duplication remain at the pre-lazy ceiling (geo 0.34 deferral).
+
+## Performance vs Python (Shapely/GEOS)
+
+The turf.js comparison is the JS story — but turf runs a **pure-JS** DE-9IM
+engine (JSTS), which is *why* it's 60×+ slower. The standard Python competitor,
+**Shapely 2.x**, wraps **GEOS** — a mature native C++ DE-9IM engine with its own
+prepared geometry and spatial-index machinery — so it is a genuinely strong
+opponent. The full picture is in
+[docs/benchmarks.md §2b](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md);
+the honest summary (`bun run bench python`, release PyO3 wheel, min-of-3):
+
+| Workload | Shapely/GEOS | spatial-rules | winner |
+|---|---|---|---|
+| 1,000 candidates × 30 rules (core batch) | ~3 ms | ~13 ms | **Shapely ~4.5×** |
+| 1,000 candidates × 30 rules, naive scan | ~32 ms | ~13 ms | engine ~2.4× |
+| 1,000 candidates × 300 rules (indexed) | ~2 ms | ~5 ms | Shapely ~2× |
+| 1,000 candidates × 1,000 rules (indexed) | ~2 ms | ~5 ms | Shapely ~2× |
+
+The engine's ~13 ms on the reference matches its own criterion ladder's
+relate-only rung; the masks are byte-identical between the engine and Shapely
+(verified across all 1,000 candidates), so this is a real result, not a
+measurement artifact.
+
+The short version, honestly:
+
+- **Against a pure-JS engine, the engine wins big** (60–1,000× vs turf.js).
+- **Against a native C++ GEOS baseline, Shapely wins the reference point**
+  (~4.5×) and stays ahead as the ruleset grows. Why: prepared GEOS relate
+  beats the engine's `geo` relate loop on complex multipolygons, and the engine
+  pays a per-call parse + PyO3 boundary that Shapely's pre-parsed, pre-indexed
+  setup avoids. Both sides stay flat with rule count — each has a real index —
+  so the gap is the relate engine, not index scaling.
+- The engine still wins the **naive scan** (~2.4×) — that rung is the only one
+  where the engine beats Shapely — but even its best case is a fraction of the
+  margin it had over turf.
+- **Bottom line**: the "thousands of ×" claim is specific to turf.js/JSTS. The
+  PyO3 wheel is a thin Python binding over the same Rust core, so it does not
+  out-run a native GEOS-backed library on core `intersects`. The engine's value
+  against Shapely is its **ruleset model** — the Mongo-style `where`, DE-9IM
+  predicates, resolution, and aggregation — not raw DE-9IM throughput.
 
 ## What it does
 

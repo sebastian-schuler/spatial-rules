@@ -493,6 +493,84 @@ geometry clone per thread per ruleset) is deferred to the geo 0.34 upgrade
 (ticket 05 of `post-v1`), which moves the cache from owned per-thread clones to
 borrowed `Arc`-shared prepared forms.
 
+## 2b. Python baseline — engine PyO3 wheel vs Shapely/GEOS (`bun run bench python`)
+
+The JS harness's competitor is turf.js (a pure-JS JSTS DE-9IM engine, §2). The
+Python harness's competitor is **Shapely 2.x**, which is a thin wrapper over
+**GEOS** — a mature, heavily-optimized native C++ DE-9IM engine with its own
+prepared geometry and spatial-index machinery. This is *why* the Python numbers
+below are nothing like the turf numbers: an engine win here is a real proof,
+and a Shapely win is not an artifact.
+
+The harness compares the engine's `spatial-rules` (PyO3) wheel against two
+Shapely baselines on **core `intersects` only** (`benchmarks/py/bench.py` +
+`benchmarks/py/shapely_baseline.py`):
+
+- **naive** — every candidate × every rule, `shapely.intersects(c, r)`, rule
+  geometries `prepare`d once.
+- **indexed** — the strongest competitor: a bulk-loaded `shapely.STRtree` over
+  the rules, each rule `prepare`d once, then one vectorized
+  `tree.query(cands_array, predicate="intersects")` per batch.
+
+**Fairness (mirrors the JS harness, §"Limitations suite"):** the engine is timed
+for the full steady-state call a user makes — `Ruleset.query(bytes, query)` —
+GeoJSON parse + PyO3 + index + relate + mask on every query. The Shapely side is
+given pre-parsed geometries, a prebuilt STRtree and prepared rule forms, all
+excluded from timing. So an *engine* win is conservative; a Shapely win is real.
+Both sides assert an identical matched count before timing (min-of-N).
+
+### Results (Windows, release wheel, 2026-09-02, min-of-3)
+
+**Reference — 30 rules × 1,000 candidates (481 matched):**
+
+| baseline | time/batch | winner |
+|---|---|---|
+| Shapely naive (scan) | ~32 ms | engine 2.4× |
+| Shapely STRtree + prepare | ~3.0 ms | **Shapely 4.4×** |
+| engine (PyO3, full) | ~13 ms | baseline |
+
+**Rules sweep — fixed 1,000 candidates, grid rules (both sides agree):**
+
+| rules | Shapely indexed (ms) | engine (ms) | winner | matched |
+|---|---|---|---|---|
+| 30 | 2.1 | 4.4 | Shapely 2.1× | 448 |
+| 300 | 2.2 | 4.7 | Shapely 2.1× | 596 |
+| 1,000 | 2.4 | 4.9 | Shapely 2.2× | 654 |
+
+**Findings:**
+
+- **The engine loses the reference point to Shapely (~4.4×), and this is real.**
+  Shapely's prepared GEOS relate on country-scale multipolygons genuinely beats
+  the engine's `geo` `relate` loop, and the engine eats a per-call parse + PyO3
+  FFI floor that Shapely's pre-parsed setup avoids. The masks are byte-identical
+  (verified across all 1,000 candidates), so this isn't a measurement artifact.
+- **This is the honest story: GEOS is a first-class competitor.** The
+  "engine is thousands of x faster" narrative holds against pure-JS
+  turf.js/JSTS, but not against a native C++ GEOS-backed baseline. Anyone
+  comparing the Python wheel to Shapely should expect a single-digit × gap in
+  Shapely's favor on the reference shape.
+- **The rules sweep is *not* the engine's redeeming plot here.** Unlike the turf
+  crossover (§5), where turf's scan grows linearly and the engine stays flat, in
+  Python **both sides stay roughly flat** (2.1→2.4 ms for Shapely, 4.4→4.9 ms
+  for the engine) — because Shapely's STRtree + prepared relate is as
+  index-benefited as the engine's R\*-tree + prepared geometry. The gap is
+  constant, driven by GEOS prepared relate vs the engine's relate loop, not by
+  index scaling.
+- **The naive row is the only place the engine wins** (engine 2.4×). This is
+  the analog of the naive-turf row, but even here the engine's win is small:
+  GEOS beats JSTS at the underlying relate, so the per-pair crossing is less
+  punishing than it was for turf.
+- **Shapely only wins by leveraging its pre-parse/predict slate.** If the engine
+  were measured relate-only (the criterion ladder's F rung, ~14.7 ms for the same
+  1k×30 shape), it would still lose to Shapely's ~3 ms — that delta is GEOS
+  being a faster native DE-9IM engine, not the PyO3 boundary.
+
+**Provisioning:** `bun run bench python` builds the PyO3 wheel into
+`python/.venv` with `maturin develop --release` (if not already importable),
+installs `shapely>=2.0` + `numpy` into that venv if absent, then runs the
+harness. A pure-python (no-deps) baseline is intentionally out of scope — it
+would be a strawman nobody ships.
+
 ## Limitations suite — why turf doesn't scale
 
 Five harnesses demonstrate turf.js's limits and why the engine exists
@@ -764,6 +842,7 @@ bun run bench memory         # container memory (§24/§25)
 bun run bench memory --replacements-only   # isolate replacement peak
 bun run bench memory-scale   # scaling & lifecycle grid [--cells= --rules= --vertices=]
 bun run bench memory-turf    # engine vs turf.js memory footprint [--cells=]
+bun run bench python         # engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
 bun run bench smoke:node     # node package smoke test
 bun run bench crit           # criterion ladder
 bun run bench all            # full battery (build + gen if needed)
@@ -795,6 +874,7 @@ the harnesses read, with the flag that overrides it:
 | `load` | `endpoint` `concurrency` `duration` | `--endpoint` `--concurrency` `--duration` | `json` `25` `10000` |
 | `memory` | `queryBatches` `replacements` `replacementsOnly` | `--query-batches` `--replacements` `--replacements-only` | `20` `10` `false` |
 | `memoryScale` | `cells` `rules` `vertices` `candidates` `queryBatches` `replacements` | `--cells` `--rules` `--vertices` `--candidates` `--query-batches` `--replacements` | `1000x10,…,100000x100` `1000,10000,100000` `10,100,1000` `1000` `20` `20` |
+| `python` | `reps` `points` `candidates` | `--reps` `--points` `--candidates` | `3` `30,300,1000` `1000` |
 
 `rulesFile: null` means synthetic mode; set it (or pass `--rules-file=…`) to run
 against a real GeoJSON boundary file. Paths are repo-root-relative. There are no
