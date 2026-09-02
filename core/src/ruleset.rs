@@ -86,6 +86,23 @@ impl Ruleset {
                     ),
                 ));
             }
+            // Property floats must be finite so the canonical ruleset JSON (the
+            // serialization boundary ADR-0013 defines) can always round-trip.
+            // Enforced at the single construction gate so GeoJSON, canonical
+            // loads, and programmatic `Rule`s all land here.
+            if let Some((key, _)) = rule
+                .properties
+                .iter()
+                .find(|(_, value)| !value.is_serializable())
+            {
+                return Err(SpatialError::new(
+                    ErrorCode::RulesetConstructionFailed,
+                    format!(
+                        "rule '{}': property '{key}' holds a non-finite number",
+                        rule.id
+                    ),
+                ));
+            }
             if ids.insert(rule.id.clone(), owner(index as u32)).is_some() {
                 return Err(SpatialError::new(
                     ErrorCode::RulesetConstructionFailed,
@@ -465,6 +482,22 @@ mod tests {
         // Two loads from the same bytes are also distinct instances.
         let loaded_again = Ruleset::from_canonical(&bytes).unwrap();
         assert_ne!(loaded.id, loaded_again.id);
+    }
+
+    #[test]
+    fn build_rejects_non_finite_property_floats() {
+        let mut rule = sample_rules().remove(0);
+        rule.properties
+            .insert("score".to_string(), crate::properties::PropertyValue::Float(f64::NAN));
+        let err = Ruleset::build(vec![rule]).unwrap_err();
+        assert_eq!(err.code, ErrorCode::RulesetConstructionFailed);
+        assert!(err.message.contains("non-finite"));
+
+        // A finite float is accepted.
+        let mut rule = sample_rules().remove(0);
+        rule.properties
+            .insert("score".to_string(), crate::properties::PropertyValue::Float(4.2));
+        assert!(Ruleset::build(vec![rule]).is_ok());
     }
 
     fn far_apart_rules() -> Vec<Rule> {

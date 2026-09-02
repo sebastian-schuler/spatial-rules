@@ -81,6 +81,29 @@ impl std::hash::Hash for PropertyValue {
 }
 
 impl PropertyValue {
+    /// Build a [`PropertyValue::Float`], rejecting the non-finite floats
+    /// (`NaN`/`±inf`) the canonical JSON serialization cannot represent. Returns
+    /// `None` for a non-finite value so a programmatic caller cannot construct a
+    /// value that would later fail at the serialization boundary.
+    pub fn float(value: f64) -> Option<Self> {
+        if value.is_finite() {
+            Some(PropertyValue::Float(value))
+        } else {
+            None
+        }
+    }
+
+    /// Whether this value is one the canonical ruleset JSON can serialize — in
+    /// v1 that means no non-finite `Float` (arrays/nested objects are never
+    /// stored). Used to validate a ruleset at construction so every path that
+    /// builds one (GeoJSON, canonical, programmatic) lands on the same gate.
+    pub fn is_serializable(&self) -> bool {
+        match self {
+            PropertyValue::Float(f) => f.is_finite(),
+            _ => true,
+        }
+    }
+
     /// Convert a JSON value into a [`PropertyValue`], or `None` for the
     /// unsupported v1 types (arrays and nested objects).
     pub fn from_json_value(value: &serde_json::Value) -> Option<Self> {
@@ -193,5 +216,20 @@ mod tests {
         assert_eq!(properties.len(), 1);
         assert_eq!(properties.get("active"), Some(&PropertyValue::Bool(true)));
         assert!(!properties.contains_key("nested"));
+    }
+
+    #[test]
+    fn float_rejects_non_finite_values() {
+        assert_eq!(PropertyValue::float(4.2), Some(PropertyValue::Float(4.2)));
+        assert_eq!(PropertyValue::float(f64::NAN), None);
+        assert_eq!(PropertyValue::float(f64::INFINITY), None);
+        assert_eq!(PropertyValue::float(f64::NEG_INFINITY), None);
+    }
+
+    #[test]
+    fn is_serializable_rejects_non_finite_floats() {
+        assert!(PropertyValue::Float(1.5).is_serializable());
+        assert!(!PropertyValue::Float(f64::NAN).is_serializable());
+        assert!(!PropertyValue::Float(f64::INFINITY).is_serializable());
     }
 }
