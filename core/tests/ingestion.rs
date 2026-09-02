@@ -124,7 +124,7 @@ fn builds_candidate_from_feature() {
     let candidates: Vec<Candidate> = candidates_from_geojson(VALID_COLLECTION).unwrap();
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0].id, "rule-17");
-    assert_eq!(candidates[0].geometry, geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)));
+    assert_eq!(candidates[0].geometry(), &geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)));
 }
 
 #[test]

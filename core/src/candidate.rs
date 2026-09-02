@@ -25,7 +25,9 @@ pub struct Candidate {
     /// Application-supplied identifier (feature `id`).
     pub id: String,
     /// The candidate geometry (Polygon, MultiPolygon, Point, or MultiPoint).
-    pub geometry: Geometry<f64>,
+    /// Private so the caching `class` below can never describe a different
+    /// geometry: the field is write-once at [`Candidate::new`].
+    geometry: Geometry<f64>,
     /// The precomputed classification (envelope or invalid reason).
     class: CandidateClass,
 }
@@ -44,6 +46,15 @@ impl Candidate {
             geometry,
             class,
         }
+    }
+
+    /// The candidate geometry (Polygon, MultiPolygon, Point, or MultiPoint).
+    ///
+    /// Read-only by construction: mutating the geometry after [`Candidate::new`]
+    /// would orphan the cached `class` (envelope or invalid reason), so the
+    /// field is private and exposed through this accessor.
+    pub fn geometry(&self) -> &Geometry<f64> {
+        &self.geometry
     }
 
     /// The precomputed classification (envelope for valid candidates, invalid

@@ -27,12 +27,13 @@ pub struct EqualityIndex {
 }
 
 impl EqualityIndex {
-    /// Build the equality index from rules, assigning ids by position (`0..n-1`).
-    pub fn build(rules: &[Rule]) -> Self {
+    /// Build the equality index from rules, assigning ids by position (`0..n-1`)
+    /// bound to the owning ruleset `owner`.
+    pub fn build(rules: &[Rule], owner: u64) -> Self {
         let mut equality: BTreeMap<String, BTreeMap<PropertyValue, Vec<RuleId>>> =
             BTreeMap::new();
         for (index, rule) in rules.iter().enumerate() {
-            let rule_id = RuleId(index as u32);
+            let rule_id = RuleId::new(index as u32, owner);
             for (name, value) in &rule.properties {
                 equality
                     .entry(name.clone())

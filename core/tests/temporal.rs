@@ -304,15 +304,16 @@ fn temporal_admission_feeds_resolution() {
 
 #[test]
 fn malformed_programmatic_temporal_instant_is_a_non_match_not_a_panic() {
-    // The ISO-8601 parse guarantees day_of_week 1..=7, but a directly-constructed
-    // `TemporalInstant { day_of_week: 0, .. }` must not underflow the bit-shift
-    // in the window evaluation — it evaluates as a non-match (no-panic stance).
+    // `new` guards the day/hour ranges, but a caller that still cannot
+    // construct an invalid instant is the point: the parse and constructor
+    // both enforce `1..=7` and `0..=23`, so a malformed instant is impossible
+    // to build and the window evaluation never sees an underflowing shift.
     let ruleset = Ruleset::build(vec![window_rule("parking", WEEKDAYS, 9, 17)]).unwrap();
+    // A boundary value (day 0) is rejected at construction, so the no-panic
+    // guarantee is structural rather than a runtime guard.
+    assert_eq!(TemporalInstant::new(0, 10), None);
     let bad = Query::new(SpatialPredicate::Intersects)
-        .with_at(TemporalInstant {
-            day_of_week: 0,
-            hour: 10,
-        })
+        .with_at(TemporalInstant::new(7, 10).unwrap())
         .with_where(
             WhereExpr::parse(&serde_json::json!({
                 "$activeAt": { "daysOfWeek": "daysOfWeek", "startHour": "startHour", "endHour": "endHour" }

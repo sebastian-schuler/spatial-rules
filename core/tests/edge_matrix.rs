@@ -135,10 +135,11 @@ fn array_and_object_property_values_are_skipped() {
     )
     .unwrap();
     let zone = ruleset.rule_id("zone").unwrap();
+    let properties = ruleset.properties(zone).expect("minted by this ruleset");
     assert_eq!(
-        ruleset.properties(zone).get("active"),
+        properties.get("active"),
         Some(&spatial_rules_core::PropertyValue::Bool(true))
     );
-    assert!(!ruleset.properties(zone).contains_key("nested"));
-    assert!(!ruleset.properties(zone).contains_key("list"));
+    assert!(!properties.contains_key("nested"));
+    assert!(!properties.contains_key("list"));
 }

@@ -63,6 +63,11 @@ impl Ruleset {
         rules: Vec<Rule>,
         index_kind: SpatialIndexKind,
     ) -> Result<Self, SpatialError> {
+        // Assign the ruleset identity before minting any RuleId so each id is
+        // bound to this instance (a foreign id passed to an accessor is then
+        // a detectable misuse, not a silent positional alias).
+        let id = next_ruleset_id();
+        let owner = |index: u32| RuleId::new(index, id);
         let mut ids = HashMap::with_capacity(rules.len());
         for (index, rule) in rules.iter().enumerate() {
             validate_rule_geometry(&rule.geometry).map_err(|e| {
@@ -81,7 +86,7 @@ impl Ruleset {
                     ),
                 ));
             }
-            if ids.insert(rule.id.clone(), RuleId(index as u32)).is_some() {
+            if ids.insert(rule.id.clone(), owner(index as u32)).is_some() {
                 return Err(SpatialError::new(
                     ErrorCode::RulesetConstructionFailed,
                     format!("duplicate rule id: '{}'", rule.id),
@@ -105,15 +110,15 @@ impl Ruleset {
             .iter()
             .copied()
             .enumerate()
-            .map(|(index, rect)| (rect, RuleId(index as u32)))
+            .map(|(index, rect)| (rect, owner(index as u32)))
             .collect();
 
         let spatial_index = build_spatial_index(index_kind, index_entries);
-        let property_index: Box<dyn PropertyIndex> = Box::new(EqualityIndex::build(&rules));
+        let property_index: Box<dyn PropertyIndex> = Box::new(EqualityIndex::build(&rules, id));
         let priorities: Vec<i64> = rules.iter().map(|rule| rule.priority).collect();
 
         Ok(Ruleset {
-            id: next_ruleset_id(),
+            id,
             rules,
             ids,
             priorities,
@@ -133,6 +138,28 @@ impl Ruleset {
         self.rules.is_empty()
     }
 
+    /// The unique identity of this compiled ruleset instance — the owner every
+    /// [`RuleId`] minted by this ruleset is bound to (crate-internal, test
+    /// support for constructing owner-bound ids directly).
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Return the rule index for `rule_id`, `None` when it is out of range or
+    /// minted by a different ruleset (a foreign id is a misuse the accessors
+    /// reject instead of silently aliasing an unrelated rule).
+    #[inline]
+    fn checked_index(&self, rule_id: RuleId) -> Option<usize> {
+        if rule_id.owner == self.id {
+            let index = rule_id.index();
+            (index < self.rules.len()).then_some(index)
+        } else {
+            None
+        }
+    }
+
     /// Map an application-supplied string id to its numeric [`RuleId`].
     pub fn rule_id(&self, string_id: &str) -> Option<RuleId> {
         self.ids.get(string_id).copied()
@@ -140,32 +167,61 @@ impl Ruleset {
 
     /// Map a numeric [`RuleId`] back to the application-supplied string id.
     ///
-    /// Panics if `rule_id` is out of range (rule ids are only produced by this
-    /// ruleset).
-    pub fn string_id(&self, rule_id: RuleId) -> &str {
-        &self.rules[rule_id.0 as usize].id
+    /// Returns `None` for an out-of-range or foreign `rule_id` rather than
+    /// panicking — a `RuleId` minted by another ruleset is rejected as a
+    /// misuse (rule ids are only ever valid for the ruleset that minted them).
+    pub fn string_id(&self, rule_id: RuleId) -> Option<&str> {
+        self.checked_index(rule_id).map(|index| self.rules[index].id.as_str())
     }
 
-    /// The geometry of a rule by [`RuleId`].
-    pub fn geometry(&self, rule_id: RuleId) -> &Geometry<f64> {
-        &self.rules[rule_id.0 as usize].geometry
+    /// The geometry of a rule by [`RuleId`], or `None` for an out-of-range or
+    /// foreign id.
+    pub fn geometry(&self, rule_id: RuleId) -> Option<&Geometry<f64>> {
+        self.checked_index(rule_id).map(|index| &self.rules[index].geometry)
     }
 
-    /// The properties of a rule by [`RuleId`].
-    pub fn properties(&self, rule_id: RuleId) -> &BTreeMap<String, PropertyValue> {
-        &self.rules[rule_id.0 as usize].properties
+    /// The properties of a rule by [`RuleId`], or `None` for an out-of-range or
+    /// foreign id.
+    pub fn properties(&self, rule_id: RuleId) -> Option<&BTreeMap<String, PropertyValue>> {
+        self.checked_index(rule_id).map(|index| &self.rules[index].properties)
     }
 
-    /// The top-level precedence of a rule by [`RuleId`] (ADR-0015). Missing at
-    /// ingestion means `0` (unprioritized rules sort below any explicit
-    /// priority).
-    pub fn priority(&self, rule_id: RuleId) -> i64 {
-        self.priorities[rule_id.0 as usize]
+    /// The top-level precedence of a rule by [`RuleId`] (ADR-0015), or `None`
+    /// for an out-of-range or foreign id. Missing at ingestion means `0`
+    /// (unprioritized rules sort below any explicit priority).
+    pub fn priority(&self, rule_id: RuleId) -> Option<i64> {
+        self.checked_index(rule_id).map(|index| self.priorities[index])
     }
 
-    /// The precomputed envelope of a rule by [`RuleId`].
-    pub fn envelope(&self, rule_id: RuleId) -> &Rect<f64> {
-        &self.envelopes[rule_id.0 as usize]
+    /// The precomputed envelope of a rule by [`RuleId`], or `None` for an
+    /// out-of-range or foreign id.
+    pub fn envelope(&self, rule_id: RuleId) -> Option<&Rect<f64>> {
+        self.checked_index(rule_id).map(|index| &self.envelopes[index])
+    }
+
+    /// The geometry of a rule by [`RuleId`] on the query hot path.
+    ///
+    /// The hot path only ever passes ids minted by this ruleset (they come from
+    /// its own spatial/property indexes), so the owner check is skipped; an
+    /// out-of-range id would be a logic bug and panics loudly. Prefer the
+    /// checked [`Ruleset::geometry`] at public boundaries.
+    #[inline]
+    pub(crate) fn geometry_checked(&self, rule_id: RuleId) -> &Geometry<f64> {
+        &self.rules[rule_id.index()].geometry
+    }
+
+    /// The properties of a rule by [`RuleId`] on the query hot path (see
+    /// [`Ruleset::geometry_checked`]).
+    #[inline]
+    pub(crate) fn properties_checked(&self, rule_id: RuleId) -> &BTreeMap<String, PropertyValue> {
+        &self.rules[rule_id.index()].properties
+    }
+
+    /// The precedence of a rule by [`RuleId`] on the query hot path (see
+    /// [`Ruleset::geometry_checked`]).
+    #[inline]
+    pub(crate) fn priority_checked(&self, rule_id: RuleId) -> i64 {
+        self.priorities[rule_id.index()]
     }
 
     /// Rule ids whose envelope intersects `envelope`, via the spatial index.
@@ -231,6 +287,7 @@ impl Ruleset {
         RuleSource {
             rules: &self.rules,
             envelopes: &self.envelopes,
+            owner: self.id,
         }
     }
 
@@ -245,7 +302,8 @@ impl Ruleset {
     /// (memory-benchmark ticket 02).
     pub fn prepared(&self) -> PreparedRuleGeometries {
         PreparedRuleGeometries {
-            inner: PreparedMemo::for_ruleset(&self.rules, self.id).snapshot_all(),
+            inner: PreparedMemo::for_ruleset(&self.rules, self.id).snapshot_all(self.id),
+            owner: self.id,
         }
     }
 
@@ -319,15 +377,25 @@ impl Ruleset {
 pub struct RuleSource<'a> {
     rules: &'a [Rule],
     envelopes: &'a [Rect<f64>],
+    owner: u64,
 }
 
 impl<'a> RuleSource<'a> {
     /// Iterate over `(id, geometry, envelope)` in ruleset order.
     pub fn iter(&self) -> impl Iterator<Item = (RuleId, &'a Geometry<f64>, &'a Rect<f64>)> {
-        self.rules
+        let rules = self.rules;
+        let envelopes = self.envelopes;
+        let owner = self.owner;
+        rules
             .iter()
             .enumerate()
-            .map(|(index, rule)| (RuleId(index as u32), &rule.geometry, &self.envelopes[index]))
+            .map(move |(index, rule)| {
+                (
+                    RuleId::new(index as u32, owner),
+                    &rule.geometry,
+                    &envelopes[index],
+                )
+            })
     }
 }
 
@@ -336,12 +404,19 @@ impl<'a> RuleSource<'a> {
 /// reading the numeric position (architecture-hardening 04).
 pub struct PreparedRuleGeometries {
     inner: PreparedGeometries,
+    owner: u64,
 }
 
 impl PreparedRuleGeometries {
-    /// The prepared DE-9IM geometry for a rule by opaque [`RuleId`].
-    pub fn get(&self, rule_id: RuleId) -> &PreparedGeometry<'static, Geometry<f64>> {
-        &self.inner[rule_id.0 as usize]
+    /// The prepared DE-9IM geometry for a rule by opaque [`RuleId`], or `None`
+    /// for an out-of-range or foreign id.
+    pub fn get(&self, rule_id: RuleId) -> Option<&PreparedGeometry<'static, Geometry<f64>>> {
+        if rule_id.owner == self.owner {
+            let index = rule_id.index();
+            (index < self.inner.len()).then(|| &self.inner[index])
+        } else {
+            None
+        }
     }
 
     /// Iterate over prepared geometries in ruleset order.
@@ -448,7 +523,8 @@ mod tests {
         let outcomes = ruleset.query(std::slice::from_ref(&candidate), &query);
         assert!(matches!(
             &outcomes[0],
-            CandidateOutcome::Matched { rule_ids, .. } if rule_ids == &vec![RuleId(0)]
+            CandidateOutcome::Matched { rule_ids, .. }
+                if rule_ids == &vec![RuleId::new(0, ruleset.id)]
         ));
 
         assert!(prepared_cache::slot_is_prepared(ruleset.id, 0));
@@ -487,7 +563,10 @@ mod tests {
         let CandidateOutcome::Matched { rule_ids, .. } = &outcomes[0] else {
             panic!("expected a match");
         };
-        assert_eq!(rule_ids, &vec![RuleId(0), RuleId(1)]);
+        assert_eq!(
+            rule_ids,
+            &vec![RuleId::new(0, ruleset.id), RuleId::new(1, ruleset.id)]
+        );
     }
 
     /// Worst case is unchanged (memory-benchmark ticket 02): a workload whose
@@ -540,7 +619,11 @@ mod tests {
 
         let prepared = ruleset.prepared();
         assert_eq!(prepared.len(), 2);
-        assert!(prepared.get(RuleId(0)).bounding_rect().is_some());
+        assert!(prepared
+            .get(RuleId::new(0, ruleset.id))
+            .expect("rule id minted by this ruleset")
+            .bounding_rect()
+            .is_some());
         assert!(prepared.iter().count() == 2);
         assert!(prepared_cache::slot_is_prepared(ruleset.id, 0));
         assert!(prepared_cache::slot_is_prepared(ruleset.id, 1));

@@ -44,8 +44,8 @@ fn builds_ruleset_from_geojson() {
     assert_eq!(ruleset.rule_id("zone-a"), Some(zone_a));
     assert_eq!(ruleset.rule_id("zone-b"), Some(zone_b));
     assert_eq!(ruleset.rule_id("missing"), None);
-    assert_eq!(ruleset.string_id(zone_a), "zone-a");
-    assert_eq!(ruleset.string_id(zone_b), "zone-b");
+    assert_eq!(ruleset.string_id(zone_a), Some("zone-a"));
+    assert_eq!(ruleset.string_id(zone_b), Some("zone-b"));
 }
 
 #[test]
@@ -54,14 +54,14 @@ fn exposes_geometry_and_properties_by_rule_id() {
     let a = ruleset.rule_id("zone-a").unwrap();
     assert_eq!(
         ruleset.geometry(a),
-        &geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0))
+        Some(&geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)))
     );
     assert_eq!(
-        ruleset.properties(a).get("classification"),
+        ruleset.properties(a).unwrap().get("classification"),
         Some(&PropertyValue::Str("restricted".into()))
     );
     assert_eq!(
-        ruleset.properties(a).get("active"),
+        ruleset.properties(a).unwrap().get("active"),
         Some(&PropertyValue::Bool(true))
     );
 }
@@ -71,9 +71,9 @@ fn exposes_precomputed_envelopes() {
     let ruleset = Ruleset::from_geojson(GEOJSON).unwrap();
     let zone_a = ruleset.rule_id("zone-a").unwrap();
     let zone_b = ruleset.rule_id("zone-b").unwrap();
-    assert_eq!(*ruleset.envelope(zone_a), Rect::new((0.0, 0.0), (10.0, 10.0)));
+    assert_eq!(*ruleset.envelope(zone_a).unwrap(), Rect::new((0.0, 0.0), (10.0, 10.0)));
     assert_eq!(
-        *ruleset.envelope(zone_b),
+        *ruleset.envelope(zone_b).unwrap(),
         Rect::new((100.0, 100.0), (110.0, 110.0))
     );
 }
@@ -258,10 +258,10 @@ fn canonical_round_trip_preserves_rules() {
 
     assert_eq!(loaded.len(), original.len());
     for (source_id, source_geometry, source_envelope) in original.rules().iter() {
-        let id = original.string_id(source_id);
+        let id = original.string_id(source_id).expect("rule id minted by original");
         let target_id = loaded.rule_id(id).expect("rule id survives the round trip");
-        assert_eq!(loaded.geometry(target_id), source_geometry);
-        assert_eq!(*loaded.envelope(target_id), *source_envelope);
+        assert_eq!(loaded.geometry(target_id), Some(source_geometry));
+        assert_eq!(*loaded.envelope(target_id).unwrap(), *source_envelope);
         assert_eq!(
             loaded.properties(target_id),
             original.properties(source_id)
@@ -309,9 +309,9 @@ fn ruleset_hoists_priority_aligned_to_rule_id() {
         rule_with_priority("unprioritized", 0),
     ])
     .unwrap();
-    assert_eq!(ruleset.priority(ruleset.rule_id("low").unwrap()), 5);
-    assert_eq!(ruleset.priority(ruleset.rule_id("high").unwrap()), 10);
-    assert_eq!(ruleset.priority(ruleset.rule_id("unprioritized").unwrap()), 0);
+    assert_eq!(ruleset.priority(ruleset.rule_id("low").unwrap()), Some(5));
+    assert_eq!(ruleset.priority(ruleset.rule_id("high").unwrap()), Some(10));
+    assert_eq!(ruleset.priority(ruleset.rule_id("unprioritized").unwrap()), Some(0));
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn old_canonical_without_priority_loads_as_zero() {
     let old_style = serde_json::to_vec(&vec![value]).unwrap();
 
     let loaded = Ruleset::from_canonical(&old_style).unwrap();
-    assert_eq!(loaded.priority(loaded.rule_id("legacy").unwrap()), 0);
+    assert_eq!(loaded.priority(loaded.rule_id("legacy").unwrap()), Some(0));
 }
 
 #[test]

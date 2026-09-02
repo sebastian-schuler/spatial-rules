@@ -101,10 +101,12 @@ impl<'a> PreparedMemo<'a> {
 
     /// Force-prepare **every** rule and return a dense snapshot in ruleset
     /// order — the eager seam's contract (`len() == rule count`, `get(id)`
-    /// valid for any id). Called by `Ruleset::prepared`, never by the query
-    /// path.
-    pub(crate) fn snapshot_all(&self) -> PreparedGeometries {
-        let all: Vec<RuleId> = (0..self.rules.len()).map(|index| RuleId(index as u32)).collect();
+    /// valid for any id, minted by `owner`). Called by `Ruleset::prepared`,
+    /// never by the query path.
+    pub(crate) fn snapshot_all(&self, owner: u64) -> PreparedGeometries {
+        let all: Vec<RuleId> = (0..self.rules.len())
+            .map(|index| RuleId::new(index as u32, owner))
+            .collect();
         self.ensure(&all);
         Rc::new(
             self.slots()
@@ -181,7 +183,7 @@ mod tests {
     fn changing_ruleset_id_resets_the_memo_wholesale() {
         let rules = rules();
         let memo = PreparedMemo::for_ruleset(&rules, 101);
-        memo.ensure(&[RuleId(0)]);
+        memo.ensure(&[RuleId::new(0, 0)]);
         assert!(slot_is_prepared(101, 0));
 
         let fresh = PreparedMemo::for_ruleset(&rules, 102);
@@ -194,12 +196,12 @@ mod tests {
         let rules = rules();
         let memo = PreparedMemo::for_ruleset(&rules, 103);
 
-        memo.ensure(&[RuleId(0)]);
+        memo.ensure(&[RuleId::new(0, 0)]);
         assert!(slot_is_prepared(103, 0));
         assert!(!slot_is_prepared(103, 1));
 
         // First touch of the remaining rule fills only that slot.
-        memo.ensure(&[RuleId(1)]);
+        memo.ensure(&[RuleId::new(1, 0)]);
         assert!(slot_is_prepared(103, 1));
     }
 
@@ -207,7 +209,7 @@ mod tests {
     fn prepared_relates_identically_to_a_fresh_prepare() {
         let rules = rules();
         let memo = PreparedMemo::for_ruleset(&rules, 104);
-        memo.ensure(&[RuleId(0)]);
+        memo.ensure(&[RuleId::new(0, 0)]);
 
         let candidate = Geometry::Polygon(Polygon::new(
             LineString::from(vec![
@@ -221,7 +223,7 @@ mod tests {
         ));
         let lazy_matrix = candidate.relate(memo.slots()[0].as_ref().unwrap());
 
-        let dense = PreparedMemo::for_ruleset(&rules, 105).snapshot_all();
+        let dense = PreparedMemo::for_ruleset(&rules, 105).snapshot_all(105);
         let eager_matrix = candidate.relate(&dense[0]);
 
         assert_eq!(lazy_matrix, eager_matrix);
@@ -230,12 +232,12 @@ mod tests {
     #[test]
     fn snapshot_all_fills_every_slot_in_rule_order() {
         let rules = rules();
-        let dense = PreparedMemo::for_ruleset(&rules, 106).snapshot_all();
+        let dense = PreparedMemo::for_ruleset(&rules, 106).snapshot_all(106);
 
         assert_eq!(dense.len(), 2);
-        assert!(rules[0].geometry.relate(&dense[RuleId(0).index()]).is_intersects());
-        assert!(!rules[0].geometry.relate(&dense[RuleId(1).index()]).is_intersects());
-        assert!(rules[1].geometry.relate(&dense[RuleId(1).index()]).is_intersects());
+        assert!(rules[0].geometry.relate(&dense[RuleId::new(0, 0).index()]).is_intersects());
+        assert!(!rules[0].geometry.relate(&dense[RuleId::new(1, 0).index()]).is_intersects());
+        assert!(rules[1].geometry.relate(&dense[RuleId::new(1, 0).index()]).is_intersects());
         assert!(slot_is_prepared(106, 0) && slot_is_prepared(106, 1));
     }
 }

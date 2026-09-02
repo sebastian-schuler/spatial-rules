@@ -82,7 +82,7 @@ fn resolution_outcome_to_json(
                 .iter()
                 .map(|rule| {
                     serde_json::json!({
-                        "ruleId": ruleset.string_id(rule.rule_id),
+                        "ruleId": ruleset.string_id(rule.rule_id).expect("rule id minted by this ruleset"),
                         "priority": rule.priority,
                         "spatialMatched": rule.spatial_matched,
                         "propertyMatched": rule.property_matched,
@@ -93,7 +93,7 @@ fn resolution_outcome_to_json(
             object.insert("outcome".to_string(), serde_json::json!("resolved"));
             object.insert(
                 "winner".to_string(),
-                serde_json::json!(ruleset.string_id(*winner)),
+                serde_json::json!(ruleset.string_id(*winner).expect("rule id minted by this ruleset")),
             );
             let mut values_json = serde_json::Map::new();
             for (key, value) in values {
@@ -135,7 +135,7 @@ fn candidate_outcome_to_json(
         } => {
             let ids: Vec<&str> = rule_ids
                 .iter()
-                .map(|id| ruleset.string_id(*id))
+                .map(|id| ruleset.string_id(*id).expect("rule id minted by this ruleset"))
                 .collect();
             let mut object = serde_json::Map::new();
             object.insert("outcome".to_string(), serde_json::json!("matched"));
@@ -146,7 +146,7 @@ fn candidate_outcome_to_json(
                     .zip(overlaps)
                     .map(|(id, metric)| {
                         serde_json::json!({
-                            "ruleId": ruleset.string_id(*id),
+                            "ruleId": ruleset.string_id(*id).expect("rule id minted by this ruleset"),
                             "overlapArea": metric.overlap_area,
                             "overlapRatio": metric.overlap_ratio,
                         })

@@ -45,7 +45,7 @@ fn extreme_complexity_and_metadata_build_and_query_correctly() {
     let ruleset = Ruleset::build(rules).expect("complex rules must build");
 
     let r0 = ruleset.rule_id("r0").unwrap();
-    assert_eq!(ruleset.properties(r0).len(), 41); // 40 fields + classification
+    assert_eq!(ruleset.properties(r0).expect("minted by this ruleset").len(), 41); // 40 fields + classification
 
     // On the ring (between the hole at r≈2.1–3.6 and the exterior at r≈7–12):
     // intersects r0 only.

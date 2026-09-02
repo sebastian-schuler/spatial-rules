@@ -292,7 +292,7 @@ pub fn candidates_geojson() -> String {
                 "type": "Feature",
                 "id": candidate.id,
                 "properties": {},
-                "geometry": geometry_to_geojson(&candidate.geometry),
+                "geometry": geometry_to_geojson(candidate.geometry()),
             })
         })
         .collect();
@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(points.len(), CANDIDATE_COUNT);
         for (point, candidate) in points.iter().zip(&candidates) {
             assert!(
-                matches!(point.geometry, Geometry::Point(_)),
+                matches!(point.geometry(), Geometry::Point(_)),
                 "{} must be a point",
                 point.id
             );
@@ -379,7 +379,7 @@ mod tests {
                 (envelope.min().x + envelope.max().x) / 2.0,
                 (envelope.min().y + envelope.max().y) / 2.0,
             ));
-            assert_eq!(point.geometry, expected, "{}", point.id);
+            assert_eq!(point.geometry(), &expected, "{}", point.id);
         }
     }
 

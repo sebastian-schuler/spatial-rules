@@ -106,7 +106,7 @@ fn envelope_or_invalid(candidate: &Candidate) -> Result<Rect<f64>, String> {
 /// (or multipoint) candidate has a well-defined minimum distance to a rule.
 /// Polygon/MultiPolygon candidates are reported invalid for this predicate.
 fn within_distance_supported(candidate: &Candidate) -> bool {
-    matches!(candidate.geometry, Geometry::Point(_) | Geometry::MultiPoint(_))
+    matches!(candidate.geometry(), Geometry::Point(_) | Geometry::MultiPoint(_))
 }
 
 /// The minimum haversine distance from a point candidate to a rule, in meters
@@ -174,6 +174,10 @@ pub struct PreparedQuery<'a> {
     /// The requested per-candidate analytics (ADR-0018), computed on the rich
     /// match/resolve paths over the applicable set.
     aggregate: Option<AggregateSpec>,
+    /// Why the programmatic [`Query`] is malformed (from [`Query::validate`]),
+    /// or `None` when it is well-formed. When set, every candidate is reported
+    /// `Invalid` with this reason instead of silently mis-evaluating.
+    invalid_query_reason: Option<&'static str>,
     /// Reused across the batch so the spatial-index result is filled into one
     /// buffer instead of allocated per candidate; then filtered in place to
     /// the rules the candidate will relate against (envelope order).
@@ -199,6 +203,7 @@ impl<'a> PreparedQuery<'a> {
             distance_meters: query.distance_meters,
             at: query.at,
             aggregate: query.aggregate.clone(),
+            invalid_query_reason: query.validate(),
             scratch: RefCell::new(Vec::new()),
         }
     }
@@ -246,7 +251,7 @@ impl<'a> PreparedQuery<'a> {
             Some(filter) => filter.contains(&rule_id),
             None => match &self.where_clause {
                 Some(where_clause) => {
-                    where_clause.eval(self.ruleset.properties(rule_id), self.at)
+                    where_clause.eval(self.ruleset.properties_checked(rule_id), self.at)
                 }
                 None => true,
             },
@@ -262,6 +267,11 @@ impl<'a> PreparedQuery<'a> {
     }
 
     pub fn evaluate(&self, candidate: &Candidate) -> CandidateOutcome {
+        if let Some(reason) = self.invalid_query_reason {
+            return CandidateOutcome::Invalid {
+                reason: reason.to_string(),
+            };
+        }
         let result = self.evaluate_result(candidate, true);
         if let Some(reason) = result.invalid {
             CandidateOutcome::Invalid { reason }
@@ -281,6 +291,9 @@ impl<'a> PreparedQuery<'a> {
     }
 
     pub fn evaluate_mask(&self, candidate: &Candidate) -> u8 {
+        if self.invalid_query_reason.is_some() {
+            return 2;
+        }
         let result = self.evaluate_result(candidate, false);
         if result.invalid.is_some() {
             2
@@ -319,7 +332,7 @@ impl<'a> PreparedQuery<'a> {
                 let prepared = slots[rule_id.index()]
                     .as_ref()
                     .expect("touched rules are prepared");
-                let matrix = candidate.geometry.relate(prepared);
+                let matrix = candidate.geometry().relate(prepared);
                 on_hold(rule_id, &matrix);
             }
         }
@@ -356,8 +369,8 @@ impl<'a> PreparedQuery<'a> {
                     matched.push(rule_id);
                     if compute_overlaps {
                         overlaps.push(overlap_metric(
-                            &candidate.geometry,
-                            self.ruleset.geometry(rule_id),
+                            candidate.geometry(),
+                            self.ruleset.geometry_checked(rule_id),
                         ));
                     }
                 }
@@ -431,7 +444,7 @@ impl<'a> PreparedQuery<'a> {
         }
         scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
         for &rule_id in scratch.iter() {
-            if min_haversine_distance(&candidate.geometry, self.ruleset.geometry(rule_id))
+            if min_haversine_distance(candidate.geometry(), self.ruleset.geometry_checked(rule_id))
                 <= distance
             {
                 on_within(rule_id);
@@ -511,6 +524,11 @@ impl<'a> PreparedQuery<'a> {
     /// **Collect-then-resolve**: no early exit at the first spatial hit, the
     /// merge needs the full applicable set (ADR-0015 stance).
     pub fn evaluate_resolve(&self, candidate: &Candidate) -> ResolutionOutcome {
+        if let Some(reason) = self.invalid_query_reason {
+            return ResolutionOutcome::Invalid {
+                reason: reason.to_string(),
+            };
+        }
         if self.spatial == SpatialPredicate::WithinDistance {
             if let Some(reason) = self.within_distance_invalid_reason(candidate) {
                 return ResolutionOutcome::Invalid { reason };
@@ -530,7 +548,7 @@ impl<'a> PreparedQuery<'a> {
             .into_iter()
             .map(|rule_id| ApplicableRule {
                 rule_id,
-                priority: self.ruleset.priority(rule_id),
+                priority: self.ruleset.priority_checked(rule_id),
                 spatial_matched: true,
                 property_matched: true,
             })
@@ -548,7 +566,7 @@ impl<'a> PreparedQuery<'a> {
         let winner = applicable[0].rule_id;
         let mut values: BTreeMap<String, PropertyValue> = BTreeMap::new();
         for rule in &applicable {
-            for (key, value) in self.ruleset.properties(rule.rule_id) {
+            for (key, value) in self.ruleset.properties_checked(rule.rule_id) {
                 values.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
@@ -571,6 +589,9 @@ impl<'a> PreparedQuery<'a> {
     /// id buffer, the winner sort, the values merge, or the explanation —
     /// mirroring how the match mask skips per-match rule ids (ADR-0004).
     pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
+        if self.invalid_query_reason.is_some() {
+            return 2;
+        }
         if self.spatial == SpatialPredicate::WithinDistance
             && self.within_distance_invalid_reason(candidate).is_some()
         {

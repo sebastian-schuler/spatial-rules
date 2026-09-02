@@ -4,15 +4,45 @@
 /// day-of-week (ISO 8601, 1 = Monday .. 7 = Sunday) and hour of day (0..=23).
 /// The engine has no wall clock; the query supplies this via its `at` member,
 /// so evaluation stays deterministic and pure.
+///
+/// The fields are private so the documented ranges (day `1..=7`, hour `0..=23`)
+/// are enforced at construction: `parse_iso8601` and [`TemporalInstant::new`]
+/// are the only ways to build a value, so a malformed programmatic instant
+/// cannot be constructed as structurally-valid but semantically impossible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemporalInstant {
     /// ISO 8601 day-of-week: 1 = Monday .. 7 = Sunday.
-    pub day_of_week: u8,
+    day_of_week: u8,
     /// Hour of day, 0..=23 (the v1 window granularity).
-    pub hour: u8,
+    hour: u8,
 }
 
 impl TemporalInstant {
+    /// Build a [`TemporalInstant`] from validated (day, hour) components.
+    ///
+    /// Returns `None` when `day_of_week` is outside `1..=7` or `hour` is
+    /// outside `0..=23`, so callers cannot construct an invalid invariant.
+    pub fn new(day_of_week: u8, hour: u8) -> Option<Self> {
+        if (1..=7).contains(&day_of_week) && hour <= 23 {
+            Some(TemporalInstant {
+                day_of_week,
+                hour,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// The ISO 8601 day-of-week (`1 = Monday .. 7 = Sunday`), always in range.
+    pub fn day_of_week(&self) -> u8 {
+        self.day_of_week
+    }
+
+    /// The hour of day (`0..=23`), always in range.
+    pub fn hour(&self) -> u8 {
+        self.hour
+    }
+
     /// Parse a naive ISO-8601 datetime (`YYYY-MM-DDTHH:MM` or with seconds)
     /// into the local day-of-week + hour. Timezone offsets (`Z`/`±HH:MM`) are
     /// rejected for v1 — windows are local-frame; offset handling is additive
@@ -109,32 +139,34 @@ mod tests {
         // 1970-01-01 was a Thursday (4); 2026-08-23 was a Sunday (7).
         assert_eq!(
             TemporalInstant::parse_iso8601("1970-01-01T00:00").unwrap(),
-            TemporalInstant {
-                day_of_week: 4,
-                hour: 0,
-            }
+            TemporalInstant::new(4, 0).unwrap()
         );
         assert_eq!(
             TemporalInstant::parse_iso8601("2026-08-23T14:30").unwrap(),
-            TemporalInstant {
-                day_of_week: 7,
-                hour: 14,
-            }
+            TemporalInstant::new(7, 14).unwrap()
         );
         // 2026-08-24 was a Monday (1).
-        assert_eq!(TemporalInstant::parse_iso8601("2026-08-24T09:00").unwrap().day_of_week, 1);
+        assert_eq!(
+            TemporalInstant::parse_iso8601("2026-08-24T09:00")
+                .unwrap()
+                .day_of_week(),
+            1
+        );
     }
 
     #[test]
     fn seconds_are_accepted_and_ignored() {
         let instant = TemporalInstant::parse_iso8601("2026-08-23T14:30:45").unwrap();
-        assert_eq!(
-            instant,
-            TemporalInstant {
-                day_of_week: 7,
-                hour: 14,
-            }
-        );
+        assert_eq!(instant, TemporalInstant::new(7, 14).unwrap());
+    }
+
+    #[test]
+    fn new_rejects_out_of_range_components() {
+        for (day, hour) in [(0, 5), (8, 5), (3, 24), (3, 255)] {
+            assert_eq!(TemporalInstant::new(day, hour), None, "{day}:{hour}");
+        }
+        assert_eq!(TemporalInstant::new(1, 0), Some(TemporalInstant::new(1, 0).unwrap()));
+        assert_eq!(TemporalInstant::new(7, 23), Some(TemporalInstant::new(7, 23).unwrap()));
     }
 
     #[test]

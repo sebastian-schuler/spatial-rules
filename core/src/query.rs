@@ -132,6 +132,45 @@ impl Query {
         self
     }
 
+    /// Validate the invariants the JSON shape enforces so a programmatic
+    /// [`Query`] built with the public builders cannot silently misbehave
+    /// (the same rules [`Query::from_json`] applies):
+    ///
+    /// - `distance_meters` is `Some` (finite, positive, and only ever for
+    ///   `WithinDistance`).
+    /// - `at` is present whenever the `where` clause uses `$activeAt`.
+    ///
+    /// Returns the human-readable reason a malformed query would be rejected
+    /// with, or `None` when the query is well-formed. Evaluation consumes this
+    /// seam so a programmatic violation surfaces as a per-candidate
+    /// [`CandidateOutcome::Invalid`] (or [`ResolutionOutcome::Invalid`]) rather
+    /// than an unexplained non-match.
+    pub fn validate(&self) -> Option<&'static str> {
+        let distance_reason: Option<&'static str> = match self.spatial {
+            SpatialPredicate::WithinDistance => {
+                if self.distance_meters.is_some_and(|d| d.is_finite() && d > 0.0) {
+                    None
+                } else {
+                    Some("withinDistance requires a positive distance")
+                }
+            }
+            _ => {
+                if self.distance_meters.is_some() {
+                    Some("distance is only valid with the 'withinDistance' predicate")
+                } else {
+                    None
+                }
+            }
+        };
+        distance_reason.or_else(|| {
+            if self.at.is_none() && self.where_clause.as_ref().is_some_and(WhereExpr::has_active_at) {
+                Some("'at' is required when a '$activeAt' predicate is present")
+            } else {
+                None
+            }
+        })
+    }
+
     /// Parse the JSON query shape (Initial-plan §22):
     /// `{ "spatial": { "predicate": "..." }, "where": {...}, "excludeRuleIds": [...], "includeOverlap": true, "at": "YYYY-MM-DDTHH:MM" }`.
     /// For `withinDistance` the `spatial` object also carries `"distance"` in
@@ -304,4 +343,59 @@ pub enum ResolutionOutcome {
     },
     NotMatched,
     Invalid { reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::where_expr::WhereExpr;
+
+    #[test]
+    fn well_formed_programmatic_query_has_no_reason() {
+        let query = Query::new(SpatialPredicate::WithinDistance).with_distance(200.0);
+        assert_eq!(query.validate(), None);
+
+        let query = Query::new(SpatialPredicate::Intersects);
+        assert_eq!(query.validate(), None);
+    }
+
+    #[test]
+    fn distance_on_non_within_predicate_is_rejected() {
+        let query = Query::new(SpatialPredicate::Intersects).with_distance(200.0);
+        assert!(query
+            .validate()
+            .is_some_and(|r| r.contains("only valid with the 'withinDistance'")));
+    }
+
+    #[test]
+    fn within_distance_requires_a_positive_finite_radius() {
+        for missing in [None, Some(f64::NAN), Some(f64::INFINITY), Some(0.0), Some(-1.0)] {
+            let mut query = Query::new(SpatialPredicate::WithinDistance);
+            if let Some(d) = missing {
+                query = query.with_distance(d);
+            }
+            assert!(query
+                .validate()
+                .is_some_and(|r| r.contains("positive distance")));
+        }
+    }
+
+    #[test]
+    fn active_at_requires_a_reference_time() {
+        let where_clause = WhereExpr::parse(&serde_json::json!({
+            "$activeAt": {
+                "daysOfWeek": "d",
+                "startHour": "s",
+                "endHour": "e"
+            }
+        }))
+        .unwrap();
+        let query = Query::new(SpatialPredicate::Intersects).with_where(where_clause);
+        assert!(query
+            .validate()
+            .is_some_and(|r| r.contains("'at' is required")));
+
+        let with_at = query.with_at(TemporalInstant::parse_iso8601("2024-01-01T00:00").unwrap());
+        assert_eq!(with_at.validate(), None);
+    }
 }

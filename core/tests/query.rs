@@ -929,7 +929,7 @@ fn overlap_area_matches_full_candidate_for_containment() {
     // Full containment: candidate ∩ rule == candidate, so the overlap area
     // equals the candidate's own geodesic area (computed independently, with
     // winding-robust `signed().abs()`).
-    let expected_area = inside.geometry.geodesic_area_signed().abs();
+    let expected_area = inside.geometry().geodesic_area_signed().abs();
     assert!((metric.overlap_area - expected_area).abs() / expected_area < 1e-9);
 }
 

@@ -127,7 +127,7 @@ fn numeric_values<'a>(
     applicable: &'a [RuleId],
     ruleset: &'a Ruleset,
 ) -> impl Iterator<Item = f64> + 'a {
-    applicable.iter().filter_map(move |&rule_id| match ruleset.properties(rule_id).get(field) {
+    applicable.iter().filter_map(move |&rule_id| match ruleset.properties_checked(rule_id).get(field) {
         Some(PropertyValue::Int(value)) => Some(*value as f64),
         Some(PropertyValue::Float(value)) => Some(*value),
         _ => None,
@@ -180,12 +180,12 @@ fn numeric<'a>(
 /// (the same spherical machinery `overlap_metric` uses). Point/MultiPoint
 /// candidates have zero area → `0`.
 fn coverage_ratio(candidate: &Candidate, applicable: &[RuleId], ruleset: &Ruleset) -> f64 {
-    if matches!(candidate.geometry, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+    if matches!(candidate.geometry(), Geometry::Point(_) | Geometry::MultiPoint(_)) {
         return 0.0;
     }
     let mut union: Option<MultiPolygon<f64>> = None;
     for &rule_id in applicable {
-        let rule = match ruleset.geometry(rule_id) {
+        let rule = match ruleset.geometry_checked(rule_id) {
             Geometry::Polygon(polygon) => MultiPolygon::new(vec![polygon.clone()]),
             Geometry::MultiPolygon(multipolygon) => multipolygon.clone(),
             _ => unreachable!("rules are polygons"),
@@ -198,13 +198,13 @@ fn coverage_ratio(candidate: &Candidate, applicable: &[RuleId], ruleset: &Rulese
     let Some(union) = union else {
         return 0.0;
     };
-    let intersection = match &candidate.geometry {
+    let intersection = match candidate.geometry() {
         Geometry::Polygon(polygon) => polygon.intersection(&union),
         Geometry::MultiPolygon(multipolygon) => multipolygon.intersection(&union),
         _ => unreachable!("coverage requires a polygon candidate"),
     };
     let covered_area = intersection.geodesic_area_signed().abs();
-    let candidate_area = candidate.geometry.geodesic_area_signed().abs();
+    let candidate_area = candidate.geometry().geodesic_area_signed().abs();
     if candidate_area > 0.0 {
         covered_area / candidate_area
     } else {
@@ -270,7 +270,7 @@ mod tests {
             rule("c", Some(50), None),
         ];
         let ruleset = Ruleset::build(rules).unwrap();
-        let ids: Vec<RuleId> = (0..3).map(RuleId).collect();
+        let ids: Vec<RuleId> = (0..3).map(|index| RuleId::new(index, ruleset.id())).collect();
         let candidate = Candidate::new(
             "c".to_string(),
             Geometry::Polygon(geo::Polygon::new(
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn absent_fields_when_nothing_contributes_or_not_requested() {
         let ruleset = Ruleset::build(vec![rule("a", None, None)]).unwrap();
-        let ids = vec![RuleId(0)];
+        let ids = vec![RuleId::new(0, 0)];
         let candidate = Candidate::new(
             "c".to_string(),
             Geometry::Polygon(geo::Polygon::new(
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn point_candidate_coverage_is_zero() {
         let ruleset = Ruleset::build(vec![rule("a", Some(10), None)]).unwrap();
-        let ids = vec![RuleId(0)];
+        let ids = vec![RuleId::new(0, 0)];
         let point = Candidate::new("p".to_string(), Geometry::Point(geo::Point::new(0.5, 0.5)));
         let spec = AggregateSpec::from_json(&serde_json::json!({ "count": true, "coverage": true })).unwrap();
         let aggregate = spec.compute(&point, &ids, &ruleset);
