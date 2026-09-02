@@ -27,24 +27,39 @@ fn to_pyerr(error: SpatialError) -> PyErr {
 
 /// The JSON string form of a Python input: `str` passthrough, `bytes`
 /// UTF-8-decoded, anything else JSON-dumped by Python (dict/list/etc).
-fn any_to_json_string(obj: &Bound<'_, PyAny>, what: &str) -> PyResult<String> {
+///
+/// Failure to decode to a usable JSON string is reported as a structured
+/// [`SpatialError`] with the caller-chosen `code`, so every input path raises
+/// `SpatialRulesError` (an `SR_*` code) rather than a bare Python exception —
+/// the documented contract at the top of this module.
+fn any_to_json_string(
+    obj: &Bound<'_, PyAny>,
+    what: &str,
+    code: spatial_rules_core::ErrorCode,
+) -> Result<String, SpatialError> {
     if let Ok(text) = obj.extract::<String>() {
         return Ok(text);
     }
     if let Ok(bytes) = obj.extract::<Vec<u8>>() {
-        return String::from_utf8(bytes)
-            .map_err(|e| PyValueError::new_err(format!("{what} are not valid UTF-8: {e}")));
+        return String::from_utf8(bytes).map_err(|e| {
+            SpatialError::new(code, format!("{what} are not valid UTF-8: {e}"))
+        });
     }
     let py = obj.py();
-    let json = py.import("json")?;
-    json.call_method1("dumps", (obj,))?.extract::<String>()
+    let json = py
+        .import("json")
+        .map_err(|e| SpatialError::new(code, format!("{what} cannot encode as JSON: {e}")))?;
+    let text = json
+        .call_method1("dumps", (obj,))
+        .and_then(|value| value.extract::<String>())
+        .map_err(|e| SpatialError::new(code, format!("{what} cannot encode as JSON: {e}")))?;
+    Ok(text)
 }
 
 /// The JSON string of a Python input parsed by the shared `Query` parser —
 /// the same parser the napi and wasm paths use.
 fn parse_query(query: &Bound<'_, PyAny>) -> Result<spatial_rules_core::Query, SpatialError> {
-    let text = any_to_json_string(query, "query")
-        .map_err(|e| SpatialError::invalid_query(format!("query is not valid JSON: {e}")))?;
+    let text = any_to_json_string(query, "query", spatial_rules_core::ErrorCode::InvalidQuery)?;
     parse_query_json(&text)
 }
 
@@ -52,8 +67,11 @@ fn parse_inputs(
     candidates: &Bound<'_, PyAny>,
     query: &Bound<'_, PyAny>,
 ) -> Result<(Vec<spatial_rules_core::Candidate>, spatial_rules_core::Query), SpatialError> {
-    let candidates = any_to_json_string(candidates, "candidates")
-        .map_err(|e| SpatialError::invalid_geojson(format!("candidates are not valid: {e}")))?;
+    let candidates = any_to_json_string(
+        candidates,
+        "candidates",
+        spatial_rules_core::ErrorCode::InvalidGeoJson,
+    )?;
     let candidates = spatial_rules_core::candidates_from_geojson(&candidates)?;
     let query = parse_query(query)?;
     Ok((candidates, query))
@@ -78,7 +96,8 @@ impl Ruleset {
     /// Compile a GeoJSON FeatureCollection of rules.
     #[staticmethod]
     fn from_geojson(rules: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let text = any_to_json_string(rules, "rules")?;
+        let text = any_to_json_string(rules, "rules", spatial_rules_core::ErrorCode::InvalidGeoJson)
+            .map_err(to_pyerr)?;
         let engine = Engine::from_geojson(&text).map_err(to_pyerr)?;
         Ok(Ruleset { engine })
     }
@@ -130,7 +149,8 @@ impl Ruleset {
     /// Atomically swap the ruleset from a GeoJSON FeatureCollection; returns
     /// the ADR-0007 observability report as a dict.
     fn replace(&self, rules: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        let text = any_to_json_string(rules, "rules")?;
+        let text = any_to_json_string(rules, "rules", spatial_rules_core::ErrorCode::InvalidGeoJson)
+            .map_err(to_pyerr)?;
         let report = self.engine.replace_from_geojson(&text).map_err(to_pyerr)?;
         let json_str = serde_json::to_string(&report_to_json(report)).map_err(|e| {
             to_pyerr(SpatialError::new(

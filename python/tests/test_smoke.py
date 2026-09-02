@@ -134,6 +134,21 @@ def test_error_carries_sr_code():
     assert "SR_INVALID_QUERY" in str(exc.value)
 
 
+def test_input_conversion_errors_map_to_sr_code():
+    rs = spatial_rules.Ruleset.from_geojson(json.dumps(RULES))
+    # Non-UTF-8 candidate bytes must raise SpatialRulesError (SR_*), not a bare
+    # Python exception, matching the documented error contract.
+    with pytest.raises(spatial_rules.SpatialRulesError) as exc:
+        rs.query(b"\xff\xfe invalid utf-8", json.dumps({"spatial": {"predicate": "intersects"}}))
+    assert "SR_INVALID_GEOJSON" in str(exc.value)
+
+
+def test_from_geojson_error_carries_sr_code():
+    with pytest.raises(spatial_rules.SpatialRulesError) as exc:
+        spatial_rules.Ruleset.from_geojson("not json")
+    assert "SR_INVALID_GEOJSON" in str(exc.value)
+
+
 def test_production_matched_count():
     repo_root = Path(__file__).resolve().parents[2]
     production_rules = json.loads((repo_root / "benchmarks/data/rules.geojson").read_text())
