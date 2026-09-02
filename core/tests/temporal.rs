@@ -221,7 +221,7 @@ fn malformed_at_is_rejected_even_without_active_at() {
     }))
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidQuery);
-    assert!(err.message.contains("invalid 'at'"));
+    assert!(err.message.contains("not-a-date"));
 }
 
 #[test]

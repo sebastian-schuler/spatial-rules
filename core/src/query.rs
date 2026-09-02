@@ -229,8 +229,7 @@ impl Query {
                 let text = value.as_str().ok_or_else(|| {
                     SpatialError::invalid_query("'at' must be an ISO-8601 string")
                 })?;
-                let instant = TemporalInstant::parse_iso8601(text)
-                    .map_err(|e| SpatialError::invalid_query(format!("invalid 'at': {e}")))?;
+                let instant = TemporalInstant::parse_iso8601(text)?;
                 Some(instant)
             }
         };

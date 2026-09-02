@@ -1,5 +1,7 @@
 //! Query-supplied reference time for temporal predicates (ADR-0017).
 
+use crate::error::SpatialError;
+
 /// A point in time the engine can test rule windows against: the naive-local
 /// day-of-week (ISO 8601, 1 = Monday .. 7 = Sunday) and hour of day (0..=23).
 /// The engine has no wall clock; the query supplies this via its `at` member,
@@ -46,22 +48,31 @@ impl TemporalInstant {
     /// Parse a naive ISO-8601 datetime (`YYYY-MM-DDTHH:MM` or with seconds)
     /// into the local day-of-week + hour. Timezone offsets (`Z`/`±HH:MM`) are
     /// rejected for v1 — windows are local-frame; offset handling is additive
-    /// (ADR-0017).
-    pub fn parse_iso8601(input: &str) -> Result<Self, String> {
+    /// (ADR-0017). Failures return a structured [`SpatialError`]
+    /// (`SR_INVALID_QUERY`), matching the other core parsers so a direct caller
+    /// receives stable error classification rather than a bare `String`.
+    pub fn parse_iso8601(input: &str) -> Result<Self, SpatialError> {
         let bytes = input.as_bytes();
         let with_seconds = bytes.len() == 19;
+        // All parse failures share the invalid-query code; the message carries
+        // the specific reason for a caller to surface.
+        let parse_error = |detail: String| SpatialError::invalid_query(detail);
         if bytes.len() != 16 && !with_seconds {
-            return Err(format!("expected 'YYYY-MM-DDTHH:MM' (optionally with seconds), got {input:?}"));
+            return Err(parse_error(format!(
+                "expected 'YYYY-MM-DDTHH:MM' (optionally with seconds), got {input:?}"
+            )));
         }
         if bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' || bytes[13] != b':' {
-            return Err(format!("expected 'YYYY-MM-DDTHH:MM', got {input:?}"));
+            return Err(parse_error(format!(
+                "expected 'YYYY-MM-DDTHH:MM', got {input:?}"
+            )));
         }
         let digits = |lo: usize, hi: usize| (lo..hi).all(|i| bytes[i].is_ascii_digit());
         if !digits(0, 4) || !digits(5, 7) || !digits(8, 10) || !digits(11, 13) || !digits(14, 16) {
-            return Err(format!("non-numeric field in {input:?}"));
+            return Err(parse_error(format!("non-numeric field in {input:?}")));
         }
         if with_seconds && (bytes[16] != b':' || !digits(17, 19)) {
-            return Err(format!("invalid seconds in {input:?}"));
+            return Err(parse_error(format!("invalid seconds in {input:?}")));
         }
         let field = |lo: usize, hi: usize| {
             bytes[lo..hi]
@@ -75,19 +86,19 @@ impl TemporalInstant {
         let minute = field(14, 16);
         let second = if with_seconds { field(17, 19) } else { 0 };
         if !(1..=12).contains(&month) {
-            return Err(format!("month out of range in {input:?}"));
+            return Err(parse_error(format!("month out of range in {input:?}")));
         }
         if !(1..=days_in_month(year, month)).contains(&day) {
-            return Err(format!("day out of range in {input:?}"));
+            return Err(parse_error(format!("day out of range in {input:?}")));
         }
         if hour > 23 {
-            return Err(format!("hour out of range in {input:?}"));
+            return Err(parse_error(format!("hour out of range in {input:?}")));
         }
         if minute > 59 {
-            return Err(format!("minute out of range in {input:?}"));
+            return Err(parse_error(format!("minute out of range in {input:?}")));
         }
         if second > 59 {
-            return Err(format!("second out of range in {input:?}"));
+            return Err(parse_error(format!("second out of range in {input:?}")));
         }
         Ok(TemporalInstant {
             day_of_week: iso_weekday(year, month, day),
@@ -193,5 +204,12 @@ mod tests {
         ] {
             assert!(TemporalInstant::parse_iso8601(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn parse_failures_carry_the_invalid_query_code() {
+        let error = TemporalInstant::parse_iso8601("not-a-date").unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::InvalidQuery);
+        assert!(error.message.contains("not-a-date"));
     }
 }
