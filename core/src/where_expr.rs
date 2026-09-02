@@ -143,13 +143,11 @@ impl FieldPredicate {
             },
             FieldOp::Gt(expected) => compares(properties, &self.field, expected, Ordering::Greater),
             FieldOp::Gte(expected) => {
-                compares(properties, &self.field, expected, Ordering::Greater)
-                    || compares(properties, &self.field, expected, Ordering::Equal)
+                compares_inclusive(properties, &self.field, expected, Ordering::Greater)
             }
             FieldOp::Lt(expected) => compares(properties, &self.field, expected, Ordering::Less),
             FieldOp::Lte(expected) => {
-                compares(properties, &self.field, expected, Ordering::Less)
-                    || compares(properties, &self.field, expected, Ordering::Equal)
+                compares_inclusive(properties, &self.field, expected, Ordering::Less)
             }
             FieldOp::In(values) => match properties.get(&self.field) {
                 Some(actual) => values.iter().any(|value| actual == value),
@@ -202,6 +200,22 @@ fn compares(
         .get(field)
         .and_then(|actual| compare_numbers(actual, expected))
         .is_some_and(|found| found == ordering)
+}
+
+/// Inclusive comparison (`>=`/`<=`): resolve the actual-vs-expected ordering
+/// once, then admit `Equal` or the strict `ordering`. Computing the ordering
+/// once avoids re-looking-up the field and re-converting the number for the
+/// equality half of `Gte`/`Lte`.
+fn compares_inclusive(
+    properties: &BTreeMap<String, PropertyValue>,
+    field: &str,
+    expected: &PropertyValue,
+    ordering: Ordering,
+) -> bool {
+    properties
+        .get(field)
+        .and_then(|actual| compare_numbers(actual, expected))
+        .is_some_and(|found| found == ordering || found == Ordering::Equal)
 }
 
 /// Numeric comparison across `Int`/`Float`; `None` when either side is not
