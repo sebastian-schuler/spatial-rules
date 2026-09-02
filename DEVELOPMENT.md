@@ -8,7 +8,7 @@ contribution process see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
 core/             pure-Rust engine (Ruleset, Engine, query pipeline, indexes)
-bindings-common/  shared rich-JSON serializers for the wasm + python bindings
+bindings-common/  shared rich-JSON serializers + wire contract for all three bindings (ADR-0020)
 node/             napi-rs addon + JS wrapper + per-platform npm packages
 wasm/             wasm-bindgen build + TS wrapper (npm spatial-rules-wasm)
 python/           PyO3 + maturin build + Python wrapper (PyPI spatial-rules)
