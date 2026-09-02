@@ -69,25 +69,29 @@ pub fn validate_rule_geometry(geometry: &Geometry<f64>) -> Result<(), SpatialErr
 /// Classify a candidate geometry for the query pipeline (ADR-0005): it must use
 /// a supported candidate type (Polygon, MultiPolygon, Point, or MultiPoint) AND
 /// be OGC-valid AND have a bounding rectangle. Success returns the precomputed
-/// envelope the spatial step needs; failure returns the human-readable
-/// `Invalid` reason.
-pub fn classify_candidate(geometry: &Geometry<f64>) -> Result<Rect<f64>, String> {
+/// envelope the spatial step needs; failure returns a structured
+/// [`SpatialError`] so the caller can distinguish geometry categories (unsupported
+/// type, non-finite coord, invalid geometry, no bounding rect) instead of
+/// collapsing them to a `String`.
+pub fn classify_candidate(geometry: &Geometry<f64>) -> Result<Rect<f64>, SpatialError> {
     #[cfg(test)]
     crate::test_support::record_classify_call();
 
-    ensure_supported_candidate_geometry(geometry).map_err(|error| error.message)?;
+    ensure_supported_candidate_geometry(geometry)?;
     if has_non_finite_coords(geometry) {
-        return Err("invalid geometry: non-finite coordinate".to_string());
-    }
-    if !geometry.is_valid() {
-        return Err(format!(
-            "invalid geometry: {:?}",
-            geometry.validation_errors()
+        return Err(SpatialError::invalid_geometry(
+            "invalid geometry: non-finite coordinate",
         ));
     }
-    geometry
-        .bounding_rect()
-        .ok_or_else(|| "geometry has no bounding rectangle".to_string())
+    if !geometry.is_valid() {
+        return Err(SpatialError::invalid_geometry(format!(
+            "invalid geometry: {:?}",
+            geometry.validation_errors()
+        )));
+    }
+    geometry.bounding_rect().ok_or_else(|| {
+        SpatialError::invalid_geometry("geometry has no bounding rectangle")
+    })
 }
 
 fn geometry_type_name(geometry: &Geometry<f64>) -> &'static str {
@@ -132,12 +136,13 @@ mod tests {
     #[test]
     fn unsupported_type_is_rejected() {
         use geo::Line;
-        let reason = classify_candidate(&Geometry::Line(Line::new(
+        let error = classify_candidate(&Geometry::Line(Line::new(
             Point::new(0.0, 0.0),
             Point::new(1.0, 1.0),
         )))
         .unwrap_err();
-        assert_eq!(reason, "unsupported geometry type: Line");
+        assert_eq!(error.code, crate::error::ErrorCode::UnsupportedGeometryType);
+        assert_eq!(error.message, "unsupported geometry type: Line");
     }
 
     #[test]
@@ -167,7 +172,8 @@ mod tests {
             vec![],
         );
         let reason = classify_candidate(&Geometry::Polygon(bowtie)).unwrap_err();
-        assert!(reason.starts_with("invalid geometry:"));
+        assert_eq!(reason.code, crate::error::ErrorCode::InvalidGeometry);
+        assert!(reason.message.starts_with("invalid geometry:"));
     }
 
     #[test]
@@ -183,8 +189,9 @@ mod tests {
             vec![],
         );
 
-        let reason = classify_candidate(&Geometry::Polygon(nan_square.clone())).unwrap_err();
-        assert_eq!(reason, "invalid geometry: non-finite coordinate");
+        let error = classify_candidate(&Geometry::Polygon(nan_square.clone())).unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::InvalidGeometry);
+        assert_eq!(error.message, "invalid geometry: non-finite coordinate");
 
         let err = validate_rule_geometry(&Geometry::Polygon(nan_square)).unwrap_err();
         assert_eq!(err.code, crate::error::ErrorCode::InvalidGeometry);

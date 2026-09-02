@@ -210,17 +210,18 @@ fn classify_candidate_returns_envelope_or_reason() {
     assert_eq!(classify_candidate(&valid).unwrap(), Rect::new((0.0, 0.0), (10.0, 10.0)));
 
     let bowtie = Geometry::Polygon(bowtie());
-    assert!(classify_candidate(&bowtie).unwrap_err().starts_with("invalid geometry:"));
+    let error = classify_candidate(&bowtie).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidGeometry);
+    assert!(error.message.starts_with("invalid geometry:"));
 
     // Point and MultiPoint candidates are supported (filtering-scale 01).
     assert!(classify_candidate(&Geometry::Point(Point::new(1.0, 1.0))).is_ok());
 
     // LineString is not a supported candidate type.
     let line = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]));
-    assert_eq!(
-        classify_candidate(&line).unwrap_err(),
-        "unsupported geometry type: LineString"
-    );
+    let error = classify_candidate(&line).unwrap_err();
+    assert_eq!(error.code, ErrorCode::UnsupportedGeometryType);
+    assert_eq!(error.message, "unsupported geometry type: LineString");
 }
 
 #[test]

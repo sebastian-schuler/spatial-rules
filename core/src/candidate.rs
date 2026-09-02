@@ -39,7 +39,9 @@ impl Candidate {
     pub fn new(id: String, geometry: Geometry<f64>) -> Self {
         let class = match crate::validation::classify_candidate(&geometry) {
             Ok(envelope) => CandidateClass::Valid { envelope },
-            Err(reason) => CandidateClass::Invalid { reason },
+            Err(error) => CandidateClass::Invalid {
+                reason: error.message,
+            },
         };
         Candidate {
             id,
