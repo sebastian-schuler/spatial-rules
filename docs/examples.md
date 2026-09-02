@@ -282,7 +282,7 @@ the old ruleset. The canonical form round-trips validated rules.
 ```ts
 const report = ruleset.replace(replacementRules);   // { version, ruleCount, ... }
 const snapshot = ruleset.toCanonical();             // validated rules as JSON
-const reload = ruleset.fromCanonical(Buffer.from(snapshot));
+const reload = ruleset.replaceFromCanonical(Buffer.from(snapshot));
 ```
 
 ## Error handling

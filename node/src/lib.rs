@@ -197,7 +197,7 @@ impl SpatialRuleset {
     /// hot path and published atomically (ADR-0013). A failed load keeps the
     /// old ruleset. Returns ADR-0007 observability as a JSON string.
     #[napi]
-    pub fn from_canonical(&self, rules: Buffer) -> napi::Result<String, &'static str> {
+    pub fn replace_from_canonical(&self, rules: Buffer) -> napi::Result<String, &'static str> {
         let report = self
             .engine
             .replace_from_canonical(rules.as_ref())

@@ -116,7 +116,7 @@ which Engine methods are in scope.
 ### Node/Bun — `spatial-rules` (native addon)
 
 The full engine: `SpatialRuleset` with `query`/`queryAsync`/`resolve`/
-`resolveAsync`, atomic `replace`, `stats`, `toCanonical`/`fromCanonical`, and
+`resolveAsync`, atomic `replace`, `stats`, `toCanonical`/`replaceFromCanonical`, and
 the `QueryResult`/`ResolutionResult` chainable views. This README's examples
 use this surface.
 
@@ -231,7 +231,7 @@ console.log(ruleset.stats()); // same report shape for the current ruleset
 | `ruleset.query(candidates, query)` | query | `string` · `object` | `string` |
 | `ruleset.queryAsync(candidates, query)` | candidates | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
 | `ruleset.queryAsync(candidates, query)` | query | `string` · `object` | `string` |
-| `ruleset.fromCanonical(rules)` | rules | `Buffer` (canonical JSON from `toCanonical()`) | — |
+| `ruleset.replaceFromCanonical(rules)` | rules | `Buffer` (canonical JSON from `toCanonical()`) | — |
 
 Any other type throws a `TypeError` from the wrapper. A `Buffer` passes
 through untouched (byte-faithful); a `string`/`object` is serialized by the
@@ -365,7 +365,7 @@ Other methods:
 | `replace(rules)` | `string` | JSON report `{ version, ruleCount, buildDurationMs, lastSwapTime }` |
 | `stats()` | `string` | the same report for the current ruleset |
 | `toCanonical()` | `string` | the ruleset in canonical JSON form (array of rules) |
-| `fromCanonical(rules)` | `string` | replace from canonical JSON; returns a report (a failed load keeps the old ruleset) |
+| `replaceFromCanonical(rules)` | `string` | replace from canonical JSON; returns a report (a failed load keeps the old ruleset) |
 
 ### Error codes
 
