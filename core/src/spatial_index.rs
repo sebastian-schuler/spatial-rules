@@ -80,7 +80,7 @@ impl SpatialIndex for RStarIndex {
         out.clear();
         out.extend(
             self.tree
-                .locate_in_envelope_intersecting(aabb)
+                .locate_in_envelope_intersecting(&aabb)
                 .map(|entry| entry.data),
         );
         out.sort_unstable();
