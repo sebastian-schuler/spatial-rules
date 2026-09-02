@@ -123,6 +123,11 @@ impl Engine {
     /// section, so a `current()` read never observes the new ruleset with
     /// stale counters. No other path holds both locks, so the ordering is
     /// deadlock-free.
+    ///
+    /// The ruleset `Arc` is published **before** the report is updated, so the
+    /// counters always describe a ruleset that is already visible to
+    /// `snapshot()` — a `current()` read can never report the new version
+    /// alongside a not-yet-published ruleset (the counts move with the Arc).
     fn swap(&self, new_ruleset: Ruleset, build_duration_ms: u64) -> ReplaceReport {
         let rule_count = new_ruleset.len();
         let last_swap_time_unix_ms = now_unix_ms();
@@ -135,15 +140,21 @@ impl Engine {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *ruleset = Arc::new(new_ruleset);
         state.version += 1;
         state.rule_count = rule_count;
         state.build_duration_ms = build_duration_ms;
         state.last_swap_time_unix_ms = last_swap_time_unix_ms;
-        *ruleset = Arc::new(new_ruleset);
         *state
     }
 
     /// Observability for the current ruleset.
+    ///
+    /// The report is updated **after** the ruleset `Arc` is published in
+    /// [`Engine::swap`], so it never describes a ruleset that is not yet
+    /// visible to [`Engine::snapshot`]. `current()` and `snapshot()` are two
+    /// independent reads that may straddle a swap; the invariant is that the
+    /// counters always move *with* the published ruleset, never ahead of it.
     pub fn current(&self) -> ReplaceReport {
         *self
             .state
