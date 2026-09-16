@@ -12,17 +12,32 @@ Record a reproducible peak-memory baseline for the container. The "bounded conta
 
 ## Acceptance criteria
 
-- [ ] A reproducible peak-RSS measurement method for the container (load harness in Docker), documented
-- [ ] A recorded peak-RSS baseline in `docs/benchmarks.md` against the documented memory bound
-- [ ] The per-thread prepared-geometry cache's memory contribution is reported (or noted as deferred to the geo 0.34 ticket)
-- [ ] Baseline is reproducible across image rebuilds with the pinned Bun tag (ticket 06)
+- [x] A reproducible peak-RSS measurement method for the container (load harness in Docker), documented
+- [x] A recorded peak-RSS baseline in `docs/benchmarks.md` against the documented memory bound
+- [x] The per-thread prepared-geometry cache's memory contribution is reported (or noted as deferred to the geo 0.34 ticket)
+- [x] Baseline is reproducible across image rebuilds with the pinned Bun tag (ticket 06)
 
 ## Answer
 
-Implemented (docs). A reproducible peak-RSS method is recorded in
-`docs/benchmarks.md` §Memory: build the pinned image, run `bun run bench load`
-in the container, read PID 1's `VmHWM` from `/proc/1/status`. Baseline recorded
-≈ 65 MB against the 128 MB bound; the load-harness VmHWM re-measurement is
-marked for the next Docker run (daemon unavailable at time of writing). The
-per-thread prepared-geometry cache contribution is deferred to the geo 0.34
-upgrade (post-v1 ticket 05).
+Measured 2026-09-16 on the rebuilt integration image (`oven/bun:1.3.14`), via
+`docs/benchmarks.md` §HTTP serving memory. The method: run the load harness
+against a `--memory=128m` container, read PID 1's `VmHWM` **and** the cgroup's
+`memory.peak` (both — they disagree, see below).
+
+The deferred re-measurement corrected the ticket's own expectation. The
+in-process memory harness peaks at 65 MiB, but **HTTP serving peaks at ~138–149
+MiB `VmHWM` / ~119 MiB cgroup** under sustained load (30 rules × 1,000
+candidates, `--concurrency=25`) — ~2.2× higher, driven by per-request parse +
+body-buffering churn, not by concurrency (a `c=1` sweep still reaches ~126 MiB).
+The engine **does** fit 128 MB (`memory.events` all zero, `VmHWM` flat 25 s→60 s,
+RSS trimming — no leak), but at 82–93% of the cap with ~9 MiB headroom, not the
+"~67 MB, comfortable" the docs previously implied. Recommendation: size
+containers to 192–256 MB off the **cgroup** peak.
+
+The turf comparison was measured the same way against the committed
+`benchmarks/js/turf-server.mjs` (`benchmarks/turf.Dockerfile`), byte-identical
+masks: turf idles at 102.7 MiB, peaks at 198.6 MiB uncapped, and is
+**OOM-killed (exit 137) at the 128 MB cap** — at 5.3× lower throughput.
+
+The per-thread prepared-geometry cache contribution remains deferred to the geo
+0.34 upgrade (post-v1 ticket 05).

@@ -318,7 +318,8 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
   everything, so capacity planning still sizes to the ruleset + per-rule
   prepared cost ceiling; (2) the per-thread *duplication* remains (the `Rc →
   Arc` geo 0.34 deferral, post-v1 ticket 05). At the production 30-rule shape
-  the memo is small and the container's ~67 MB peak stands.
+  the memo is small and the in-process ~67 MB peak stands; under sustained HTTP
+  load the serving peak is higher (see §HTTP serving memory).
 - **The first request no longer stalls on a prepare spike.** The cold batch
   (which used to prepare all 100k rules) drops from ~1.9 s to ~2 ms at 100k×100
   on Windows (~7 ms on Linux) — one-time prepare cost now lands only in the
@@ -456,42 +457,87 @@ conclusions stand:
 
 - **Peak resident ≈ 67 MB** on the production workload; replacement holds the
   query-phase footprint (old ruleset dropped by the atomic swap, both coexist
-  for only the ~18 ms build) — it adds no growth on top. `VmPeak` (~132 GB) is
-  Bun/JSC's virtual-address-space reservation, not resident memory.
+  for only the ~18 ms build) — it adds no growth on top.
 - **Bounded**: RSS does not climb across repeated replacements (first ≈ last),
   so there is no per-replacement leak.
 - **Works under a hard cap**: `docker run --memory=128m --memory-swap=128m`
   serves `/health`, `/query` (1,000 → 481 matched), and `/replace` (→ v2) at
   ~29 MiB actual cgroup usage (22.7% of the cap); `integration/smoke.mjs` green.
+  That is a light smoke run, not sustained load — the HTTP-serving peak is much
+  higher (see §HTTP serving memory below).
 - `VmPeak` (~132 GB) is Bun/JSC's virtual-address-space reservation, **not**
-  resident memory — ignore it when sizing container limits. The number that
-  matters for a K8s `limits.memory` is VmHWM (~67 MB), so a 128 MB limit leaves
-  comfortable headroom.
+  resident memory — ignore it when sizing container limits. These are
+  in-process figures: under sustained HTTP load the serving footprint is ~2.2×
+  higher, and the cgroup peak (not `VmHWM`) is the number to size limits off —
+  see §HTTP serving memory below.
 
-### Peak RSS under sustained load (architecture-hardening 09)
+### HTTP serving memory (architecture-hardening 09)
 
-Reproducible measurement method — the **load** harness (sustained HTTP
-concurrency), not the in-process memory harness above, run inside the pinned
-image:
+Everything above measures an **in-process hold**: it calls `query()` in a loop
+and never crosses a socket. A serving process also pays per-request memory —
+body buffering, the native parse/validate of each candidate batch, and (on the
+JSON path) the `express.json` object tree plus a re-`stringify`. That is
+transient, but at realistic request rates it dominates the peak, so it is
+measured separately here.
+
+Method — the **load** harness against a memory-capped container, reading PID 1's
+`VmHWM` (process high-water RSS) *and* the cgroup's `memory.peak` (charged peak,
+which excludes what the kernel can reclaim):
 
 ```
 docker build -f integration/Dockerfile -t spatial-rules .
-docker run --rm -d --name spatial-rules-load -p 3000:3000 spatial-rules
-bun run bench load --duration=20000            # sustained /query load
-docker exec spatial-rules-load cat /proc/1/status | grep -E 'VmHWM|VmRSS'
-docker stop spatial-rules-load
+docker run -d --name sr-load --memory=128m --memory-swap=128m -p 3000:3000 spatial-rules
+bun run bench load --endpoint=raw --concurrency=25 --duration=45000
+docker exec sr-load grep VmHWM /proc/1/status
+docker exec sr-load cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.max
+docker exec sr-load cat /sys/fs/cgroup/memory.events
 ```
 
-`VmHWM` of PID 1 (the Bun server) is the kernel-recorded all-time peak
-resident, capturing the load phase even though the event loop can't sample
-mid-request. **Baseline: peak resident ≈ 67 MB** (the 2026-08-23 Linux
-re-record of the memory harness above, which exercises 20 × 1,000-candidate
-batches in the container); the load-harness VmHWM is expected to sit in the
-same ~67 MB envelope against the documented 128 MB bound. The per-thread
-prepared-geometry duplication's marginal contribution (ADR-0010, one owned
-geometry clone per thread per ruleset) is deferred to the geo 0.34 upgrade
-(ticket 05 of `post-v1`), which moves the cache from owned per-thread clones to
-borrowed `Arc`-shared prepared forms.
+The turf comparison is the same request shape served by
+`benchmarks/js/turf-server.mjs` (`benchmarks/turf.Dockerfile`); both servers
+return **byte-identical masks** (36 matched on the production query). Results —
+2026-09-16, Windows Docker Desktop (WSL2), `oven/bun:1.3.14`, current release
+addon, 30 rules × 1,000 candidates, production query + `--concurrency=25`:
+
+| Server | Condition | VmHWM | cgroup peak | Throughput | Result |
+|---|---|---|---|---|---|
+| engine | in-process harness (20 batches) | 65.1 MiB | — | — | — |
+| engine | idle (Bun + Express + ruleset) | 65.9 MiB | — | — | — |
+| engine | HTTP raw, uncapped, 20 s | 144.7 MiB | — | 676 req/s | bounded |
+| engine | HTTP JSON, uncapped, 20 s | 175.1 MiB | — | 330 req/s | bounded |
+| engine | HTTP raw, 128 MB cap, 15 s | 138.1 MiB | 105.5 MiB | 684 req/s | survives |
+| engine | HTTP raw, 128 MB cap, 45 s | 145.1 MiB | 118.7 MiB | 674 req/s | survives |
+| turf | idle | 102.7 MiB | — | — | — |
+| turf | HTTP raw, uncapped, 20 s | 198.6 MiB | — | 126.6 req/s | bounded |
+| turf | HTTP raw, 128 MB cap, 15 s | — | — | — | **OOM-killed (137)** |
+
+**Findings:**
+
+- **Serving costs ~2.2× the in-process number.** The ~67 MB in-process peak
+  becomes ~138–149 MiB `VmHWM` over HTTP. The driver is per-request churn at
+  ~675 req/s, not queueing: a concurrency sweep (1/5/10/25) peaked
+  126/143/152/138 MiB, so even a fully serialized server reaches ~126 MiB.
+- **128 MB holds, but not comfortably.** The engine survives with
+  `memory.events` all zero, but the cgroup peak is 105–119 MiB — 82–93% of the
+  cap, ~9 MiB of headroom at the tightest. The old "~29 MiB, 22.7% of the cap"
+  figure was a smoke run. Size the container to the **cgroup peak** with real
+  headroom: 192–256 MB.
+- **`VmHWM` and `memory.peak` disagree — size limits off the latter.** Process
+  RSS reaches 138–149 MiB, but the kernel reclaims a large reclaimable share,
+  so the charged peak is only ~119 MiB. Sizing a K8s `limits.memory` off
+  `VmHWM` over-provisions; off the in-process ~67 MB it OOMs.
+- **Bounded, no leak.** `VmHWM` is flat from 25 s to 60 s; `VmRSS` trims back
+  (the same glibc sawtooth as the replacement probes), and `memory.events`
+  records no `max`/`oom` hits.
+- **Against turf, the gap widens over HTTP.** Turf needs ~199 MiB process RSS
+  and is **OOM-killed at the 128 MB cap** doing the work the engine completes
+  at 93% of it — at 5.3× the throughput. Over a socket this is no longer a
+  2–5× hold ratio; it is fits-versus-doesn't.
+
+The per-thread prepared-geometry duplication's marginal contribution (ADR-0010,
+one owned geometry clone per thread per ruleset) is deferred to the geo 0.34
+upgrade (ticket 05 of `post-v1`), which moves the cache from owned per-thread
+clones to borrowed `Arc`-shared prepared forms.
 
 ## 2b. Python baseline — engine PyO3 wheel vs Shapely/GEOS (`bun run bench python`)
 
@@ -837,6 +883,7 @@ bun run bench crossover      # candidate-count crossover sweep (§5)
 bun run bench http           # full query over HTTP (spawns the server)
 bun run bench load           # sustained concurrent load (server must be running)
 bun run bench server         # start the integration server
+bun run bench turf-server    # start the turf.js HTTP baseline (for `load --base-url=...`)
 bun run bench smoke          # integration smoke (server must be running)
 bun run bench memory         # container memory (§24/§25)
 bun run bench memory --replacements-only   # isolate replacement peak

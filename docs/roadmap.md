@@ -49,8 +49,11 @@ Produced the facts later decisions cite. Harness + results in
 rulesets track **rule count, not coordinate count** (~1.2–2.7 kB/rule steady;
 100k rules ≈ 118–260 MiB of ruleset; serving adds a per-thread prepared-geometry
 memo — the geo 0.34 deferral), the ruleset is ~2–5× smaller than a turf.js
-baseline holding the same data, no per-replacement leak, ~67 MB peak for the
-30-rule production workload against a 128 MB bound. Tickets 02–03 made serving
+baseline holding the same data, no per-replacement leak, ~67 MB in-process peak
+for the 30-rule production workload. Serving over HTTP is higher — a ~138–149
+MiB process / ~119 MiB cgroup peak under sustained load, so 128 MB fits but is
+tight and the container should be sized to 192–256 MB (architecture-hardening
+09, `docs/benchmarks.md` §HTTP serving memory). Tickets 02–03 made serving
 memory **lazy and workload-proportional** (per-rule prepare on first touch) and
 **re-verified the whole picture on Linux** (the deploy platform, in the pinned
 container): the 100k×100 serving footprint dropped from ~1.8 GiB to ~282 MiB at

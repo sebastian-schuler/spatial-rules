@@ -54,7 +54,7 @@ bun run bench all                  # full battery
 
 # Docker integration (server + memory measurement)
 docker build -f integration/Dockerfile -t spatial-rules .
-docker run --rm --memory=128m -p 3000:3000 spatial-rules
+docker run --rm --memory=192m -p 3000:3000 spatial-rules   # 128m is tight under sustained load
 ```
 
 ## Configuration
