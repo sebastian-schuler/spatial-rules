@@ -11,6 +11,7 @@
 //   scale|fair|complex|crossover   sweep/experiment harnesses
 //   perf|http|load                 server-facing benchmarks
 //   server       start the integration server
+//   turf-server  start the turf.js HTTP baseline (load/memory comparison)
 //   smoke        integration smoke (server must be running)
 //   memory       container memory harness [--replacements-only]
 //   memory-scale memory scaling & lifecycle benchmark (rules × vertices grid)
@@ -51,6 +52,7 @@ const MEMORY_TURF = join(REPO_ROOT, 'benchmarks', 'js', 'memory-turf.mjs');
 const PY_BENCH = join(REPO_ROOT, 'benchmarks', 'py', 'bench.py');
 const PY_VENV_PYTHON = join(REPO_ROOT, 'python', '.venv', process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python');
 const SERVER = join(REPO_ROOT, 'integration', 'server.mjs');
+const TURF_SERVER = join(REPO_ROOT, 'benchmarks', 'js', 'turf-server.mjs');
 const SMOKE = join(REPO_ROOT, 'integration', 'smoke.mjs');
 const NODE_SMOKE = join(REPO_ROOT, 'node', 'test', 'smoke.ts');
 
@@ -251,6 +253,7 @@ usage: bun run bench <cmd> [flags]
   http          full production query over HTTP (spawns the server)
   load          sustained concurrent load (server must be running)
   server        start the integration server
+  turf-server   start the turf.js HTTP baseline (for load --base-url=...)
   smoke         integration smoke (server must be running)
   memory        container memory harness  [--replacements-only]
   memory-scale  memory scaling & lifecycle benchmark [--cells= --rules= --vertices= --candidates= --query-batches= --replacements=]
@@ -290,6 +293,7 @@ switch (cmd) {
     run('bun', [SERVER_BENCH, cmd, ...args]);
     break;
   case 'server': ensureNodeBinding(); run('bun', [SERVER, ...args]); break;
+  case 'turf-server': run('bun', [TURF_SERVER, ...args]); break;
   case 'smoke': run('bun', [SMOKE, ...args]); break;
   case 'memory': ensureNodeBinding(); run('bun', [MEMORY, ...args]); break;
   case 'memory-scale': cmdMemoryScale(args); break;
