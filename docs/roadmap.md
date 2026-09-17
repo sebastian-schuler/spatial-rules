@@ -126,7 +126,8 @@ The engine now distributes beyond the Node napi addon (ADR-0019,
   the napi/wasm paths (shared `spatial-rules-bindings-common`). pytest smoke on
   CPython 3.11 + 3.13.
 - **CI/release** — `wasm` and `python` CI jobs build + smoke both packages;
-  release-please tags/releases both from the same Conventional-Commits feed.
+  `bun run release` bumps all three in lockstep and tags from the same
+  Conventional-Commits feed (see `RELEASING.md`).
 
 ## P3 — PostgreSQL loader (deferred 2026-08-24)
 

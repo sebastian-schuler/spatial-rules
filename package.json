@@ -4,7 +4,8 @@
     "version": "0.1.0",
     "type": "module",
     "scripts": {
-        "bench": "bun bench.mjs"
+        "bench": "bun bench.mjs",
+        "release": "bun scripts/release.mjs"
     },
     "dependencies": {
         "express": "^4.21.2"

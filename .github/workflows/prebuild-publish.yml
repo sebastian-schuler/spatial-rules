@@ -1,9 +1,9 @@
 name: prebuild-and-publish
 
 on:
-  # release-please creates tags via the GitHub API, which fires a `release`
-  # event rather than a `push` event — listen for both so a release PR merge
-  # auto-publishes (the publish job guards on refs/tags/v).
+  # `bun run release` pushes the vX.Y.Z tag, which fires the `push` event; the
+  # `release` event is kept for GitHub Releases created by hand. The publish
+  # job guards on refs/tags/v.
   release:
     types: [published]
   push:
