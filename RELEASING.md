@@ -11,7 +11,6 @@ commit on main (Conventional Commits)
    └─ test.yml          (gate: Rust tests, clippy, TS typecheck, Node/Bun/wasm/deno/python smoke)
         └─ release-please (on main) opens a Release PR:
              - bumps versions in node/package.json, wasm/package.json, python/
-             - keeps node/package-lock.json in sync (commit it first)
              - generates CHANGELOG.md at the repo root, wasm/CHANGELOG.md, python/CHANGELOG.md
              - bumps the 6 platform packages in lockstep via extra-files (version-locked)
         └─ merge the Release PR
@@ -24,9 +23,12 @@ commit on main (Conventional Commits)
                        - publishes spatial-rules to PyPI
 ```
 
-All three packages share **one version** (release-please `linked-versions`
-plugin); the Rust workspace version tracks it. Nothing is published until you
-merge the Release PR, so releases are deliberate.
+release-please watches each package's own path (`node/`, `wasm/`, `python/`) and
+versions the three **independently** — the `linked-versions` plugin was dropped
+in `bea032d` because it conflicts with the node `v*` tag scheme. The Rust
+workspace version is the single source the Python wheel reads, and release-please
+bumps it through the `python` package's `extra-files`. Nothing is published until
+you merge the Release PR, so releases are deliberate.
 
 ## One-time setup (before the first release)
 
@@ -59,9 +61,12 @@ Follow [SemVer](https://semver.org). `feat` → minor, `fix` → patch;
 the minor version (release-please config sets `bump-minor-pre-major: true` for
 all three packages).
 
-The three packages share **one version** (a `linked-versions` release-please
-plugin keeps `spatial-rules`, `spatial-rules-wasm`, and `spatial-rules-python`
-in lockstep), and the Rust workspace version tracks it too. Per-package
+The three packages are versioned **independently**: release-please only considers
+commits under a package's own path, so each bumps from the `feat`/`fix`/breaking
+commits that touch it (a change that touches only `core/` does not open a Release
+PR by itself). The Rust workspace version (`[workspace.package] version` in the
+root `Cargo.toml`) is the single source the Python wheel reads (maturin), and
+release-please bumps it through the `python` package's `extra-files`. Per-package
 version sources, all updated by release-please on a release:
 
 - **node** — `node/package.json` (+ the 6 platform packages in lockstep via
