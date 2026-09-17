@@ -54,7 +54,10 @@ accept the key order changing from the current alphabetical `BTreeMap` order
 **2026-09-17 (agent): wontfix — all three decided against.**
 
 1. **Async `Buffer` copy — keep it.** The copy exists because `#[napi] async fn`
-   bodies run on libuv's threadpool while a napi `Buffer` is `!Send`, and the
+   bodies run off the JS thread — a NAPI-RS-managed **Tokio** runtime in napi-rs
+   3.x, *not* libuv (corrected 2026-09-17; see ADR-0009) — while a napi
+   `Buffer`'s bytes cannot be safely shared across threads (napi-rs documents
+   `Buffer` as `Send + Sync` but warns the bytes are not synchronized). And the
    *parse* is the expensive part at large batches (100k candidates ≈ 456 ms,
    parse-dominated). Removing the copy means parsing on the JS thread before the
    async boundary, which puts the dominant cost back on the event loop —
