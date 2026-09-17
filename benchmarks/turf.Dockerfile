@@ -8,7 +8,7 @@
 #
 # For the memory-capped comparison see docs/benchmarks.md §HTTP serving memory.
 
-FROM oven/bun:1.3.14
+FROM oven/bun:1.4.2
 WORKDIR /app
 COPY benchmarks/js/turf-server.mjs /app/benchmarks/js/turf-server.mjs
 COPY shared/config.mjs /app/shared/config.mjs

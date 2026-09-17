@@ -6,7 +6,7 @@ Migrate the published JS wrapper and its tests from `.js`/`.mjs` to TypeScript, 
 
 - **Container**: separate effort, own ticket stream (Q14=a).
 - **Scope**: the wrapper + its tests only — `node/index.js` → `node/index.ts`, `node/test/smoke.mjs` → `.ts`, `node/test/clean-install.mjs` → `.ts` (Q15=a).
-- **Runtime target**: dual-runtime TypeScript — sources type-strip cleanly (`erasableSyntaxOnly`) so they run under **both Node and Bun**; CI matrix unchanged (Node 22/24/26 + Bun 1.3.14). Bun is used for the **local** benchmark and local dev environments (Q16).
+- **Runtime target**: dual-runtime TypeScript — sources type-strip cleanly (`erasableSyntaxOnly`) so they run under **both Node and Bun**; CI matrix unchanged (Node 22/24/26 + Bun 1.4.2). Bun is used for the **local** benchmark and local dev environments (Q16).
 - **Typecheck + binding types**: `tsconfig.json` + a `tsc --noEmit` CI step; the native addon is typed by a **hand-written** `node/native.d.ts` (~9 methods) — not `napi build` typegen (Q17=b).
 - **Publish strategy**: compile-on-publish — `tsc` emits `dist/index.js` + types; `main` → `dist/index.js`; `files` ships compiled JS + types. Dev/test run the raw `.ts` directly. Safe for plain-Node npm consumers (Q18=a).
 
