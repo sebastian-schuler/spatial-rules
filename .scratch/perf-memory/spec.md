@@ -1,10 +1,18 @@
 # Performance & memory workstream — Spec
 
+**Status (2026-09-17): all tickets resolved.** Tickets 01–11 landed; ticket 12
+(`issues/12-compact-id-tables.md`) added the final per-rule compaction —
+100k×10 ruleset **71.6 MiB / 0.75 kB per rule** on Linux (67.3 MiB on Windows),
+down from the 117.7 MiB / 1.24 kB baseline recorded below. The "Baseline" and
+"Evidence driving the tickets" sections are the brief **as written on
+2026-09-16**, retained for provenance: each item they list has since been
+addressed or explicitly decided.
+
 Created 2026-09-16. Supersedes the cancelled geo 0.34 prepared-geometry-sharing
 idea (`.scratch/post-v1/issues/05-geo-034-upgrade.md`, deleted): geo's
-`PreparedGeometry` is `Send` but deliberately `!Sync`, so the thread-local memo
-is the design, not a placeholder (ADR-0010). This effort pursues the remaining
-headroom **in our own code**.
+`PreparedGeometry` is `!Send + !Sync` in geo 0.33 (its `GeometryGraph` holds an
+`Rc`), so the thread-local memo is the design, not a placeholder (ADR-0010).
+This effort pursues the remaining headroom **in our own code**.
 
 ## Baseline (see `docs/benchmarks.md`)
 

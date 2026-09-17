@@ -243,7 +243,7 @@ change and was a quick noisy-box run; read the controlled numbers here.
   but those rungs ran the full engine — bbox **and** prepared — conflating the
   two (architecture-hardening 04).
 - **Prepare cost is ~6.2 ms for 30 rules**, now paid once per thread per
-  ruleset: `PreparedGeometry` is `!Send` in geo 0.33, so owned prepared
+  ruleset: `PreparedGeometry` is `!Send + !Sync` in geo 0.33, so owned prepared
   geometries are cached in a `thread_local!` keyed by ruleset identity
   (ADR-0010) rather than rebuilt per query or stored in the shared
   `Arc<Ruleset>`.
@@ -335,8 +335,37 @@ perf-memory 04 (build/load allocations — property-index clone removal,
 **77.8 MiB / 0.82 kB**; its canonical-load and ingestion wins are not covered
 by this grid.
 
+**Amendment (2026-09-17, perf-memory 12, Windows + Linux/Bun 1.4.2).** Two more
+per-rule side tables were compacted (ticket 12): `EqualityIndex` now stores
+4-byte rule *positions* instead of 16-byte `RuleId`s (the `owner` is one per
+ruleset) and drops each bucket's capacity-doubling slack, and `Ruleset.ids` is a
+`Vec<u32>` of positions sorted by id instead of a `HashMap<Box<str>, RuleId>`
+that copied every id string. Re-recorded on the two 100k cells (Windows
+`100,000 × 10` three runs, spread ≤ 3 MiB / 3 ms; Linux in the Bun 1.4.2 bench
+image):
+
+| cell | ruleset steady | bytes/rule | after 1st query | build |
+|---|---|---|---|---|
+| Linux `100,000 × 10` (2026-08-23, pre-compaction) | 120.8 MiB | 1.24 kB | 144.7 MiB | 129 ms |
+| **Linux `100,000 × 10` (2026-09-17)** | **71.6 MiB** | **0.75 kB** | **71.8 MiB** | 100 ms |
+| Windows `100,000 × 10` (2026-09-17) | 67.3 MiB | 0.71 kB | 68.1 MiB | 97–100 ms |
+| Linux `100,000 × 100` (2026-08-23, pre-compaction) | 257.9 MiB | 2.64 kB | 282.0 MiB | 4.0 s |
+| **Linux `100,000 × 100` (2026-09-17)** | **208.8 MiB** | **2.19 kB** | **208.9 MiB** | 4.0 s |
+| Windows `100,000 × 100` (2026-09-17) | 209.6 MiB | 2.20 kB | 210.4 MiB | ~4.7 s |
+
+On the Linux deploy platform that is **120.8 → 71.6 MiB (−40.7%) / −490 B/rule**
+at 10-vertex rings and **257.9 → 208.8 MiB (−19.0%) / −450 B/rule** at
+100-vertex rings (cumulative for tickets 02–04 + 12; the Windows before/after
+isolates ticket 12 at −10.6 MiB / −111 B/rule and −50.6 MiB / −530 B/rule). The
+id lookup changes from a hash map to a binary search over the sorted table, which
+is only consulted for a query's exclusions — never per candidate — so the edit is
+on the build and query-planning paths only; the `intersects` mask fast path that
+sets this cell's steady-state throughput is untouched. The other cells in the
+table above predate this change.
+
 **Results — Linux (the deploy platform)** (release profile, linux-gnu, inside
-the pinned `oven/bun:1.3.14` container via the reproducible
+the then-pinned `oven/bun:1.3.14` container — the image now pins 1.4.2 — via the
+reproducible
 [`benchmarks/Dockerfile`](https://github.com/sebastian-schuler/spatial-rules/blob/development/benchmarks/Dockerfile)
 — "Reproducible Linux run" below; 2026-08-23; same grid/workload as Windows):
 
@@ -360,14 +389,14 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
 **Findings:**
 
 - **The ruleset sizes by rule count, not coordinate count.** The same 1M
-  vertices cost ~7× more resident as *rules* when spread across 100k tiny
-  10-vertex rules (124 MB/1M verts) than across 1k 1,000-vertex rules
-  (18 MB/1M). The steady ruleset footprint is dominated by **per-rule fixed
-  overhead** — envelope + R*-tree entry + property-key table, ~1.2–2 kB/rule —
+  vertices cost ~4× more resident as *rules* when spread across 100k tiny
+  10-vertex rules (72 MB/1M verts) than across 1k 1,000-vertex rules
+  (17 MB/1M). The steady ruleset footprint is dominated by **per-rule fixed
+  overhead** — envelope + R*-tree entry + property-key table, ~0.75–2.2 kB/rule —
   plus ~18 bytes per coordinate. So bytes/vertex *falls* as rings get complex
-  (196 → 35 → 18 B/vert at 10/100/1,000 verts) while bytes/rule grows only
-  1.2 → 18 kB. A national zoning ruleset therefore sizes almost purely by rule
-  count: ~1.2–2.7 kB/rule steady (118–260 MiB for 100k rules) — but that is
+  (199 → 33 → 18 B/vert at 10/100/1,000 verts) while bytes/rule grows only
+  0.75 → 17.7 kB. A national zoning ruleset therefore sizes almost purely by rule
+  count: ~0.75–2.2 kB/rule steady (72–209 MiB for 100k rules) — but that is
   the **data alone**, not what a serving process holds.
 - **Serving memory is now workload-dependent, not ruleset-sized: lazy
   prepared geometries (ADR-0010, memory-benchmark ticket 02).** Before this
@@ -378,13 +407,13 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
   100-vertex rings, and a whole-rule touch by any candidate paid it. Now the
   per-thread memo fills **lazily, per rule on first touch**: with the default
   1,000 candidates (which touch ~1,000 of the rules), serving after the first
-  query is ruleset + a small margin — **~145 MiB** at 100k×10 and **~282 MiB** at
+  query is ruleset + a small margin — **~72 MiB** at 100k×10 and **~209 MiB** at
   100k×100 instead of 359 MiB / 1.78 GiB — and the per-thread `queryAsync`
   duplication scales with touched rules too. Two caveats: (1) worst case is
   unchanged — a workload whose candidates touch every rule still prepares
   everything, so capacity planning still sizes to the ruleset + per-rule
   prepared cost ceiling; (2) the per-thread *duplication* remains — geo's
-  `PreparedGeometry` is `Send` but not `Sync`, so it cannot be shared across
+  `PreparedGeometry` is `!Send + !Sync`, so it can be neither moved nor shared across
   threads (ADR-0010). At the production 30-rule shape
   the memo is small and the in-process ~67 MB peak stands; under sustained HTTP
   load the serving peak is higher (see §HTTP serving memory).
@@ -421,8 +450,8 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
     ruleset — the number to size a container for hot-reload at scale.
 - **queries/sec per GB of RAM** (the sizing metric) = steady-state
   candidates/sec ÷ resident footprint. On Linux against the *ruleset alone*
-  that is ~250 M cand/s/GB at 1k×1k (4.4 M ÷ 17 MiB) down to ~29 M cand/s/GB
-  at 100k×100; against the *serving* footprint (7.6 M ÷ 282 MiB ≈ 27 M/GB) it
+  that is ~130 M cand/s/GB at 1k×1k (2.1 M ÷ 17 MiB) down to ~70 M cand/s/GB
+  at 100k×100; against the *serving* footprint (14.4 M ÷ 209 MiB ≈ 70 M/GB) it
   is barely lower now that serving ≈ ruleset — per-rule fixed overhead, not
   the prepared memo, is the binding constraint at scale.
 - **Steady-state throughput is unchanged by the lazy switch.** Warmed batches
@@ -485,27 +514,39 @@ Windows (2026-08-23) was within a few MiB of every value:**
 
 \* serving = ruleset + per-thread lazy prepared-geometry memo (ADR-0010) after
 the first query at the default 1,000 candidates (touch ~1,000 of the rules) —
-workload-dependent, now close to the ruleset. Serving shows as 282 MiB in the
-memory-scale table (same-process, after 20 timed batches) and 279 MiB here
+workload-dependent, now close to the ruleset. Serving shows as ~210 MiB in the
+memory-scale table (same-process, after 20 timed batches) and ~210 MiB here
 (fresh child, after 1 batch): ~1% measurement variance.
 
+**Amendment (2026-09-17, perf-memory 12, Linux/Bun 1.4.2).** Two things moved
+the columns: the engine-side compaction (tickets 02–04 + 12) and a Bun
+1.3.14 → 1.4.2 bump, which shifts only the JS **turf** baseline. Re-measured in
+the bench image (`bun run bench memory-turf`, Linux, Bun 1.4.2):
+
+| rules × verts | engine ruleset | engine serving | turf baseline | turf / ruleset |
+|---|---|---|---|---|
+| 1,000 × 10 | 1.8 MiB | 1.9 MiB | 7.9 MiB | 4.4× |
+| 1,000 × 100 | 3.2 MiB | 3.2 MiB | 19.3 MiB | 6.0× |
+| 1,000 × 1,000 | 16.9 MiB | 16.9 MiB | 80.5 MiB | 4.8× |
+| 10,000 × 10 | 8.0 MiB | 8.1 MiB | 24.4 MiB | 3.1× |
+| 10,000 × 100 | 21.9 MiB | 21.9 MiB | 83.4 MiB | 3.8× |
+| 100,000 × 10 | 71.5 MiB | 71.7 MiB | 122.4 MiB | 1.7× |
+| 100,000 × 100 | 208.8 MiB | 208.9 MiB | 640.1 MiB | 3.1× |
+
 - **The engine's ruleset is the memory win.** At typical zoning shapes (100
-  and 1,000 vertices/ring) turf needs **~2.5–5×** the memory to *hold* the
-  same data: ~50–90 bytes per coordinate as pre-parsed JS vs ~18–27 B/coord
-  (+~1.2 kB/rule fixed) in the indexed ruleset. Turf never beats the ruleset
+  and 1,000 vertices/ring) turf needs **~3–6×** the memory to *hold* the
+  same data: ~50–90 bytes per coordinate as pre-parsed JS vs ~18 B/coord
+  (+~0.7–2.2 kB/rule fixed) in the indexed ruleset. Turf never beats the ruleset
   at any cell.
-- **The gap narrows for tiny rules.** At 10-vertex rings turf is only ~1–2×
+- **The gap narrows for tiny rules.** At 10-vertex rings turf is only ~1.7–4.4×
   the ruleset — per-rule index overhead dominates both sides when the geometry
-  itself is trivial (the engine's fixed ~1.2 kB/rule is real).
-- **The engine's serving footprint now beats turf everywhere except the
-  trivial-geometry corner.** With lazy per-rule preparation (memory-benchmark
-  ticket 02) serving is ruleset + a ~2–22 MiB margin at the default 1,000
-  candidates and **beats turf at every cell except 100k×10**, where the two are
-  within ~8% (engine serving 142 MiB vs turf 131 MiB): at 10-vertex rings
-  turf's low per-coordinate cost edges out the engine's per-rule fixed overhead
-  plus the touched-prepared slack. Everywhere else the engine wins, most
-  dramatically where turf used to: 100k×100 serving is **279 MiB vs turf's
-  634 MiB** (previously 1.78 GiB vs 640 MiB, turf ahead). Worst case is
+  itself is trivial (the engine's fixed ~0.7 kB/rule is real).
+- **The engine's serving footprint now beats turf everywhere.** With lazy
+  per-rule preparation (memory-benchmark ticket 02) serving is ruleset + a
+  small margin at the default 1,000 candidates and beats turf at every cell,
+  most dramatically at 100k×100 (209 MiB vs turf's 640 MiB; previously
+  1.78 GiB vs 640 MiB, turf ahead) and also at the trivial 100k×10 corner
+  (72 MiB vs 122 MiB; previously turf was ahead there). Worst case is
   unchanged: a touch-everything workload prepares everything and lands at the
   old ceiling (~ruleset + per-rule prepared cost), so the *duplication*
   (per-thread copies) remains — geo's `PreparedGeometry` is not shareable across
@@ -605,7 +646,7 @@ addon, 30 rules × 1,000 candidates, production query + `--concurrency=25`:
 
 The per-thread prepared-geometry duplication (ADR-0010, one owned prepared form
 per thread per ruleset) is accepted, not deferred: geo's `PreparedGeometry` is
-`Send` but deliberately `!Sync`, so it cannot be shared through the `Sync`
+`!Send + !Sync`, so it can neither be moved nor shared through the `Sync`
 `Arc<Ruleset>` the concurrent engine requires. Its marginal contribution is
 bounded by the lazy per-rule memo — a thread prepares only the rules its
 candidates actually relate against.

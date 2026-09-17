@@ -73,31 +73,31 @@ bench python`, release wheel, min-of-3; full picture in
 
 ## Memory
 
-The same synthetic rules held in each stack: the engine's compiled ruleset and
-its serving footprint (ruleset plus the lazy per-thread prepared-geometry memo)
+The same synthetic rules held in each stack: the engine's compiled ruleset
 against turf's pre-parsed form (feature objects and precomputed bboxes, what the
-timed baseline holds). Linux, `bun run bench memory-turf`:
+timed baseline holds). Linux, Bun 1.4.2, 2026-09-17, `bun run bench memory-turf`:
 
-| rules × vertices | engine ruleset | engine serving\* | turf.js |
-|---|---|---|---|
-| 1,000 × 10 | 2.3 MiB | 2.7 MiB | 3.4 MiB |
-| 1,000 × 100 | 3.6 MiB | 4.4 MiB | 15.9 MiB |
-| 1,000 × 1,000 | 17.4 MiB | 22.4 MiB | 84.4 MiB |
-| 10,000 × 10 | 13.3 MiB | 15.4 MiB | 21.5 MiB |
-| 10,000 × 100 | 27.0 MiB | 29.7 MiB | 89.3 MiB |
-| 100,000 × 10 | 120.6 MiB | 142.0 MiB | 131.0 MiB |
-| 100,000 × 100 | 257.8 MiB | 279.4 MiB | 634.1 MiB |
+| rules × vertices | engine\* | turf.js |
+|---|---|---|
+| 1,000 × 10 | 1.8 MiB | 7.9 MiB |
+| 1,000 × 100 | 3.2 MiB | 19.3 MiB |
+| 1,000 × 1,000 | 16.9 MiB | 80.5 MiB |
+| 10,000 × 10 | 8.0 MiB | 24.4 MiB |
+| 10,000 × 100 | 21.9 MiB | 83.4 MiB |
+| 100,000 × 10 | 71.5 MiB | 122.4 MiB |
+| 100,000 × 100 | 208.8 MiB | 640.1 MiB |
 
-\* ruleset + lazy per-thread prepared-geometry memo, after the first query at
-1,000 candidates. Workload-dependent, and close to the ruleset.
+\* compiled ruleset — the held footprint. The lazy per-thread prepared-geometry
+memo (ADR-0010) adds well under 1 MiB at the default 1,000 candidates, so the
+serving footprint is essentially the same.
 
-The ruleset sizes by **rule count**, not coordinate count: ~1.2–2.7 kB per rule
-(100k rules ≈ 118–260 MiB), plus ~18–27 bytes per coordinate. That makes it
-~2–5× smaller than turf's pre-parsed form at normal zoning shapes, narrowing to
-~1× on trivial 10-vertex rules where per-rule index overhead dominates both
-sides. Serving is workload-proportional, because rule geometry is prepared
-lazily on first touch and a process therefore holds only the rules its queries
-reach.
+The ruleset sizes by **rule count**, not coordinate count: ~0.7–2.2 kB per rule
+at 100k rules (100k rules ≈ 72–209 MiB), plus ~18 bytes per coordinate. That
+makes it ~2–6× smaller than turf's pre-parsed form at normal zoning shapes,
+narrowing to ~1.7× on trivial 10-vertex rules where per-rule index overhead
+dominates both sides. Serving is workload-proportional, because rule geometry is
+prepared lazily on first touch and a process therefore holds only the rules its
+queries reach.
 
 The table above measures a **hold**: how much it takes to keep the rules loaded.
 A server also does temporary per-request work (buffer the body, parse the
