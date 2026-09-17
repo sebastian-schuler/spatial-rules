@@ -5,13 +5,13 @@
 //! property is an independent identity from the DE-9IM spec (ADR-0008) or the
 //! documented result model (ADR-0004).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use geo::{Coord, Relate, Rect};
 use proptest::prelude::*;
 use serde_json::json;
 use spatial_rules_core::{
-    AggregateSpec, Candidate, CandidateOutcome, PropertyValue, Query, ResolutionOutcome, Rule,
+    AggregateSpec, Candidate, CandidateOutcome, Properties, PropertyValue, Query, ResolutionOutcome, Rule,
     RuleId, Ruleset, SpatialIndexKind, SpatialPredicate, WhereExpr,
 };
 
@@ -78,14 +78,14 @@ fn property_value_strategy() -> impl Strategy<Value = PropertyValue> {
     ]
 }
 
-fn property_map_strategy() -> impl Strategy<Value = BTreeMap<String, PropertyValue>> {
+fn property_map_strategy() -> impl Strategy<Value = Properties> {
     let key = prop::sample::select(vec![
         "active".to_string(),
         "priority".to_string(),
         "country".to_string(),
         "classification".to_string(),
     ]);
-    prop::collection::btree_map(key, property_value_strategy(), 0..6)
+    prop::collection::btree_map(key, property_value_strategy(), 0..6).prop_map(|map| map.into_iter().collect())
 }
 
 /// A fixed suite covering every `where` operator, evaluated against random
@@ -133,7 +133,7 @@ proptest! {
             .enumerate()
             .map(|(index, rect)| Rule {
                 id: format!("r{index}"),
-                properties: BTreeMap::new(),
+                properties: Default::default(),
                 geometry: rect_to_geometry(*rect),
                 priority: 0,
             })
@@ -325,7 +325,7 @@ proptest! {
             .iter()
             .enumerate()
             .map(|(index, (rect, priority))| {
-                let mut properties = BTreeMap::new();
+                let mut properties = Properties::default();
                 properties.insert(
                     "source".to_string(),
                     PropertyValue::Str(format!("r{index}")),
@@ -397,7 +397,7 @@ proptest! {
             .iter()
             .enumerate()
             .map(|(index, (rect, priority, active))| {
-                let mut properties = BTreeMap::new();
+                let mut properties = Properties::default();
                 properties.insert("active".to_string(), PropertyValue::Bool(*active));
                 Rule {
                     id: format!("r{index}"),
@@ -498,7 +498,7 @@ proptest! {
             .enumerate()
             .map(|(index, rect)| Rule {
                 id: format!("r{index}"),
-                properties: BTreeMap::new(),
+                properties: Default::default(),
                 geometry: rect_to_geometry(*rect),
                 priority: 0,
             })
@@ -619,7 +619,7 @@ proptest! {
             .iter()
             .enumerate()
             .map(|(index, (rect, speed))| {
-                let mut properties = BTreeMap::new();
+                let mut properties = Properties::default();
                 if let Some(speed) = speed {
                     properties.insert("speedLimit".to_string(), PropertyValue::Int(*speed));
                 }

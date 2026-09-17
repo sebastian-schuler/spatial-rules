@@ -6,9 +6,13 @@
 //! serializers are internal; the `*_rich_json` batch helpers are the interface
 //! every binding crosses.
 
+use std::collections::BTreeMap;
+
+use serde::{Serialize, Serializer};
+
 use spatial_rules_core::{
-    candidates_from_geojson, Aggregate, Candidate, CandidateOutcome, Query, ReplaceReport,
-    ResolutionOutcome, Ruleset, SpatialError,
+    candidates_from_geojson, Aggregate, Candidate, CandidateOutcome, PropertyValue, Query,
+    ReplaceReport, ResolutionOutcome, Ruleset, SpatialError,
 };
 
 /// The `"SR_CODE: message"` string a binding throws as its error (the same
@@ -50,26 +54,71 @@ pub fn report_to_json(report: ReplaceReport) -> serde_json::Value {
     })
 }
 
-/// The requested per-candidate aggregate as the ADR-0018 JSON object — only
-/// the functions the spec asked for (and that produced a value) are emitted.
-/// Internal: the outcome already carries the computed [`Aggregate`].
-fn aggregate_json(aggregate: &Aggregate) -> serde_json::Value {
-    let mut object = serde_json::Map::new();
-    if let Some(count) = aggregate.count {
-        object.insert("count".to_string(), serde_json::json!(count));
-    }
-    for (key, value) in [
-        ("min", aggregate.min),
-        ("max", aggregate.max),
-        ("sum", aggregate.sum),
-        ("avg", aggregate.avg),
-        ("coverage", aggregate.coverage),
-    ] {
-        if let Some(value) = value {
-            object.insert(key.to_string(), serde_json::json!(value));
+/// The requested per-candidate aggregate, streamed straight to the serializer
+/// (no `serde_json::Value` DOM). Fields are emitted in the alphabetical key
+/// order the old `BTreeMap`-backed object produced, so the bytes are identical
+/// (perf-memory 07).
+#[derive(Serialize)]
+struct AggregateView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sum: Option<f64>,
+}
+
+impl AggregateView {
+    fn new(aggregate: &Aggregate) -> Self {
+        Self {
+            avg: aggregate.avg,
+            count: aggregate.count,
+            coverage: aggregate.coverage,
+            max: aggregate.max,
+            min: aggregate.min,
+            sum: aggregate.sum,
         }
     }
-    serde_json::Value::Object(object)
+}
+
+/// One applicable rule in the resolved explanation. Field order matches the old
+/// alphabetical output: `priority`, `propertyMatched`, `ruleId`,
+/// `spatialMatched`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplicableView<'a> {
+    priority: i64,
+    property_matched: bool,
+    rule_id: &'a str,
+    spatial_matched: bool,
+}
+
+/// One per-rule overlap metric: `overlapArea`, `overlapRatio`, `ruleId`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlapView<'a> {
+    overlap_area: f64,
+    overlap_ratio: f64,
+    rule_id: &'a str,
+}
+
+/// The `resolved` payload of a `ResolutionOutcome`, streamed directly. Key
+/// order matches the old alphabetical output: `aggregate`, `applicable`,
+/// `outcome`, `values`, `winner`.
+#[derive(Serialize)]
+struct ResolvedView<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregate: Option<AggregateView>,
+    applicable: Vec<ApplicableView<'a>>,
+    outcome: &'static str,
+    values: &'a BTreeMap<String, PropertyValue>,
+    winner: &'a str,
 }
 
 /// One `ResolutionOutcome` as the ADR-0015 JSON shape: `{outcome, winner,
@@ -78,55 +127,90 @@ fn aggregate_json(aggregate: &Aggregate) -> serde_json::Value {
 /// strings; `values` uses the rules' compact typed properties; `aggregate` is
 /// the outcome's precomputed analytics (ADR-0018), absent when not requested.
 /// Internal: [`resolve_rich_json`] assembles the batch from these.
-fn resolution_outcome_to_json(
-    ruleset: &Ruleset,
-    outcome: &ResolutionOutcome,
-) -> serde_json::Value {
+fn resolution_outcome_view<'a>(
+    ruleset: &'a Ruleset,
+    outcome: &'a ResolutionOutcome,
+) -> OutcomeView<'a> {
     match outcome {
-        ResolutionOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
-        ResolutionOutcome::Invalid { reason } => {
-            serde_json::json!({ "outcome": "invalid", "reason": reason })
-        }
+        ResolutionOutcome::NotMatched => OutcomeView::NotMatched,
+        ResolutionOutcome::Invalid { reason } => OutcomeView::Invalid(reason),
         ResolutionOutcome::Resolved {
             winner,
             values,
             applicable,
             aggregate,
-        } => {
-            let applicable_json: Vec<serde_json::Value> = applicable
+        } => OutcomeView::Resolved(ResolvedView {
+            aggregate: aggregate.as_ref().map(AggregateView::new),
+            applicable: applicable
                 .iter()
-                .map(|rule| {
-                    serde_json::json!({
-                        "ruleId": ruleset.string_id(rule.rule_id).expect("rule id minted by this ruleset"),
-                        "priority": rule.priority,
-                        "spatialMatched": rule.spatial_matched,
-                        "propertyMatched": rule.property_matched,
-                    })
+                .map(|rule| ApplicableView {
+                    priority: rule.priority,
+                    property_matched: rule.property_matched,
+                    rule_id: ruleset
+                        .string_id(rule.rule_id)
+                        .expect("rule id minted by this ruleset"),
+                    spatial_matched: rule.spatial_matched,
                 })
-                .collect();
-            let mut object = serde_json::Map::new();
-            object.insert("outcome".to_string(), serde_json::json!("resolved"));
-            object.insert(
-                "winner".to_string(),
-                serde_json::json!(ruleset.string_id(*winner).expect("rule id minted by this ruleset")),
-            );
-            let mut values_json = serde_json::Map::new();
-            for (key, value) in values {
-                values_json.insert(
-                    key.clone(),
-                    serde_json::to_value(value)
-                        .expect("property values always serialize to JSON scalars"),
-                );
+                .collect(),
+            outcome: "resolved",
+            values,
+            winner: ruleset
+                .string_id(*winner)
+                .expect("rule id minted by this ruleset"),
+        }),
+    }
+}
+
+/// The `matched` payload of a `CandidateOutcome`, streamed directly. Key order
+/// matches the old alphabetical output: `aggregate`, `outcome`, `overlaps`,
+/// `ruleIds`.
+#[derive(Serialize)]
+struct MatchedView<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregate: Option<AggregateView>,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlaps: Option<Vec<OverlapView<'a>>>,
+    #[serde(rename = "ruleIds")]
+    rule_ids: Vec<&'a str>,
+}
+
+#[derive(Serialize)]
+struct NotMatchedView {
+    outcome: &'static str,
+}
+
+#[derive(Serialize)]
+struct InvalidView<'a> {
+    outcome: &'static str,
+    reason: &'a str,
+}
+
+/// One outcome, chosen at runtime. Hand-written rather than
+/// `#[serde(untagged)]`: an untagged enum buffers its payload through serde's
+/// private `Content` type, which is precisely the DOM this path exists to
+/// avoid (perf-memory 07).
+enum OutcomeView<'a> {
+    NotMatched,
+    Invalid(&'a str),
+    Matched(MatchedView<'a>),
+    Resolved(ResolvedView<'a>),
+}
+
+impl Serialize for OutcomeView<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            OutcomeView::NotMatched => NotMatchedView {
+                outcome: "notMatched",
             }
-            object.insert("values".to_string(), serde_json::Value::Object(values_json));
-            object.insert(
-                "applicable".to_string(),
-                serde_json::Value::Array(applicable_json),
-            );
-            if let Some(aggregate) = aggregate {
-                object.insert("aggregate".to_string(), aggregate_json(aggregate));
+            .serialize(serializer),
+            OutcomeView::Invalid(reason) => InvalidView {
+                outcome: "invalid",
+                reason,
             }
-            serde_json::Value::Object(object)
+            .serialize(serializer),
+            OutcomeView::Matched(view) => view.serialize(serializer),
+            OutcomeView::Resolved(view) => view.serialize(serializer),
         }
     }
 }
@@ -134,73 +218,67 @@ fn resolution_outcome_to_json(
 /// One `CandidateOutcome` as the ADR-0004 JSON shape, with the outcome's
 /// `overlaps`/`aggregate` payloads attached (ADR-0012/0018).
 /// Internal: [`query_rich_json`] assembles the batch from these.
-fn candidate_outcome_to_json(
-    ruleset: &Ruleset,
-    outcome: &CandidateOutcome,
-) -> serde_json::Value {
+fn candidate_outcome_view<'a>(
+    ruleset: &'a Ruleset,
+    outcome: &'a CandidateOutcome,
+) -> OutcomeView<'a> {
     match outcome {
-        CandidateOutcome::NotMatched => serde_json::json!({ "outcome": "notMatched" }),
-        CandidateOutcome::Invalid { reason } => {
-            serde_json::json!({ "outcome": "invalid", "reason": reason })
-        }
+        CandidateOutcome::NotMatched => OutcomeView::NotMatched,
+        CandidateOutcome::Invalid { reason } => OutcomeView::Invalid(reason),
         CandidateOutcome::Matched {
             rule_ids,
             overlaps,
             aggregate,
-        } => {
-            let ids: Vec<&str> = rule_ids
-                .iter()
-                .map(|id| ruleset.string_id(*id).expect("rule id minted by this ruleset"))
-                .collect();
-            let mut object = serde_json::Map::new();
-            object.insert("outcome".to_string(), serde_json::json!("matched"));
-            object.insert("ruleIds".to_string(), serde_json::json!(ids));
-            if let Some(overlaps) = overlaps {
-                let per_rule: Vec<serde_json::Value> = rule_ids
+        } => OutcomeView::Matched(MatchedView {
+            aggregate: aggregate.as_ref().map(AggregateView::new),
+            outcome: "matched",
+            overlaps: overlaps.as_ref().map(|metrics| {
+                rule_ids
                     .iter()
-                    .zip(overlaps)
-                    .map(|(id, metric)| {
-                        serde_json::json!({
-                            "ruleId": ruleset.string_id(*id).expect("rule id minted by this ruleset"),
-                            "overlapArea": metric.overlap_area,
-                            "overlapRatio": metric.overlap_ratio,
-                        })
+                    .zip(metrics)
+                    .map(|(id, metric)| OverlapView {
+                        overlap_area: metric.overlap_area,
+                        overlap_ratio: metric.overlap_ratio,
+                        rule_id: ruleset
+                            .string_id(*id)
+                            .expect("rule id minted by this ruleset"),
                     })
-                    .collect();
-                object.insert("overlaps".to_string(), serde_json::Value::Array(per_rule));
-            }
-            if let Some(aggregate) = aggregate {
-                object.insert("aggregate".to_string(), aggregate_json(aggregate));
-            }
-            serde_json::Value::Object(object)
-        }
+                    .collect()
+            }),
+            rule_ids: rule_ids
+                .iter()
+                .map(|id| {
+                    ruleset
+                        .string_id(*id)
+                        .expect("rule id minted by this ruleset")
+                })
+                .collect(),
+        }),
     }
 }
 
 /// Assemble a whole batch of `CandidateOutcome`s (in input order) into the
 /// JSON string a binding hands off — the wire contract (ADR-0004/0012/0018).
-/// The outcomes are self-contained (rule ids, overlaps, aggregate), so the
-/// candidate and query are not needed here. The payloads are built from domain
-/// types that always serialize, so the call is infallible.
+/// Every outcome streams straight into the serializer; no `serde_json::Value`
+/// DOM is built (perf-memory 07). The payloads are built from domain types that
+/// always serialize, so the call is infallible.
 pub fn query_rich_json(ruleset: &Ruleset, outcomes: &[CandidateOutcome]) -> String {
-    let rich: Vec<serde_json::Value> = outcomes
+    let views: Vec<OutcomeView> = outcomes
         .iter()
-        .map(|outcome| candidate_outcome_to_json(ruleset, outcome))
+        .map(|outcome| candidate_outcome_view(ruleset, outcome))
         .collect();
-    serde_json::to_string(&rich).expect("candidate outcome payloads are always JSON-serializable")
+    serde_json::to_string(&views).expect("candidate outcome payloads are always JSON-serializable")
 }
 
 /// Assemble a whole batch of `ResolutionOutcome`s (in input order) into the
 /// JSON string a binding hands off — the wire contract (ADR-0015/0018).
-/// Internal per-outcome serialization is reused; the batch helper is the
-/// interface callers use. Infallible for the same reason as
-/// [`query_rich_json`].
+/// Streams without a DOM, like [`query_rich_json`].
 pub fn resolve_rich_json(ruleset: &Ruleset, outcomes: &[ResolutionOutcome]) -> String {
-    let rich: Vec<serde_json::Value> = outcomes
+    let views: Vec<OutcomeView> = outcomes
         .iter()
-        .map(|outcome| resolution_outcome_to_json(ruleset, outcome))
+        .map(|outcome| resolution_outcome_view(ruleset, outcome))
         .collect();
-    serde_json::to_string(&rich).expect("resolution outcome payloads are always JSON-serializable")
+    serde_json::to_string(&views).expect("resolution outcome payloads are always JSON-serializable")
 }
 
 #[cfg(test)]
@@ -371,5 +449,34 @@ mod tests {
         let ruleset = ruleset();
         let json = resolve_rich_json(&ruleset, &[]);
         assert_eq!(json, "[]");
+    }
+
+    /// Pins the exact wire bytes (perf-memory 07): the old implementation built a
+    /// `serde_json::Map` (a `BTreeMap`, so alphabetical keys) and stringified it;
+    /// the streaming serializer must emit the same bytes, key order included.
+    #[test]
+    fn query_rich_json_is_byte_identical_to_the_dom_shape() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+        let outcomes = ruleset.query(&candidates, &query);
+
+        assert_eq!(
+            query_rich_json(&ruleset, &outcomes),
+            r#"[{"outcome":"matched","ruleIds":["zone-a","zone-b"]},{"outcome":"notMatched"}]"#
+        );
+    }
+
+    #[test]
+    fn resolve_rich_json_is_byte_identical_to_the_dom_shape() {
+        let ruleset = ruleset();
+        let candidates = candidates_from_geojson(CANDIDATES).unwrap();
+        let query = Query::new(SpatialPredicate::Intersects);
+        let outcomes = ruleset.resolve(&candidates, &query);
+
+        assert_eq!(
+            resolve_rich_json(&ruleset, &outcomes),
+            r#"[{"applicable":[{"priority":0,"propertyMatched":true,"ruleId":"zone-a","spatialMatched":true},{"priority":0,"propertyMatched":true,"ruleId":"zone-b","spatialMatched":true}],"outcome":"resolved","values":{"speedLimit":30},"winner":"zone-a"},{"outcome":"notMatched"}]"#
+        );
     }
 }

@@ -261,16 +261,16 @@ mod tests {
     }
 
     fn rule(id: &str, speed_limit: Option<i64>, tax_rate: Option<f64>) -> Rule {
-        let mut properties = crate::model::properties::properties_from_json(&serde_json::Map::new());
+        let mut pairs: Vec<(&str, PropertyValue)> = Vec::new();
         if let Some(v) = speed_limit {
-            properties.insert("speedLimit".to_string(), PropertyValue::Int(v));
+            pairs.push(("speedLimit", PropertyValue::Int(v)));
         }
         if let Some(v) = tax_rate {
-            properties.insert("taxRate".to_string(), PropertyValue::Float(v));
+            pairs.push(("taxRate", PropertyValue::Float(v)));
         }
         Rule {
             id: id.to_string(),
-            properties,
+            properties: crate::model::properties::Properties::from_pairs(pairs),
             geometry: Geometry::Polygon(geo::Polygon::new(
                 LineString::from(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]),
                 vec![],

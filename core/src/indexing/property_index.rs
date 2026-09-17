@@ -35,12 +35,19 @@ impl EqualityIndex {
         for (index, rule) in rules.iter().enumerate() {
             let rule_id = RuleId::new(index as u32, owner);
             for (name, value) in &rule.properties {
-                equality
-                    .entry(name.clone())
-                    .or_default()
-                    .entry(value.clone())
-                    .or_default()
-                    .push(rule_id);
+                // Avoid allocating a key String or cloning the value when the
+                // bucket already exists (perf-memory 04) — the build visits
+                // every rule × property.
+                let by_value = match equality.get_mut(name) {
+                    Some(by_value) => by_value,
+                    None => equality.entry(name.to_string()).or_default(),
+                };
+                match by_value.get_mut(value) {
+                    Some(ids) => ids.push(rule_id),
+                    None => {
+                        by_value.insert(value.clone(), vec![rule_id]);
+                    }
+                }
             }
         }
         EqualityIndex { equality }

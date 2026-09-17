@@ -7,10 +7,9 @@
 //! non-match (even for `$ne`); only malformed predicates error.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 
 use crate::error::SpatialError;
-use crate::model::properties::PropertyValue;
+use crate::model::properties::{Properties, PropertyValue};
 use crate::model::temporal::TemporalInstant;
 
 /// A boolean property predicate tree.
@@ -120,7 +119,7 @@ impl WhereExpr {
     /// for temporal predicates (ADR-0017); it is `None` only when the query
     /// carries none, in which case any `$activeAt` clause is a non-match (the
     /// query validator prevents this combination).
-    pub fn eval(&self, properties: &BTreeMap<String, PropertyValue>, at: Option<TemporalInstant>) -> bool {
+    pub fn eval(&self, properties: &Properties, at: Option<TemporalInstant>) -> bool {
         match self {
             WhereExpr::And(exprs) => exprs.iter().all(|expr| expr.eval(properties, at)),
             WhereExpr::Or(exprs) => exprs.iter().any(|expr| expr.eval(properties, at)),
@@ -132,7 +131,7 @@ impl WhereExpr {
 }
 
 impl FieldPredicate {
-    fn eval(&self, properties: &BTreeMap<String, PropertyValue>) -> bool {
+    fn eval(&self, properties: &Properties) -> bool {
         match &self.op {
             FieldOp::Eq(expected) => properties.get(&self.field) == Some(expected),
             FieldOp::Ne(expected) => match properties.get(&self.field) {
@@ -191,7 +190,7 @@ impl FieldPredicate {
 /// Whether `properties[field]` compares to `expected` with `ordering`
 /// (numeric comparison only; a non-numeric side is a non-match).
 fn compares(
-    properties: &BTreeMap<String, PropertyValue>,
+    properties: &Properties,
     field: &str,
     expected: &PropertyValue,
     ordering: Ordering,
@@ -207,7 +206,7 @@ fn compares(
 /// once avoids re-looking-up the field and re-converting the number for the
 /// equality half of `Gte`/`Lte`.
 fn compares_inclusive(
-    properties: &BTreeMap<String, PropertyValue>,
+    properties: &Properties,
     field: &str,
     expected: &PropertyValue,
     ordering: Ordering,
@@ -271,7 +270,7 @@ fn parse_active_at(value: &serde_json::Value) -> Result<ActiveAtClause, SpatialE
 /// admits; `startHour == endHour` is an empty window.
 fn eval_active_at(
     clause: &ActiveAtClause,
-    properties: &BTreeMap<String, PropertyValue>,
+    properties: &Properties,
     at: Option<TemporalInstant>,
 ) -> bool {
     let Some(at) = at else {

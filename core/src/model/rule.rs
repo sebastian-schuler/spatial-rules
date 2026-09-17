@@ -1,10 +1,8 @@
 //! Rule type and numeric rule-id mapping (ADR-0004).
 
-use std::collections::BTreeMap;
-
 use geo::Geometry;
 
-use crate::model::properties::PropertyValue;
+use crate::model::properties::Properties;
 
 /// Internal numeric identifier for a rule, assigned `0..n-1` at ruleset build.
 ///
@@ -71,7 +69,7 @@ pub struct Rule {
     /// Application-supplied identifier; internally mapped to a [`RuleId`].
     pub id: String,
     /// Compact typed property storage (ADR-0003).
-    pub properties: BTreeMap<String, PropertyValue>,
+    pub properties: Properties,
     /// The rule's geometry (Polygon or MultiPolygon once validated).
     pub geometry: Geometry<f64>,
     /// Top-level precedence for resolution (ADR-0015): higher wins; a missing

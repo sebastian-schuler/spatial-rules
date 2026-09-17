@@ -25,7 +25,10 @@ use crate::model::rule::{Rule, RuleId};
 type PreparedGeometryOwned = PreparedGeometry<'static, Geometry<f64>>;
 
 /// One rule's slot in the per-thread memo: unprepared until first touched.
-pub(crate) type PreparedSlot = Option<PreparedGeometryOwned>;
+/// `Box`ed so the slot vector stays ~8 B/rule even when nothing is prepared — a
+/// dense `Option<PreparedGeometry>` array costs hundreds of bytes per rule
+/// (≈25 MiB at 100k rules) for slots that are never filled (perf-memory 02).
+pub(crate) type PreparedSlot = Option<Box<PreparedGeometryOwned>>;
 
 /// The shared per-thread slots for one ruleset; interior mutability lets later
 /// batches fill slots while earlier handles stay alive.
@@ -89,7 +92,7 @@ impl<'a> PreparedMemo<'a> {
             let index = rule_id.index();
             debug_assert!(index < self.rules.len(), "rule id out of range");
             if index < self.rules.len() && slots[index].is_none() {
-                slots[index] = Some(prepare_rule(&self.rules[index]));
+                slots[index] = Some(Box::new(prepare_rule(&self.rules[index])));
             }
         }
     }
@@ -113,7 +116,11 @@ impl<'a> PreparedMemo<'a> {
         Rc::new(
             self.slots()
                 .iter()
-                .map(|slot| slot.as_ref().expect("snapshot_all fills every slot").clone())
+                .map(|slot| {
+                    let prepared: &PreparedGeometryOwned =
+                        slot.as_deref().expect("snapshot_all fills every slot");
+                    prepared.clone()
+                })
                 .collect(),
         )
     }
@@ -223,7 +230,7 @@ mod tests {
             ]),
             vec![],
         ));
-        let lazy_matrix = candidate.relate(memo.slots()[0].as_ref().unwrap());
+        let lazy_matrix = candidate.relate(memo.slots()[0].as_deref().unwrap());
 
         let dense = PreparedMemo::for_ruleset(&rules, 105).snapshot_all(105);
         let eager_matrix = candidate.relate(&dense[0]);

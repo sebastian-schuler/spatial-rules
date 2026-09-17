@@ -1352,6 +1352,7 @@ dependencies = [
  "geojson",
  "serde",
  "serde_json",
+ "spatial-rules-bindings-common",
  "spatial-rules-core",
 ]
 
@@ -1359,6 +1360,7 @@ dependencies = [
 name = "spatial-rules-bindings-common"
 version = "0.2.1"
 dependencies = [
+ "serde",
  "serde_json",
  "spatial-rules-core",
 ]

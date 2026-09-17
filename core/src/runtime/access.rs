@@ -9,11 +9,9 @@
 //!
 //! [`Ruleset`]: crate::runtime::ruleset::Ruleset
 
-use std::collections::BTreeMap;
-
 use geo::{Geometry, Rect};
 
-use crate::model::properties::PropertyValue;
+use crate::model::properties::Properties;
 use crate::model::rule::RuleId;
 
 /// The read-only rule access operations the evaluation and aggregation paths
@@ -25,11 +23,18 @@ pub trait RuleAccess {
     /// (sorted ascending, deduplicated).
     fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>);
 
+    /// Fill `out` with the rules whose `withinDistance` **fringe** boxes
+    /// intersect `envelope` (sorted ascending, deduplicated) — the arc regions
+    /// that escape a rule's planar box. Only the distance pre-filter consults
+    /// this; the DE-9IM predicates compare planar geometries, for which
+    /// [`RuleAccess::query_envelope_into`] is already exact.
+    fn query_fringe_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>);
+
     /// The geometry of a rule by opaque [`RuleId`].
     fn geometry(&self, rule_id: RuleId) -> &Geometry<f64>;
 
     /// The typed properties of a rule by opaque [`RuleId`].
-    fn properties(&self, rule_id: RuleId) -> &BTreeMap<String, PropertyValue>;
+    fn properties(&self, rule_id: RuleId) -> &Properties;
 
     /// The top-level precedence of a rule by opaque [`RuleId`] (ADR-0015).
     fn priority(&self, rule_id: RuleId) -> i64;

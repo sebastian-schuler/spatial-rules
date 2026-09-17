@@ -41,6 +41,7 @@ mod model {
     pub(crate) mod properties;
     pub(crate) mod query;
     pub(crate) mod rule;
+    pub(crate) mod spherical_envelope;
     pub(crate) mod temporal;
     pub(crate) mod validation;
     pub(crate) mod where_expr;
@@ -55,7 +56,7 @@ pub use runtime::ingestion::{
 };
 pub use runtime::ruleset::{PreparedQuery, Ruleset};
 pub use model::candidate::{Candidate, CandidateClass};
-pub use model::properties::{properties_from_json, PropertyValue};
+pub use model::properties::{properties_from_json, Properties, PropertyValue};
 pub use model::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
 pub use model::rule::{Rule, RuleId};
 pub use model::temporal::TemporalInstant;

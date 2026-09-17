@@ -21,9 +21,10 @@
 //! are measured in `bench_surfaces` — each with a mask/rich-path baseline, so
 //! the cost of each surface is the delta over its baseline.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use geo::{PreparedGeometry, Relate};
 use spatial_rules_benchmarks::dataset;
+use spatial_rules_bindings_common::{query_rich_json, resolve_rich_json};
 use spatial_rules_core::{
     AggregateSpec, Candidate, CandidateClass, CandidateOutcome, Query, Ruleset, SpatialIndexKind,
     SpatialPredicate,
@@ -155,7 +156,14 @@ fn bench_ladder(criterion: &mut Criterion) {
 
     let mut build = criterion.benchmark_group("ruleset_build");
     build.bench_function("build_30_rules", |bencher| {
-        bencher.iter(|| black_box(Ruleset::build(black_box(rules.clone()))))
+        // `Ruleset::build` consumes its input, so a fresh clone is needed per
+        // iteration. `iter_batched` runs that clone OUTSIDE the timed region
+        // (perf-memory 01) so the bench measures build, not the clone.
+        bencher.iter_batched(
+            || rules.clone(),
+            |rules| black_box(Ruleset::build(black_box(rules))),
+            BatchSize::LargeInput,
+        )
     });
     build.finish();
 
@@ -231,6 +239,21 @@ fn bench_surfaces(criterion: &mut Criterion) {
         bencher.iter(|| black_box(rstar.resolve(&candidates, &intersects)))
     });
     resolve.finish();
+
+    // The rich wire serialization (perf-memory 07): outcomes are precomputed so
+    // this isolates `query_rich_json`/`resolve_rich_json` — the intermediate
+    // `serde_json::Value` tree the streaming rewrite removed.
+    let rich_outcomes = rstar.query(&candidates, &intersects);
+    let resolve_outcomes = rstar.resolve(&candidates, &intersects);
+    let mut rich_json = criterion.benchmark_group("batch_rich_json");
+    rich_json.throughput(Throughput::Elements(candidate_count));
+    rich_json.bench_function("query_rich_json", |bencher| {
+        bencher.iter(|| black_box(query_rich_json(&rstar, &rich_outcomes)))
+    });
+    rich_json.bench_function("resolve_rich_json", |bencher| {
+        bencher.iter(|| black_box(resolve_rich_json(&rstar, &resolve_outcomes)))
+    });
+    rich_json.finish();
 
     let mut within = criterion.benchmark_group("batch_within_distance");
     within.throughput(Throughput::Elements(candidate_count));

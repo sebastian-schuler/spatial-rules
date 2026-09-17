@@ -4,12 +4,10 @@
 //! deterministic for a given [`Scale`]: same seed, same layout, same shapes, so
 //! a cell's measurements are reproducible and comparable across runs.
 
-use std::collections::BTreeMap;
-
 use geo::{Coord, LineString, MultiPolygon, Polygon};
 
 use crate::memory_scaling::report::Scale;
-use spatial_rules_core::{Candidate, PropertyValue, Rule};
+use spatial_rules_core::{Candidate, Properties, PropertyValue, Rule};
 
 /// Deterministic star-shaped ring around `(cx, cy)` with exactly `vertices`
 /// distinct points plus the closing repeat. Positive radius at every angle
@@ -44,7 +42,7 @@ pub fn generate_rules(scale: Scale) -> Vec<Rule> {
             let cx = column * pitch;
             let cy = row * pitch;
 
-            let mut properties = BTreeMap::new();
+            let mut properties = Properties::default();
             properties.insert("active".to_string(), PropertyValue::Bool(index % 2 == 0));
             properties.insert(
                 "classification".to_string(),

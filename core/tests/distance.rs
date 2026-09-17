@@ -38,6 +38,33 @@ fn inside_is_within_any_distance() {
     );
 }
 
+/// Regression (perf-memory 09): at high latitude a rule edge is a great-circle
+/// arc that bulges poleward of its planar bounding box, so the planar
+/// pre-filter used to drop a rule that is genuinely within the radius. This is
+/// the exact proptest counterexample that exposed it — the rule's top edge sits
+/// at 81.6138°N, its arc reaches ~81.625°N, and the point is ~168.0 km away
+/// (within the 169.682 km radius) even though it is 1.527° north of the vertex
+/// line.
+#[test]
+fn high_latitude_arc_bulge_does_not_drop_a_within_rule() {
+    let rule = Rule {
+        id: "high-lat".to_string(),
+        properties: Default::default(),
+        geometry: geo::Geometry::Polygon(geo::Polygon::from(geo::Rect::new(
+            (72.30009202046368, 71.72880835080687),
+            (80.17047556605961, 81.61376390875111),
+        ))),
+        priority: 0,
+    };
+    let ruleset = Ruleset::build(vec![rule]).unwrap();
+    let candidate = point(78.16918899112456, 83.1404328334824);
+
+    assert_eq!(
+        ruleset.query_mask(&[candidate], &distance_query(169_682.194_602_236_18)),
+        vec![1]
+    );
+}
+
 #[test]
 fn boundary_point_matches_at_a_tiny_distance() {
     let ruleset = Ruleset::build(vec![unit_square_rule("zone")]).unwrap();

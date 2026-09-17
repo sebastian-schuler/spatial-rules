@@ -68,6 +68,7 @@ it (architecture-hardening 04):
 | `batch_within_distance/*` | P2 `withinDistance` geofencing vs the point-mask baseline |
 | `batch_temporal/*` | P2 `$activeAt` window scan vs the no-where mask |
 | `batch_aggregation/*` | aggregation (count/numeric/coverage) vs the mask + rich baselines |
+| `batch_rich_json/*` | rich wire serialization (`query_rich_json`/`resolve_rich_json`) — perf-memory 07 |
 
 The two levers are isolated: bbox/index filter = B→C→D; prepared geometries =
 B→E (and D→F with the index held constant).
@@ -117,6 +118,19 @@ index on top (F) adds nothing (E ≈ F). Previous ladder tables conflated the tw
 because the C/D rungs ran the full engine (bbox **and** prepared); the rungs
 above isolate one variable each (architecture-hardening 04).
 
+**Amendment (2026-09-16, perf-memory 01, Windows).** The release profile now
+sets `lto = "thin"`, `codegen-units = 1` workspace-wide, and `build_30_rules`
+no longer times its per-iteration rule clone (`iter_batched`, required because
+`Ruleset::build` consumes its input). A **controlled** re-measurement — `bun run
+bench samples` runs the bench 5× and reports the median with the run-to-run
+spread, so a delta is judged against the noise floor — gives **F 10.9 ms with
+LTO vs 12.2 ms without (+12.2%, noise ±4.7%)**. So thin LTO is a real ~12% win
+on the prepared hot path. A single criterion run cannot see this: it reported a
+spurious "regression" here against a stale `target/criterion` baseline from an
+unknown profile. Use `bun run bench samples --save= --compare=` for any
+timing-sensitive change; the absolute figures in the table above predate both
+the profile change and the harness.
+
 vs turf.js (`bun run bench perf`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (both report
 481 matched candidates). The addon figure includes the Buffer→parse→mask
 round-trip.
@@ -140,6 +154,25 @@ read the **ratios** (each table vs its own baseline), not the absolute ms.
 | mask baseline | 14.7 ms | 1× |
 | resolve_mask (admission loop, no winner/values) | 15.1 ms | +3% |
 | resolve_full (gather + sort + winner + values) | 15.0 ms | +2% |
+
+**Amendment (2026-09-16, perf-memory 05, Windows).** The resolution and rich
+gather paths now admit `intersects` with geo's boolean predicate on the
+unprepared rules — no prepared memo, no 9-cell `IntersectionMatrix` — which is
+the same admission the mask fast path always used. A controlled same-session A/B
+(`bun run bench samples`, 5 runs each, with the prepared path restored
+temporarily) on `batch_resolve`:
+
+| bench | prepared relate | boolean intersects | delta | noise |
+|---|---|---|---|---|
+| `mask_baseline` (control) | 3.303 ms | 3.326 ms | +0.7% | ±3.0% |
+| `resolve_mask` | 10.805 ms | **4.576 ms** | **−57.6%** | ±7.5% |
+| `resolve_full` | 11.423 ms | **4.785 ms** | **−58.1%** | ±3.0% |
+
+So resolution got **~2.4× faster**; the unchanged mask path stayed within noise,
+which is the control. Post-05 `resolve_mask` sits ~1.4× the early-exit mask: the
+gather cannot early-exit, so it runs the full boolean scan per candidate. The
+"+3% / free" reading in the table above is **superseded** — it predates this
+change and was a quick noisy-box run; read the controlled numbers here.
 
 **`withinDistance`** (`batch_within_distance`, point candidates, radius 100 km):
 
@@ -192,6 +225,15 @@ read the **ratios** (each table vs its own baseline), not the absolute ms.
   country-scale multipolygons and measures the geodesic intersection per
   candidate. Coverage is the aggregation to budget for; the numeric/count path
   is free.
+- **The rich wire serialization streams.** `query().toOutcomesJson()` /
+  `resolve().toJson()` no longer build a `serde_json::Value` DOM — outcomes
+  serialize straight to text. Measured at 1,000 candidates (perf-memory 07;
+  `bun run bench samples --filter=batch_rich_json`, 5 runs, the DOM side restored
+  by `git stash` of `bindings-common/src/lib.rs`): `query_rich_json`
+  **167.76 → 34.84 µs (−79.2%**, noise ±15.5%) and `resolve_rich_json`
+  **471.90 → 82.75 µs (−82.5%**, noise ±8.3%). Sub-millisecond in absolute terms
+  at this shape — the rich path is opt-in and separate from the ~15 ms mask — but
+  a ~5× reduction, and now tracked by the new `batch_rich_json` group.
 
 ## Findings
 
@@ -263,10 +305,35 @@ query batches):
 are a small constant). \*\* resident right after the cold query — ruleset + the
 per-thread **lazy prepared-geometry memo** (ADR-0010) at the default 1,000
 candidates, which a serving process holds for the ruleset's lifetime. Because
-preparation is now lazy, this number is **workload-dependent**: it grows with
-the rules the candidates actually touch, not the whole ruleset. \*\*\*
+preparation is now lazy, the prepared geometries are **workload-dependent** —
+they grow with the rules the candidates actually touch, not the whole ruleset.
+(Before perf-memory 02 the slot *table* was dense, so this cell also paid
+~O(rules) even when nothing was prepared; it now stores boxed slots at ~8 B/rule.
+The 100k×10 margin measured ~26 MiB on 2026-08-23 and ~5 MiB after 02 on
+2026-09-16, Windows.) \*\*\*
 steady-state candidates/sec across the 20 timed batches (cold first batch
 excluded, ADR-0010 prepare is warmed).
+
+**Amendment (2026-09-16, perf-memory 02 + 03, Windows).** Two per-rule storage
+changes were re-recorded on the `100,000 × 10` cell: the prepared-geometry memo
+now stores boxed slots (~8 B/rule instead of a full `Option<PreparedGeometry>`
+per rule — ticket 02), and `Rule.properties` is a sorted
+`Box<[(Box<str>, PropertyValue)]>` instead of a `BTreeMap`, whose first insert
+allocated an 11-entry leaf (~600 B) per rule however few properties it held
+(ticket 03):
+
+| cell | ruleset steady | bytes/rule | after 1st query |
+|---|---|---|---|
+| `100,000 × 10` (2026-08-23) | 117.7 MiB | 1.24 kB | 143.3 MiB |
+| `100,000 × 10` (2026-09-16) | **78.7 MiB** | **0.83 kB** | **84.0 MiB** |
+
+The after-query margin is now ~5 MiB (was ~26 MiB): the fixed part is the
+~8 B/rule slot table and the rest scales with touched rules. The other cells in
+the 2026-08-23 grids predate these changes, so their `bytes/rule` is higher.
+perf-memory 04 (build/load allocations — property-index clone removal,
+`Box<str>` id map, single-parse canonical load) nudged this cell to
+**77.8 MiB / 0.82 kB**; its canonical-load and ingestion wins are not covered
+by this grid.
 
 **Results — Linux (the deploy platform)** (release profile, linux-gnu, inside
 the pinned `oven/bun:1.3.14` container via the reproducible
@@ -316,8 +383,9 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
   duplication scales with touched rules too. Two caveats: (1) worst case is
   unchanged — a workload whose candidates touch every rule still prepares
   everything, so capacity planning still sizes to the ruleset + per-rule
-  prepared cost ceiling; (2) the per-thread *duplication* remains (the `Rc →
-  Arc` geo 0.34 deferral, post-v1 ticket 05). At the production 30-rule shape
+  prepared cost ceiling; (2) the per-thread *duplication* remains — geo's
+  `PreparedGeometry` is `Send` but not `Sync`, so it cannot be shared across
+  threads (ADR-0010). At the production 30-rule shape
   the memo is small and the in-process ~67 MB peak stands; under sustained HTTP
   load the serving peak is higher (see §HTTP serving memory).
 - **The first request no longer stalls on a prepare spike.** The cold batch
@@ -440,7 +508,8 @@ memory-scale table (same-process, after 20 timed batches) and 279 MiB here
   634 MiB** (previously 1.78 GiB vs 640 MiB, turf ahead). Worst case is
   unchanged: a touch-everything workload prepares everything and lands at the
   old ceiling (~ruleset + per-rule prepared cost), so the *duplication*
-  (per-thread copies) is still the geo 0.34 deferral (post-v1 ticket 05).
+  (per-thread copies) remains — geo's `PreparedGeometry` is not shareable across
+  threads (ADR-0010).
 
 Measured inside the `spatial-rules` Docker image (oven/bun:1.3.14 — pinned to
 CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates.
@@ -534,10 +603,12 @@ addon, 30 rules × 1,000 candidates, production query + `--concurrency=25`:
   at 93% of it — at 5.3× the throughput. Over a socket this is no longer a
   2–5× hold ratio; it is fits-versus-doesn't.
 
-The per-thread prepared-geometry duplication's marginal contribution (ADR-0010,
-one owned geometry clone per thread per ruleset) is deferred to the geo 0.34
-upgrade (ticket 05 of `post-v1`), which moves the cache from owned per-thread
-clones to borrowed `Arc`-shared prepared forms.
+The per-thread prepared-geometry duplication (ADR-0010, one owned prepared form
+per thread per ruleset) is accepted, not deferred: geo's `PreparedGeometry` is
+`Send` but deliberately `!Sync`, so it cannot be shared through the `Sync`
+`Arc<Ruleset>` the concurrent engine requires. Its marginal contribution is
+bounded by the lazy per-rule memo — a thread prepares only the rules its
+candidates actually relate against.
 
 ## 2b. Python baseline — engine PyO3 wheel vs Shapely/GEOS (`bun run bench python`)
 
@@ -892,6 +963,8 @@ bun run bench memory-turf    # engine vs turf.js memory footprint [--cells=]
 bun run bench python         # engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
 bun run bench smoke:node     # node package smoke test
 bun run bench crit           # criterion ladder
+bun run bench samples        # controlled sampling: N runs, median + spread, --save=/--compare=
+bun run bench samples --no-lto --save=tmp/lto.json   # A/B a profile change
 bun run bench all            # full battery (build + gen if needed)
 
 # verify under a hard cap (§26)
@@ -922,6 +995,14 @@ the harnesses read, with the flag that overrides it:
 | `memory` | `queryBatches` `replacements` `replacementsOnly` | `--query-batches` `--replacements` `--replacements-only` | `20` `10` `false` |
 | `memoryScale` | `cells` `rules` `vertices` `candidates` `queryBatches` `replacements` | `--cells` `--rules` `--vertices` `--candidates` `--query-batches` `--replacements` | `1000x10,…,100000x100` `1000,10000,100000` `10,100,1000` `1000` `20` `20` |
 | `python` | `reps` `points` `candidates` | `--reps` `--points` `--candidates` | `3` `30,300,1000` `1000` |
+| `samples` | `bench` `runs` `warmUp` `measureTime` `sampleSize` `filter` | `--bench` `--runs` `--warm-up` `--measure-time` `--sample-size` `--filter` | `ladder` `5` `1` `2` `10` `null` |
+
+`samples` runs a criterion bench N times and reports the median with the
+run-to-run spread, so a change is judged against its noise floor rather than a
+stale `target/criterion` baseline (`--save=`/`--compare=` a JSON summary).
+`--no-lto` re-runs with the release profile's LTO disabled for an A/B. It is the
+only place the harness sets environment variables, and only for the child cargo
+process (`CARGO_PROFILE_BENCH_*`) — every harness knob is still a flag.
 
 `rulesFile: null` means synthetic mode; set it (or pass `--rules-file=…`) to run
 against a real GeoJSON boundary file. Paths are repo-root-relative. There are no

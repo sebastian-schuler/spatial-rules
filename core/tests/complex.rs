@@ -2,11 +2,9 @@
 //! engine must build and query rules with tens of thousands of vertices and
 //! many typed properties, not just the ~30-rule benchmark shapes.
 
-use std::collections::BTreeMap;
-
 use geo::Polygon;
 use spatial_rules_core::{
-    CandidateOutcome, PropertyValue, Query, Rule, Ruleset, SpatialPredicate,
+    CandidateOutcome, Properties, PropertyValue, Query, Rule, Ruleset, SpatialPredicate,
 };
 
 mod common;
@@ -17,7 +15,7 @@ use common::{candidate_geometry, jittered_ring, square_around};
 fn complex_rule(id: &str, cx: f64, vertices: usize, fields: usize, seed: u64) -> Rule {
     let exterior = jittered_ring(cx, 0.0, 10.0, vertices, seed);
     let hole = jittered_ring(cx, 0.0, 3.0, 400, seed.wrapping_add(1));
-    let mut properties = BTreeMap::new();
+    let mut properties = Properties::default();
     properties.insert(
         "classification".to_string(),
         PropertyValue::Str("restricted".into()),

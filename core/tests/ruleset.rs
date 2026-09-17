@@ -4,8 +4,6 @@
 //! mapping, precomputed envelopes, the `SpatialIndex` trait (rstar default and
 //! linear-scan baseline), and the compile-time property equality/`$in` index.
 
-use std::collections::BTreeMap;
-
 use geo::{Point, Rect};
 use serde_json::json;
 use spatial_rules_core::{
@@ -89,7 +87,7 @@ fn rejects_invalid_rule_geometry() {
 fn rejects_unsupported_geometry_type() {
     let rules = vec![Rule {
         id: "point".into(),
-        properties: BTreeMap::new(),
+        properties: Default::default(),
         geometry: geo::Geometry::Point(Point::new(0.0, 0.0)),
         priority: 0,
     }];
@@ -281,7 +279,7 @@ fn from_canonical_rejects_invalid_geometry() {
     // same validation as any other load path (ADR-0013).
     let bad_rule = Rule {
         id: "bad".to_string(),
-        properties: BTreeMap::new(),
+        properties: Default::default(),
         geometry: geo::Geometry::Polygon(bowtie()),
         priority: 0,
     };
@@ -295,7 +293,7 @@ fn from_canonical_rejects_invalid_geometry() {
 fn rule_with_priority(id: &str, priority: i64) -> Rule {
     Rule {
         id: id.to_string(),
-        properties: BTreeMap::new(),
+        properties: Default::default(),
         geometry: geo::Geometry::Polygon(square(0.0, 0.0, 10.0, 10.0)),
         priority,
     }

@@ -1,6 +1,5 @@
 //! Compact typed storage for rule properties (ADR-0003).
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 /// A single queryable property value, stored compactly and typed (ADR-0003).
@@ -149,18 +148,176 @@ impl fmt::Display for PropertyValue {
     }
 }
 
-/// Convert a feature's JSON properties into compact typed storage, skipping
-/// the unsupported v1 value types (nested objects/arrays).
-pub fn properties_from_json(
-    map: &serde_json::Map<String, serde_json::Value>,
-) -> BTreeMap<String, PropertyValue> {
-    let mut properties = BTreeMap::new();
-    for (key, value) in map {
-        if let Some(property_value) = PropertyValue::from_json_value(value) {
-            properties.insert(key.clone(), property_value);
+/// A rule's queryable properties: an immutable, key-sorted, compact map
+/// (ADR-0003).
+///
+/// Replaces `BTreeMap<String, PropertyValue>`, whose first insert allocates a
+/// leaf node sized for 11 entries (~600 B) whatever the property count
+/// (perf-memory 03). Rules are immutable after build, so a sorted
+/// `Box<[(Box<str>, PropertyValue)]>` gives `O(log n)` lookup and pays only for
+/// the properties actually present. Ordering is by key, so canonical JSON output
+/// is byte-identical to the `BTreeMap` it replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Properties(Box<[(Box<str>, PropertyValue)]>);
+
+impl Properties {
+    /// Build from `(name, value)` pairs. Keys must be unique (the sources —
+    /// a JSON object, a test literal — always are); ordering is applied here.
+    pub fn from_pairs<K, I>(pairs: I) -> Self
+    where
+        K: AsRef<str>,
+        I: IntoIterator<Item = (K, PropertyValue)>,
+    {
+        let mut items: Vec<(Box<str>, PropertyValue)> = pairs
+            .into_iter()
+            .map(|(name, value)| (Box::<str>::from(name.as_ref()), value))
+            .collect();
+        Self::sort(&mut items);
+        Self(items.into_boxed_slice())
+    }
+
+    fn sort(items: &mut [(Box<str>, PropertyValue)]) {
+        items.sort_unstable_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+    }
+
+    /// The value for `name`, or `None` when the rule does not define it.
+    pub fn get(&self, name: &str) -> Option<&PropertyValue> {
+        self.0
+            .binary_search_by(|(key, _)| key.as_ref().cmp(name))
+            .ok()
+            .map(|index| &self.0[index].1)
+    }
+
+    /// Whether the rule defines `name`.
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    /// Iterate `(name, value)` in key order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &PropertyValue)> {
+        self.0.iter().map(|(name, value)| (name.as_ref(), value))
+    }
+
+    /// The property names, in key order.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|(name, _)| name.as_ref())
+    }
+
+    /// Number of properties.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the rule has no properties.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Insert or replace a property, keeping the map ordered.
+    ///
+    /// A publication-time builder: `Ruleset::build` freezes properties, so this
+    /// is for constructing rules before they are handed to the engine. Takes an
+    /// owned name, matching the `BTreeMap::insert` it replaces.
+    pub fn insert(&mut self, name: String, value: PropertyValue) {
+        match self.0.binary_search_by(|(key, _)| key.as_ref().cmp(name.as_str())) {
+            Ok(index) => self.0[index].1 = value,
+            Err(index) => {
+                let mut items = self.0.to_vec();
+                items.insert(index, (Box::<str>::from(name), value));
+                self.0 = items.into_boxed_slice();
+            }
         }
     }
-    properties
+}
+
+impl<K: AsRef<str>> FromIterator<(K, PropertyValue)> for Properties {
+    fn from_iter<I: IntoIterator<Item = (K, PropertyValue)>>(iter: I) -> Self {
+        Self::from_pairs(iter)
+    }
+}
+
+/// Iterator over a [`Properties`] map's `(name, value)` pairs.
+pub struct PropertiesIter<'a>(std::slice::Iter<'a, (Box<str>, PropertyValue)>);
+
+impl<'a> Iterator for PropertiesIter<'a> {
+    type Item = (&'a str, &'a PropertyValue);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(name, value)| (name.as_ref(), value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> IntoIterator for &'a Properties {
+    type Item = (&'a str, &'a PropertyValue);
+    type IntoIter = PropertiesIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PropertiesIter(self.0.iter())
+    }
+}
+
+/// Serializes as a JSON object, preserving the canonical ruleset format
+/// (ADR-0013). Keys are already sorted, so output is deterministic.
+impl serde::Serialize for Properties {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, value) in self.0.iter() {
+            map.serialize_entry(name.as_ref(), value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Properties {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PropertiesVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for PropertiesVisitor {
+            type Value = Properties;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map of rule properties")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Properties, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut items: Vec<(Box<str>, PropertyValue)> =
+                    Vec::with_capacity(access.size_hint().unwrap_or(0));
+                while let Some((name, value)) = access.next_entry::<String, PropertyValue>()? {
+                    items.push((name.into_boxed_str(), value));
+                }
+                Properties::sort(&mut items);
+                Ok(Properties(items.into_boxed_slice()))
+            }
+        }
+
+        deserializer.deserialize_map(PropertiesVisitor)
+    }
+}
+
+/// Convert a feature's JSON properties into compact typed storage, skipping
+/// the unsupported v1 value types (nested objects/arrays).
+pub fn properties_from_json(map: &serde_json::Map<String, serde_json::Value>) -> Properties {
+    let items: Vec<(Box<str>, PropertyValue)> = map
+        .iter()
+        .filter_map(|(key, value)| {
+            PropertyValue::from_json_value(value).map(|v| (Box::<str>::from(key.as_str()), v))
+        })
+        .collect();
+    Properties::from_pairs(items)
 }
 
 #[cfg(test)]

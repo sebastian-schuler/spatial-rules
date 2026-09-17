@@ -19,6 +19,7 @@
 //   python       engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
 //   smoke:node   node package smoke test
 //   crit         criterion algorithm ladder
+//   samples      controlled criterion sampling: N runs, median/spread + noise-aware compare (--save= --compare=)
 //   all          full battery (build + gen if needed; then cross-check/scale/fair/complex/crossover/perf/http/memory)
 //
 // No environment variables anywhere — every knob lives in benchmarks.json and
@@ -236,6 +237,162 @@ function cmdMemoryScale(args) {
   run(MEMORY_SCALE_BIN, [...defaults, ...args]);
 }
 
+// ---- controlled criterion sampling (perf-memory 01) ------------------------
+//
+// A single criterion run is noise-dominated and its change-vs-baseline line
+// compares against a stale `target/criterion` baseline from an unknown profile
+// (see the ticket-01 note). This command runs the same bench N times with the
+// machine-readable `bencher` output, reports the median and the run-to-run
+// spread per bench, and can save/compare a JSON summary — so an A/B judgement
+// becomes "does the delta exceed the noise floor?" rather than "what did
+// criterion say against a baseline we cannot identify?".
+
+const BENCHER_LINE =
+  /^test\s+(\S+)\s+\.\.\.\s+bench:\s+([\d,]+)\s+ns\/iter(?:\s+\(\+\/-\s+([\d,]+)\))?/;
+
+function parseBencher(stdout) {
+  const found = new Map();
+  for (const raw of stdout.split(/\r?\n/)) {
+    const match = BENCHER_LINE.exec(raw.trim());
+    if (match) found.set(match[1], Number(match[2].replaceAll(',', '')));
+  }
+  return found;
+}
+
+function formatNs(ns) {
+  if (ns >= 1e6) return `${(ns / 1e6).toFixed(3)} ms`;
+  if (ns >= 1e3) return `${(ns / 1e3).toFixed(2)} us`;
+  return `${ns.toFixed(0)} ns`;
+}
+
+// `--name=value` flag, falling back to the `benchmarks.json` section default.
+function flag(args, name, fallback) {
+  const hit = args.find((arg) => arg.startsWith(`${name}=`));
+  return hit === undefined ? fallback : hit.slice(name.length + 1);
+}
+
+function cmdSamples(args) {
+  const section = CONFIG.samples ?? {};
+  const bench = flag(args, '--bench', section.bench ?? 'ladder');
+  const runs = Number(flag(args, '--runs', section.runs ?? 5));
+  const warmUp = flag(args, '--warm-up', section.warmUp ?? 1);
+  const measureTime = flag(args, '--measure-time', section.measureTime ?? 2);
+  const sampleSize = flag(args, '--sample-size', section.sampleSize ?? 10);
+  const filter = flag(args, '--filter', section.filter);
+  const label = flag(args, '--label', 'current');
+  const savePath = flag(args, '--save', null);
+  const comparePath = flag(args, '--compare', null);
+  // `--no-lto` is the A/B lever for the release profile: cargo's own profile
+  // env overrides mean no manifest edit. This is the one place the harness
+  // touches env vars, and only for the child cargo process.
+  const noLto = args.includes('--no-lto');
+  const childEnv = noLto
+    ? { ...process.env, CARGO_PROFILE_BENCH_LTO: 'false', CARGO_PROFILE_BENCH_CODEGEN_UNITS: '16' }
+    : process.env;
+
+  console.log(
+    `controlled sampling: bench=${bench} runs=${runs} warm-up=${warmUp}s ` +
+      `measure=${measureTime}s sample-size=${sampleSize}` +
+      `${filter ? ` filter=${filter}` : ''}` +
+      `${noLto ? ' [no-lto]' : ''} [${label}]`,
+  );
+
+  // Compile once, outside the measured runs.
+  run('cargo', ['bench', '-p', 'spatial-rules-benchmarks', '--bench', bench, '--no-run'], {
+    env: childEnv,
+  });
+
+  const benchArgs = [
+    'bench', '-p', 'spatial-rules-benchmarks', '--bench', bench, '--',
+    '--output-format', 'bencher', '--noplot',
+    '--warm-up-time', String(warmUp),
+    '--measurement-time', String(measureTime),
+    '--sample-size', String(sampleSize),
+  ];
+  if (filter) benchArgs.push(filter);
+
+  const perRun = [];
+  for (let index = 0; index < runs; index += 1) {
+    process.stderr.write(`  run ${index + 1}/${runs}...\n`);
+    const result = spawnSync('cargo', benchArgs, { cwd: REPO_ROOT, encoding: 'utf8', env: childEnv });
+    if (result.status !== 0) {
+      process.stderr.write(result.stdout ?? '');
+      process.stderr.write(result.stderr ?? '');
+      process.exit(result.status ?? 1);
+    }
+    perRun.push(parseBencher(result.stdout ?? ''));
+  }
+
+  const ids = [...new Set(perRun.flatMap((one) => [...one.keys()]))];
+  const results = {};
+  for (const id of ids) {
+    const samples = perRun
+      .map((one) => one.get(id))
+      .filter((value) => value !== undefined)
+      .sort((a, b) => a - b);
+    if (samples.length === 0) continue;
+    const median = samples[Math.floor(samples.length / 2)];
+    const min = samples[0];
+    const max = samples[samples.length - 1];
+    results[id] = {
+      median,
+      min,
+      max,
+      spreadPct: median > 0 ? ((max - min) / median) * 100 : 0,
+      samples,
+    };
+  }
+
+  console.log('');
+  console.log('  bench                                                   median       spread');
+  for (const [id, entry] of Object.entries(results)) {
+    console.log(
+      `  ${id.padEnd(54)} ${formatNs(entry.median).padStart(11)}   +/-${entry.spreadPct.toFixed(1)}%`,
+    );
+  }
+
+  if (comparePath) {
+    const base = JSON.parse(readFileSync(comparePath, 'utf8'));
+    console.log('');
+    console.log(`compare vs ${comparePath} [${base.label ?? '?'}]`);
+    console.log('  (a delta inside the wider run-to-run spread is not evidence)');
+    for (const [id, now] of Object.entries(results)) {
+      const before = base.results?.[id];
+      if (!before) {
+        console.log(`  ${id}: no baseline entry`);
+        continue;
+      }
+      const deltaPct =
+        before.median > 0 ? ((now.median - before.median) / before.median) * 100 : 0;
+      const noise = Math.max(before.spreadPct ?? 0, now.spreadPct);
+      const verdict =
+        Math.abs(deltaPct) <= noise ? 'within noise' : deltaPct < 0 ? 'FASTER' : 'SLOWER';
+      console.log(
+        `  ${id}: ${formatNs(before.median)} -> ${formatNs(now.median)}  ` +
+          `${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%  ` +
+          `(noise +/-${noise.toFixed(1)}%)  ${verdict}`,
+      );
+    }
+  }
+
+  if (savePath) {
+    const payload = {
+      bench,
+      label,
+      runs,
+      warmUp: Number(warmUp),
+      measureTime: Number(measureTime),
+      sampleSize: Number(sampleSize),
+      filter: filter ?? null,
+      noLto,
+      generatedAt: new Date().toISOString(),
+      results,
+    };
+    writeFileSync(savePath, `${JSON.stringify(payload, null, 2)}\n`);
+    console.log(`\nwrote ${savePath}`);
+  }
+}
+
 function printHelp() {
   console.log(`spatial-rules benchmark & integration harness
 
@@ -261,6 +418,8 @@ usage: bun run bench <cmd> [flags]
   python        engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
   smoke:node    node package smoke test
   crit          criterion algorithm ladder (cargo bench)
+  samples       controlled criterion sampling: run N times, report median + spread,
+                compare against a saved run  [--bench= --runs= --filter= --no-lto --save= --compare= --label=]
   all           full battery (build + gen if needed)
   help          this list
 
@@ -301,6 +460,7 @@ switch (cmd) {
   case 'python': cmdPython(args); break;
   case 'smoke:node': ensureNodeBinding(); run('bun', [NODE_SMOKE, ...args]); break;
   case 'crit': cmdCrit(args); break;
+  case 'samples': cmdSamples(args); break;
   case 'all': await cmdAll(); break;
   case undefined:
   case 'help':
