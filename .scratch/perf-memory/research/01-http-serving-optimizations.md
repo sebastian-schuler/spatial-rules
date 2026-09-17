@@ -589,6 +589,46 @@ Ranked by **(expected effect × confidence) ÷ (effort × risk)**.
 
 ---
 
+## Addendum (2026-09-17): engine-side measurement, and one landed fix
+
+After the study, the engine's own per-request cost was measured directly
+(`benchmarks/data/*.geojson`, 1,000 candidates × 30 rules, release, median of 50):
+
+| phase | time |
+|---|---|
+| candidate ingestion (`candidates_from_geojson`) | 1.09 ms |
+| evaluation (`query_mask`) | 3.36 ms |
+| total | **4.53 ms** |
+
+Ingestion is ~24% of the engine's per-request work — and the harness dataset
+*understates* it: it ships `properties: {}`, while real HTTP payloads carry
+metadata the engine **discards** (`Candidate` holds only an id and a geometry).
+Parsing that metadata through the `geojson` crate costs more than parsing the
+coordinates:
+
+| payload | input | parse before | parse after |
+|---|---|---|---|
+| `properties: {}` | 296 KiB | 1.091 ms | 1.051 ms |
+| 8 properties per candidate | 452 KiB | **2.326 ms** | **1.215 ms** |
+
+**Landed:** `candidates_from_geojson` now uses a candidate-specific deserializer
+that reads the top-level `id`, the geometry, and `properties.id` (the fallback)
+and streams past every other property without allocating
+(`core/src/runtime/ingestion.rs`, perf-memory `.scratch/perf-memory/research/`).
+Rules keep the `geojson` path — their properties are queryable. Error codes and
+edge behaviour are unchanged (`SR_INVALID_GEOJSON` for malformed JSON, an
+unexpected `type`, a missing id, or a missing/malformed geometry), covered by
+four added tests in `core/tests/ingestion.rs`.
+
+This was the one remaining measured engine-side reduction; everything in §1–§7
+is app-side, already decided, or inherent. The residual candidate-side cost is
+the `geojson` crate's `Value` DOM for the *coordinates* (~1.05 ms): parsing
+straight into `geo::Geometry` would need a hand-written GeoJSON geometry
+deserializer for a ~0.5 ms win, against real edge-matrix risk — left as a
+documented option, not done.
+
+---
+
 ## Sources
 
 Repo (primary):

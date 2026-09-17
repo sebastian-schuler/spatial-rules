@@ -120,6 +120,67 @@ fn rejects_feature_without_geometry() {
 }
 
 #[test]
+fn candidate_ingestion_reads_properties_id_and_ignores_the_rest() {
+    // The engine discards candidate properties, so the candidate path streams
+    // past them; only the `properties.id` fallback is read (perf-memory, HTTP
+    // engine work).
+    let input = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "from-props",
+            "sensor": "WV03",
+            "cloudCover": 12.5,
+            "bands": 8,
+            "nested": { "a": [1, 2, 3] },
+            "active": true
+          },
+          "geometry": { "type": "Polygon", "coordinates": [[[0,0],[0,1],[1,1],[1,0],[0,0]]] }
+        }
+      ]
+    }"#;
+    let candidates = candidates_from_geojson(input).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "from-props");
+    assert_eq!(
+        candidates[0].geometry(),
+        &geo::Geometry::Polygon(square(0.0, 0.0, 1.0, 1.0))
+    );
+}
+
+#[test]
+fn candidate_ingestion_rejects_a_feature_without_an_id() {
+    let input = r#"{ "type": "FeatureCollection", "features": [
+        { "type": "Feature", "properties": { "sensor": "WV03" },
+          "geometry": { "type": "Polygon", "coordinates": [[[0,0],[0,1],[1,1],[1,0],[0,0]]] } } ] }"#;
+    let err = candidates_from_geojson(input).unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidGeoJson);
+}
+
+#[test]
+fn candidate_ingestion_accepts_a_single_feature_document() {
+    let input = r#"{ "type": "Feature", "id": "solo",
+        "geometry": { "type": "Point", "coordinates": [1.0, 2.0] } }"#;
+    let candidates = candidates_from_geojson(input).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "solo");
+}
+
+#[test]
+fn candidate_ingestion_rejects_a_non_feature_document() {
+    for input in [
+        r#"{"type":"Polygon","coordinates":[[[0,0],[0,1],[1,1],[0,0]]]}"#,
+        r#"{"features":[]}"#,
+        "not json",
+    ] {
+        let err = candidates_from_geojson(input).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidGeoJson, "input: {input}");
+    }
+}
+
+#[test]
 fn builds_candidate_from_feature() {
     let candidates: Vec<Candidate> = candidates_from_geojson(VALID_COLLECTION).unwrap();
     assert_eq!(candidates.len(), 2);
