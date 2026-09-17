@@ -28,7 +28,7 @@ Recommendation (feeds the harness task, which owns ladder E/F):
 
 - Store plain `Polygon`/`MultiPolygon` in the shared `Arc<Ruleset>` (Send+Sync).
 - Prepare lazily **per worker**: build `PreparedGeometry` inside the thread that uses it (0.33.1 constraint), relate one-sided `prepared_rule.relate(&candidate)`; answer `within` as `candidate.relate(&prepared_rule).is_within()` so the rule stays on the prepared side.
-- Revisit at geo 0.34 (`PreparedGeometry` becomes `Send`, still not `Sync`): prebuild once at ruleset compile and clone per worker.
+- No revisit is planned: `Send` alone does not enable sharing (`PreparedGeometry` is `!Sync`), so the per-worker thread-local design stands (ADR-0010).
 - Skip `MonotoneChain*` and `IntervalTreeMultiPolygon` — they don't cover the three required predicates.
 
 The final prepared-vs-unprepared adoption decision is made by the harness task's ladder E/F numbers (§32), not here.

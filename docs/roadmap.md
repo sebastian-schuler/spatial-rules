@@ -48,7 +48,7 @@ Produced the facts later decisions cite. Harness + results in
 `docs/benchmarks.md` §Memory (memory-benchmark tickets 01–03, resolved):
 rulesets track **rule count, not coordinate count** (~1.2–2.7 kB/rule steady;
 100k rules ≈ 118–260 MiB of ruleset; serving adds a per-thread prepared-geometry
-memo — the geo 0.34 deferral), the ruleset is ~2–5× smaller than a turf.js
+memo — thread-affine by design, ADR-0010), the ruleset is ~2–5× smaller than a turf.js
 baseline holding the same data, no per-replacement leak, ~67 MB in-process peak
 for the 30-rule production workload. Serving over HTTP is higher — a ~138–149
 MiB process / ~119 MiB cgroup peak under sustained load, so 128 MB fits but is

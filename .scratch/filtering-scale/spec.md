@@ -46,10 +46,11 @@ Crossover levels added to `benchmarks.json` + `docs/benchmarks.md` §5:
   negation on `where` (exemption logic engine-side).
 - `issues/03-filter-return-shapes.md` — chainable `QueryResult` (mask /
   indices / invalidIndices / count / summary / toGeoJson / toOutcomesJson).
-- `issues/04-npm-publish.md` — registry publish of the prebuilt per-platform
-  packages (the remaining operational step).
 - `issues/05-dynamic-input.md` — dynamic input types (Buffer / GeoJSON string /
   object; streams excluded).
+
+Registry publish of the prebuilt per-platform packages is not tracked work — it
+is a human-scheduled operational step; publish whenever the release is wanted.
 
 No blocking edges between tickets — each is independently actionable.
 
