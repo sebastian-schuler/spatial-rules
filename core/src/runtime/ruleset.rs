@@ -1,7 +1,7 @@
 //! Immutable `Ruleset` compilation and the batch query engine
 //! (ADR-0001/0002/0003/0004/0005).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use geo::{BoundingRect, Geometry, Rect};
@@ -30,7 +30,10 @@ pub struct Ruleset {
     /// `Engine`'s replacement `version`) — the prepared-geometry cache key.
     id: u64,
     rules: Vec<Rule>,
-    ids: HashMap<Box<str>, RuleId>,
+    /// Positional rule indices sorted by string id — the id → position lookup.
+    /// Sorted `u32`s share the id strings already held by `rules`, so no id is
+    /// stored twice (perf-memory 12).
+    id_order: Vec<u32>,
     /// Hoisted top-level priorities, aligned to [`RuleId`] — the resolution
     /// path reads precedence without touching `properties` per candidate
     /// (ADR-0015).
@@ -49,8 +52,12 @@ pub struct Ruleset {
 
 impl std::fmt::Debug for Ruleset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut ids: Vec<&str> = self.ids.keys().map(|key| key.as_ref()).collect();
-        ids.sort();
+        // `id_order` is already sorted by id, so it is the debug view.
+        let ids: Vec<&str> = self
+            .id_order
+            .iter()
+            .map(|&index| self.rules[index as usize].id.as_str())
+            .collect();
         f.debug_struct("Ruleset")
             .field("rule_count", &self.rules.len())
             .field("rule_ids", &ids)
@@ -92,8 +99,11 @@ impl Ruleset {
         // a detectable misuse, not a silent positional alias).
         let id = next_ruleset_id();
         let owner = |index: u32| RuleId::new(index, id);
-        let mut ids = HashMap::with_capacity(rules.len());
-        for (index, rule) in rules.iter().enumerate() {
+        // Duplicate detection borrows the rule ids (`HashSet<&str>`), so the
+        // retained id table below is the only per-rule id storage. The borrow
+        // is transient — released before the ruleset is returned.
+        let mut seen: HashSet<&str> = HashSet::with_capacity(rules.len());
+        for rule in &rules {
             validate_rule_geometry(&rule.geometry).map_err(|e| {
                 SpatialError::new(e.code, format!("rule '{}': {}", rule.id, e.message))
             })?;
@@ -127,16 +137,18 @@ impl Ruleset {
                     ),
                 ));
             }
-            if ids
-                .insert(rule.id.clone().into_boxed_str(), owner(index as u32))
-                .is_some()
-            {
+            if !seen.insert(rule.id.as_str()) {
                 return Err(SpatialError::new(
                     ErrorCode::RulesetConstructionFailed,
                     format!("duplicate rule id: '{}'", rule.id),
                 ));
             }
         }
+        // The id → position lookup: positions sorted by id string, so a `u32`
+        // per rule suffices and `rule_id` is a binary search. (The `u32` cap is
+        // the engine's existing rule limit — `RuleId.index` is a `u32`.)
+        let mut id_order: Vec<u32> = (0..rules.len() as u32).collect();
+        id_order.sort_unstable_by(|&a, &b| rules[a as usize].id.cmp(&rules[b as usize].id));
 
         let envelopes: Vec<Rect<f64>> = rules
             .iter()
@@ -170,7 +182,7 @@ impl Ruleset {
         Ok(Ruleset {
             id,
             rules,
-            ids,
+            id_order,
             priorities,
             envelopes,
             spatial_index,
@@ -213,8 +225,16 @@ impl Ruleset {
     }
 
     /// Map an application-supplied string id to its numeric [`RuleId`].
+    ///
+    /// `id_order` holds positions sorted by id, so this is a binary search —
+    /// O(log n) rather than a hash map's O(1), which is the deliberate price of
+    /// not storing a second copy of every id string. It is only consulted for a
+    /// query's exclusions, never per candidate. An unknown id returns `None`.
     pub fn rule_id(&self, string_id: &str) -> Option<RuleId> {
-        self.ids.get(string_id).copied()
+        self.id_order
+            .binary_search_by(|&index| self.rules[index as usize].id.as_str().cmp(string_id))
+            .ok()
+            .map(|position| RuleId::new(self.id_order[position], self.id))
     }
 
     /// Map a numeric [`RuleId`] back to the application-supplied string id.
