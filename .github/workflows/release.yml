@@ -1,0 +1,51 @@
+name: release
+
+# Creates the GitHub Release for a `vX.Y.Z` tag from the matching CHANGELOG
+# section. `bun run release` pushes the tag, which triggers this; the
+# `workflow_dispatch` entry point backfills a Release for a tag that predates
+# this workflow (e.g. v0.2.2).
+#
+# Publishing itself is done by prebuild-publish.yml; this only writes the
+# Release entry.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to create a GitHub Release for"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — nothing to do"
+            exit 0
+          fi
+          version="${TAG#v}"
+          notes="$(awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md)"
+          if [ -z "$notes" ]; then
+            echo "no CHANGELOG section for $version — falling back to generated notes"
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          else
+            gh release create "$TAG" --title "$TAG" --notes "$notes"
+          fi
