@@ -38,17 +38,17 @@ cd node && npm install && npm run typecheck
 
 ## Commit messages
 
-This repository uses **Conventional Commits** — release automation
-(`release-please`) derives version bumps and the changelog from commit
-messages, so this matters.
+This repository uses **Conventional Commits** — the release changelog is
+generated from commit messages by `bun run release` (git-cliff), so this
+matters.
 
 Format: `<type>(<scope>): <subject>`
 
 - `type`: `feat`, `fix`, `docs`, `refactor`, `test`, `ci`, `chore`,
   `perf`, `build`.
 - `scope`: optional, e.g. `core`, `node`, `docs`.
-- `feat` bumps the minor version; `fix` bumps the patch. Everything else
-  (including `BREAKING CHANGE:`) is handled by release-please.
+- The type determines which changelog section a commit lands in; breaking
+  changes are worth calling out with a `BREAKING CHANGE:` footer.
 
 Examples:
 

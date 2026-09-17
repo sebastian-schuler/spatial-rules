@@ -78,3 +78,11 @@ The original scoping kept node's rich-JSON serializers inline ("out of scope").
 **ADR-0020 supersedes that clause**: the rich-outcome wire contract now lives in
 `spatial-rules-bindings-common` and node consumes it, so all three bindings
 share one serializer rather than node carrying its own copy.
+
+## Note — release tooling (2026-09-17)
+
+The release-please extension above was **retired**. Releases are now cut with a
+single manual command, `bun run release -- X.Y.Z` (`scripts/release.mjs`): it
+bumps every version source in lockstep, generates the root/`wasm/`/`python/`
+changelogs from the Conventional-Commits feed with git-cliff, and pushes the
+`vX.Y.Z` tag that triggers `prebuild-publish.yml`. See `RELEASING.md`.

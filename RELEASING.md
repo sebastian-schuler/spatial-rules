@@ -1,34 +1,44 @@
 # Releasing
 
 `spatial-rules` (Node/Bun), `spatial-rules-wasm` (npm), and `spatial-rules`
-(PyPI) are published from GitHub Actions. The release pipeline is largely
-automated with [release-please](https://github.com/googleapis/release-please).
+(PyPI) are published from GitHub Actions by `prebuild-publish.yml`, which runs
+on a `v*` tag. Releases are cut **manually** with one command:
 
-## How it works
-
-```
-commit on main (Conventional Commits)
-   └─ test.yml          (gate: Rust tests, clippy, TS typecheck, Node/Bun/wasm/deno/python smoke)
-        └─ release-please (on main) opens a Release PR:
-             - bumps versions in node/package.json, wasm/package.json, python/
-             - generates CHANGELOG.md at the repo root, wasm/CHANGELOG.md, python/CHANGELOG.md
-             - bumps the 6 platform packages in lockstep via extra-files (version-locked)
-        └─ merge the Release PR
-             └─ release-please creates a vX.Y.Z tag + GitHub Release
-                  └─ prebuild-publish.yml (on v* tags)
-                       - builds the 6 platform addons (cargo/cross)
-                       - publishes the 6 platform packages
-                       - publishes the root package
-                       - publishes spatial-rules-wasm to npm
-                       - publishes spatial-rules to PyPI
+```bash
+bun run release -- 0.3.0            # dry run: prints the plan, writes nothing
+bun run release -- 0.3.0 --yes      # execute: bump, changelog, commit, tag, push
 ```
 
-release-please watches each package's own path (`node/`, `wasm/`, `python/`) and
-versions the three **independently** — the `linked-versions` plugin was dropped
-in `bea032d` because it conflicts with the node `v*` tag scheme. The Rust
-workspace version is the single source the Python wheel reads, and release-please
-bumps it through the `python` package's `extra-files`. Nothing is published until
-you merge the Release PR, so releases are deliberate.
+The three packages share **one version** (lockstep), and the Rust workspace
+version tracks it — so a single `vX.Y.Z` tag publishes all three. There is no
+release-please; the script (`scripts/release.mjs`) is the release process.
+
+## Making a release
+
+1. Merge the changes you want to ship to `main` (Conventional Commits — the
+   changelog is generated from them; see `CONTRIBUTING.md`).
+2. From a clean `main`, preview the release:
+   `bun run release -- X.Y.Z` — prints the version bump and the generated
+   changelog entries for the root, `wasm/`, and `python/`, and writes nothing.
+3. Execute it: `bun run release -- X.Y.Z --yes`. The script:
+   - bumps every version source to `X.Y.Z`:
+     - root `Cargo.toml` `[workspace.package] version` (and `Cargo.lock`, via
+       `cargo update --workspace`) — the source maturin reads for the wheel;
+     - `node/package.json` version + its 6 `optionalDependencies`;
+     - the 6 `node/npm/<platform>/package.json` packages;
+     - `wasm/package.json`;
+   - prepends the generated changelog entry to `CHANGELOG.md`,
+     `wasm/CHANGELOG.md`, and `python/CHANGELOG.md` (git-cliff, `cliff.toml`);
+   - commits `chore(release): vX.Y.Z`, tags `vX.Y.Z` (+ the
+     `spatial-rules-wasm-vX.Y.Z` / `spatial-rules-python-vX.Y.Z` component tags),
+     and pushes.
+4. The pushed `vX.Y.Z` tag fires `prebuild-publish.yml`, which builds the 6
+   platform addons and publishes: the 6 platform packages + the root
+   `spatial-rules`, `spatial-rules-wasm`, and the PyPI wheel. Unchanged
+   packages skip publishing idempotently.
+
+Flags: `--yes` (execute; without it the command is a dry run), `--dry-run`,
+`--no-changelog`, `--no-push` (commit + tag locally, push yourself).
 
 ## One-time setup (before the first release)
 
@@ -36,48 +46,36 @@ you merge the Release PR, so releases are deliberate.
    `publish` scope, e.g. from an automation account).
 2. Ensure the `PYPI_TOKEN` secret exists (a PyPI API token with upload scope for
    the `spatial-rules` project; maturin publishes with username `__token__`).
-3. Confirm `release-please.yml`, `release-please-config.json`, and
-   `.release-please-manifest.json` are present and committed.
-
-## Making a release
-
-1. Merge the changes you want to ship to `main` (Conventional Commits).
-2. release-please opens a **Release PR** (e.g. "chore(main): release
-   spatial-rules 0.2.0"). Review the version bump and the generated
-   `CHANGELOG.md` in that PR.
-3. Merge the Release PR. release-please tags `v0.2.0` and creates a GitHub
-   Release; `prebuild-publish.yml` builds and publishes all packages.
-
-## Manual/emergency releases
-
-The `prebuild-publish.yml` workflow also supports `workflow_dispatch` for the
-build matrix, but publishing is restricted to `v*` tags. To force a publish
-without release-please, push a `vX.Y.Z` tag to the matching commit.
 
 ## Versioning
 
-Follow [SemVer](https://semver.org). `feat` → minor, `fix` → patch;
-`BREAKING CHANGE:` in the commit footer → major. Pre-1.0, breaking changes bump
-the minor version (release-please config sets `bump-minor-pre-major: true` for
-all three packages).
+Follow [SemVer](https://semver.org). Pre-1.0, breaking changes bump the minor
+version. The version is chosen by hand — the release script does not infer it
+from commit types (git-cliff only groups the changelog).
 
-The three packages are versioned **independently**: release-please only considers
-commits under a package's own path, so each bumps from the `feat`/`fix`/breaking
-commits that touch it (a change that touches only `core/` does not open a Release
-PR by itself). The Rust workspace version (`[workspace.package] version` in the
-root `Cargo.toml`) is the single source the Python wheel reads (maturin), and
-release-please bumps it through the `python` package's `extra-files`. Per-package
-version sources, all updated by release-please on a release:
+Every version source the script updates, for reference:
 
-- **node** — `node/package.json` (+ the 6 platform packages in lockstep via
-  `extra-files`), tags `vX.Y.Z`.
-- **wasm** — `wasm/package.json`, tags `spatial-rules-wasm-vX.Y.Z`.
-- **python** — `pyproject.toml` declares `dynamic = ["version"]` and maturin
-  reads the version from the Rust workspace (`[workspace.package] version` in
-  the root `Cargo.toml`); release-please updates that workspace version via
-  `extra-files` (toml, `$.workspace.package.version`). Tags
-  `spatial-rules-python-vX.Y.Z` (a distinct component — the plain
-  `spatial-rules-*` tag namespace predates node's switch to `v*`).
+- **root `Cargo.toml`** — `[workspace.package] version`. All workspace crates use
+  `version.workspace = true`, so this is the single Rust version; maturin reads
+  it for the Python wheel (`python/pyproject.toml` is `dynamic = ["version"]`).
+- **node** — `node/package.json` (version + the 6 platform `optionalDependencies`)
+  and the 6 `node/npm/<platform>/package.json`, tags `vX.Y.Z`.
+- **wasm** — `wasm/package.json`, tag `spatial-rules-wasm-vX.Y.Z`.
+- **python** — no file of its own; it inherits the Rust workspace version, tag
+  `spatial-rules-python-vX.Y.Z`.
+
+## Manual / emergency
+
+The publish workflow triggers on any `push` of a `v*` tag. To release without the
+script (or re-run a publish), tag and push by hand:
+
+```bash
+git tag vX.Y.Z <commit>
+git push origin vX.Y.Z
+```
+
+Note: a tag created through the GitHub API by `GITHUB_TOKEN` (as a bot would)
+does **not** trigger other workflows — push it yourself so the event fires.
 
 ## Verification
 
