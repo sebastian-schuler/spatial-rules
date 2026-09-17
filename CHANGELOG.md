@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/sebastian-schuler/spatial-rules/compare/v0.2.1...v0.2.2) (2026-09-17)
+
+
+### Bug Fixes
+
+* update package versions to 0.2.1 in manifest and package.json ([f33461d](https://github.com/sebastian-schuler/spatial-rules/commit/f33461d6b4d2d0fd47cce7c35e70681925d5acf4))
+
 ## [0.2.1](https://github.com/sebastian-schuler/spatial-rules/compare/v0.2.0...v0.2.1) (2026-08-25)
 
 
