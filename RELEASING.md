@@ -32,10 +32,11 @@ release-please; the script (`scripts/release.mjs`) is the release process.
    - commits `chore(release): vX.Y.Z`, tags `vX.Y.Z` (+ the
      `spatial-rules-wasm-vX.Y.Z` / `spatial-rules-python-vX.Y.Z` component tags),
      and pushes.
-4. The pushed `vX.Y.Z` tag fires `prebuild-publish.yml`, which builds the 6
-   platform addons and publishes: the 6 platform packages + the root
-   `spatial-rules`, `spatial-rules-wasm`, and the PyPI wheel. Unchanged
-   packages skip publishing idempotently.
+4. The pushed `vX.Y.Z` tag triggers two workflows: `prebuild-publish.yml`
+   builds the 6 platform addons and publishes the 6 platform packages + the
+   root `spatial-rules`, `spatial-rules-wasm`, and the PyPI wheel (unchanged
+   packages skip idempotently), and `release.yml` creates the **GitHub
+   Release** from the matching `CHANGELOG.md` section.
 
 Flags: `--yes` (execute; without it the command is a dry run), `--dry-run`,
 `--no-changelog`, `--no-push` (commit + tag locally, push yourself).
@@ -76,6 +77,11 @@ git push origin vX.Y.Z
 
 Note: a tag created through the GitHub API by `GITHUB_TOKEN` (as a bot would)
 does **not** trigger other workflows — push it yourself so the event fires.
+
+To create the GitHub Release for a tag that predates `release.yml` (or was
+pushed before it existed), run the **release** workflow from the Actions tab
+(`Run workflow`, tag input e.g. `v0.2.2`) — it backfills the Release from the
+CHANGELOG.
 
 ## Verification
 
