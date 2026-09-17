@@ -21,9 +21,10 @@
 //! are measured in `bench_surfaces` — each with a mask/rich-path baseline, so
 //! the cost of each surface is the delta over its baseline.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use geo::{PreparedGeometry, Relate};
 use spatial_rules_benchmarks::dataset;
+use spatial_rules_bindings_common::{query_rich_json, resolve_rich_json};
 use spatial_rules_core::{
     AggregateSpec, Candidate, CandidateClass, CandidateOutcome, Query, Ruleset, SpatialIndexKind,
     SpatialPredicate,
@@ -65,7 +66,7 @@ fn bench_ladder(criterion: &mut Criterion) {
             let mut matches = 0usize;
             for candidate in &candidates {
                 for geometry in &geometries {
-                    if candidate.geometry.relate(*geometry).is_intersects() {
+                    if candidate.geometry().relate(*geometry).is_intersects() {
                         matches += 1;
                     }
                 }
@@ -82,7 +83,11 @@ fn bench_ladder(criterion: &mut Criterion) {
                 let bbox = candidate_envelope(candidate);
                 scan.query_envelope_into(&bbox, &mut hits);
                 for &rule_id in &hits {
-                    if candidate.geometry.relate(scan.geometry(rule_id)).is_intersects() {
+                    if candidate
+                        .geometry()
+                        .relate(scan.geometry(rule_id).expect("rule id minted by ruleset"))
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }
@@ -99,7 +104,11 @@ fn bench_ladder(criterion: &mut Criterion) {
                 let bbox = candidate_envelope(candidate);
                 rstar.query_envelope_into(&bbox, &mut hits);
                 for &rule_id in &hits {
-                    if candidate.geometry.relate(rstar.geometry(rule_id)).is_intersects() {
+                    if candidate
+                        .geometry()
+                        .relate(rstar.geometry(rule_id).expect("rule id minted by ruleset"))
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }
@@ -113,7 +122,7 @@ fn bench_ladder(criterion: &mut Criterion) {
             let mut matches = 0usize;
             for candidate in &candidates {
                 for prepared_rule in prepared.iter() {
-                    if candidate.geometry.relate(prepared_rule).is_intersects() {
+                    if candidate.geometry().relate(prepared_rule).is_intersects() {
                         matches += 1;
                     }
                 }
@@ -130,7 +139,11 @@ fn bench_ladder(criterion: &mut Criterion) {
                 let bbox = candidate_envelope(candidate);
                 rstar.query_envelope_into(&bbox, &mut hits);
                 for &rule_id in &hits {
-                    if candidate.geometry.relate(prepared.get(rule_id)).is_intersects() {
+                    if candidate
+                        .geometry()
+                        .relate(prepared.get(rule_id).expect("rule id minted by ruleset"))
+                        .is_intersects()
+                    {
                         matches += 1;
                     }
                 }
@@ -143,7 +156,14 @@ fn bench_ladder(criterion: &mut Criterion) {
 
     let mut build = criterion.benchmark_group("ruleset_build");
     build.bench_function("build_30_rules", |bencher| {
-        bencher.iter(|| black_box(Ruleset::build(black_box(rules.clone()))))
+        // `Ruleset::build` consumes its input, so a fresh clone is needed per
+        // iteration. `iter_batched` runs that clone OUTSIDE the timed region
+        // (perf-memory 01) so the bench measures build, not the clone.
+        bencher.iter_batched(
+            || rules.clone(),
+            |rules| black_box(Ruleset::build(black_box(rules))),
+            BatchSize::LargeInput,
+        )
     });
     build.finish();
 
@@ -220,6 +240,21 @@ fn bench_surfaces(criterion: &mut Criterion) {
     });
     resolve.finish();
 
+    // The rich wire serialization (perf-memory 07): outcomes are precomputed so
+    // this isolates `query_rich_json`/`resolve_rich_json` — the intermediate
+    // `serde_json::Value` tree the streaming rewrite removed.
+    let rich_outcomes = rstar.query(&candidates, &intersects);
+    let resolve_outcomes = rstar.resolve(&candidates, &intersects);
+    let mut rich_json = criterion.benchmark_group("batch_rich_json");
+    rich_json.throughput(Throughput::Elements(candidate_count));
+    rich_json.bench_function("query_rich_json", |bencher| {
+        bencher.iter(|| black_box(query_rich_json(&rstar, &rich_outcomes)))
+    });
+    rich_json.bench_function("resolve_rich_json", |bencher| {
+        bencher.iter(|| black_box(resolve_rich_json(&rstar, &resolve_outcomes)))
+    });
+    rich_json.finish();
+
     let mut within = criterion.benchmark_group("batch_within_distance");
     within.throughput(Throughput::Elements(candidate_count));
     within.bench_function("mask_baseline", |bencher| {
@@ -254,16 +289,21 @@ fn bench_surfaces(criterion: &mut Criterion) {
     aggregate.bench_function("query_rich_baseline", |bencher| {
         bencher.iter(|| black_box(rstar.query(&candidates, &intersects)))
     });
+    // The aggregate rides the rich outcome (ADR-0018): query once with the spec
+    // and read `aggregate` off each matched outcome — the realistic path.
+    let query_count = Query::new(SpatialPredicate::Intersects).with_aggregate(count_numeric);
+    let query_coverage = Query::new(SpatialPredicate::Intersects).with_aggregate(coverage);
     aggregate.bench_function("aggregate_count_numeric", |bencher| {
         bencher.iter(|| {
-            let outcomes = rstar.query(&candidates, &intersects);
+            let outcomes = rstar.query(&candidates, &query_count);
             let mut total = 0u64;
-            for (candidate, outcome) in candidates.iter().zip(&outcomes) {
-                if let CandidateOutcome::Matched { rule_ids, .. } = outcome {
-                    total += count_numeric
-                        .compute(candidate, rule_ids, &rstar)
-                        .count
-                        .unwrap_or(0) as u64;
+            for outcome in &outcomes {
+                if let CandidateOutcome::Matched {
+                    aggregate: Some(aggregate),
+                    ..
+                } = outcome
+                {
+                    total += aggregate.count.unwrap_or(0) as u64;
                 }
             }
             black_box(total)
@@ -271,14 +311,15 @@ fn bench_surfaces(criterion: &mut Criterion) {
     });
     aggregate.bench_function("aggregate_coverage", |bencher| {
         bencher.iter(|| {
-            let outcomes = rstar.query(&candidates, &intersects);
+            let outcomes = rstar.query(&candidates, &query_coverage);
             let mut total = 0.0f64;
-            for (candidate, outcome) in candidates.iter().zip(&outcomes) {
-                if let CandidateOutcome::Matched { rule_ids, .. } = outcome {
-                    total += coverage
-                        .compute(candidate, rule_ids, &rstar)
-                        .coverage
-                        .unwrap_or(0.0);
+            for outcome in &outcomes {
+                if let CandidateOutcome::Matched {
+                    aggregate: Some(aggregate),
+                    ..
+                } = outcome
+                {
+                    total += aggregate.coverage.unwrap_or(0.0);
                 }
             }
             black_box(total)

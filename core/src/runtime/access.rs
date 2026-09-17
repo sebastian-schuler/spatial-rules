@@ -1,0 +1,41 @@
+//! Read-only ruleset access seam (architecture hardening).
+//!
+//! Evaluation and aggregation depend on this narrow read-only view instead of
+//! the concrete [`Ruleset`], so the module graph stays acyclic:
+//! `ruleset → evaluate → aggregate`, with `ruleset` implementing this seam and
+//! neither `evaluate` nor `aggregate` importing `ruleset`. This keeps the
+//! immutable ruleset's storage layout private while giving the query hot path
+//! the exact methods it needs.
+//!
+//! [`Ruleset`]: crate::runtime::ruleset::Ruleset
+
+use geo::{Geometry, Rect};
+
+use crate::model::properties::Properties;
+use crate::model::rule::RuleId;
+
+/// The read-only rule access operations the evaluation and aggregation paths
+/// need. Implemented by [`Ruleset`](crate::runtime::ruleset::Ruleset); the
+/// query hot path and the aggregate engine consume it as `&dyn RuleAccess` so
+/// they never depend on the concrete ruleset type.
+pub trait RuleAccess {
+    /// Fill `out` with the rule ids whose envelope intersects `envelope`
+    /// (sorted ascending, deduplicated).
+    fn query_envelope_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>);
+
+    /// Fill `out` with the rules whose `withinDistance` **fringe** boxes
+    /// intersect `envelope` (sorted ascending, deduplicated) — the arc regions
+    /// that escape a rule's planar box. Only the distance pre-filter consults
+    /// this; the DE-9IM predicates compare planar geometries, for which
+    /// [`RuleAccess::query_envelope_into`] is already exact.
+    fn query_fringe_into(&self, envelope: &Rect<f64>, out: &mut Vec<RuleId>);
+
+    /// The geometry of a rule by opaque [`RuleId`].
+    fn geometry(&self, rule_id: RuleId) -> &Geometry<f64>;
+
+    /// The typed properties of a rule by opaque [`RuleId`].
+    fn properties(&self, rule_id: RuleId) -> &Properties;
+
+    /// The top-level precedence of a rule by opaque [`RuleId`] (ADR-0015).
+    fn priority(&self, rule_id: RuleId) -> i64;
+}

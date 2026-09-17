@@ -8,7 +8,7 @@ use geo::Rect;
 use rstar::primitives::GeomWithData;
 use rstar::{AABB, RTree, RTreeObject};
 
-use crate::rule::RuleId;
+use crate::model::rule::RuleId;
 
 /// Answers envelope-intersection queries against indexed rule envelopes.
 pub trait SpatialIndex: Send + Sync {
@@ -31,7 +31,9 @@ pub trait SpatialIndex: Send + Sync {
 pub enum SpatialIndexKind {
     /// Packed `rstar` R*-tree (`bulk_load`) — the default.
     RStar,
-    /// Linear envelope scan — retained as the ladder baseline.
+    /// Linear envelope scan — retained as the ladder baseline (only reachable
+    /// behind the `benchmark` feature / in tests).
+    #[cfg_attr(not(any(test, feature = "benchmark")), allow(dead_code))]
     LinearScan,
 }
 
@@ -80,7 +82,7 @@ impl SpatialIndex for RStarIndex {
         out.clear();
         out.extend(
             self.tree
-                .locate_in_envelope_intersecting(aabb)
+                .locate_in_envelope_intersecting(&aabb)
                 .map(|entry| entry.data),
         );
         out.sort_unstable();

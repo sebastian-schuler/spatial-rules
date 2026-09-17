@@ -23,83 +23,27 @@
 //! Each scale cell runs in its own child process (re-exec via
 //! `std::env::current_exe`) so every cell sees a clean baseline; the parent
 //! aggregates the per-cell JSON reports.
+//!
+//! The module is split by concern: [`report`] holds the report/config types,
+//! [`heuristics`] holds the pure boundedness and per-unit measurements,
+//! [`generator`] holds the deterministic geometry generation, and this file
+//! holds the [`measure_cell`] orchestration plus the tests.
 
-use std::collections::BTreeMap;
+mod generator;
+mod heuristics;
+mod report;
+
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use geo::{Coord, LineString, MultiPolygon, Polygon};
-use serde::{Deserialize, Serialize};
-use spatial_rules_core::{Candidate, PropertyValue, Rule};
-use spatial_rules_core::{SpatialError};
+use spatial_rules_core::{Engine, Query, SpatialError, SpatialPredicate};
 
-/// One cell of the scaling grid: rule count × vertices per exterior ring.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Scale {
-    /// Number of rules in the generated ruleset.
-    pub rules: usize,
-    /// Vertices per rule's exterior ring (exact, no holes).
-    pub vertices: usize,
-}
+use generator::{generate_candidates, generate_rules};
+use heuristics::{
+    bytes_per_million_vertices, bytes_per_rule, bytes_per_vertex, is_bounded, is_bounded_series,
+};
 
-impl Scale {
-    /// Total coordinates ingested across all rules (exterior rings only;
-    /// each ring repeats its first vertex as the closing point).
-    pub fn total_vertices(&self) -> usize {
-        self.rules * self.vertices
-    }
-}
-
-/// Knobs for one measurement cell.
-#[derive(Debug, Clone, Copy)]
-pub struct CellOptions {
-    /// Candidates per query batch.
-    pub candidates: usize,
-    /// Query batches for the query-time phase.
-    pub query_batches: usize,
-    /// Atomic replacements for the lifecycle phase.
-    pub replacements: usize,
-}
-
-impl Default for CellOptions {
-    fn default() -> Self {
-        CellOptions {
-            candidates: 1000,
-            query_batches: 20,
-            replacements: 20,
-        }
-    }
-}
-
-// ---- pure seams (unit-tested below; no process state touched) --------------
-
-/// A relative tolerance for the boundedness classification: resident memory
-/// may legitimately wobble by this fraction of the steady-state footprint
-/// (allocator retention, page trimming) without indicating a leak.
-pub const BOUNDED_TOLERANCE_RATIO: f64 = 0.05;
-
-/// The tail-plateau tolerance for [`is_bounded_series`]: the last quarter is
-/// "flat" only when its range is within this fraction of its mean. Deliberately
-/// **tighter** than [`BOUNDED_TOLERANCE_RATIO`] (memory-benchmark ticket 03):
-/// the plateau signal exists to recognize a warmup that has *settled* (whose
-/// flat tail has ~0% range on Linux), and a loose tolerance would instead
-/// rescue a slow leak — a 5-sample tail spans 4 per-swap intervals, so a 2%
-/// plateau still rejects any leak above ~0.5% of the footprint per swap,
-/// matching the steady test's detection boundary.
-pub const PLATEAU_RANGE_RATIO: f64 = 0.02;
-
-/// [`is_bounded_series`] needs at least this many samples (16 = four
-/// 4-point quarters) before the reset/plateau signals are meaningful; below
-/// it only the steady test applies.
-pub const MIN_RESET_PLATEAU_SAMPLES: usize = 16;
-
-/// Whether resident memory is *bounded* across a repeated operation: the
-/// spread between the last and first observation must sit within
-/// [`BOUNDED_TOLERANCE_RATIO`] of the **first** observation. A leak makes
-/// `last` climb monotonically past any such tolerance.
-pub fn is_bounded(first_bytes: u64, last_bytes: u64) -> bool {
-    let spread = last_bytes.abs_diff(first_bytes) as f64;
-    spread <= BOUNDED_TOLERANCE_RATIO * first_bytes as f64
-}
+pub use report::{CellOptions, CellReport, LifecycleReport, QueryTimeReport, Scale};
 
 /// Per-cell lifecycle wall-time budget (seconds). The default battery keeps
 /// every cell inside this envelope; cells whose per-swap cost would blow past
@@ -127,104 +71,6 @@ pub fn capped_replacements(scale: Scale, requested: usize) -> usize {
     budget.clamp(MIN_LIFECYCLE_SWAPS, requested.max(MIN_LIFECYCLE_SWAPS))
 }
 
-/// Whether a *series* of observations is bounded — i.e. shows no evidence of a
-/// per-cycle leak. A plain 5%-tolerance comparison of the second vs fourth
-/// quarter means (the original heuristic) is a false positive on two bounded
-/// shapes a short window can produce (memory-benchmark ticket 03):
-///
-/// - a **one-time warmup step** that then runs flat (allocator arenas filling
-///   on the first swaps), and
-/// - a **bounded sawtooth** (glibc growing the arena ~21 MiB per replacement
-///   and trimming it back to the same floor every ~11–18 swaps) — the window
-///   can land on an up-slope and read as drift.
-///
-/// A series is therefore bounded when *any* of these hold, each only claiming
-/// what the window supports:
-///
-/// - **steady**: `|mean(q4) − mean(q2)|` ≤ tolerance (the original test);
-/// - **reset**: some sample of the last quarter revisits within tolerance of
-///   the second quarter's floor — a sawtooth that completed a trim inside the
-///   window (a monotone leak never revisits its earlier floor, so this is
-///   leak-proof);
-/// - **tail plateau**: the last quarter is flat (range ≤ [`PLATEAU_RANGE_RATIO`]
-///   of its mean) — warmup that has settled. The plateau tolerance is tight
-///   enough that a slow leak's still-climbing tail is not mistaken for flat.
-///
-/// Otherwise the verdict is `false` = **not proven bounded**: the window shows
-/// drift it cannot explain — either an up-slope with no reset yet (e.g. a
-/// 20-swap window landing between two glibc trims, whose phase varies run to
-/// run) or a genuine leak. The two are indistinguishable within one window; a
-/// 50-swap probe spanning several trim cycles distinguishes them. The
-/// reset/plateau signals need [`MIN_RESET_PLATEAU_SAMPLES`] samples
-/// (4-point quarters) to be meaningful; below that only the steady test
-/// applies. Returns `None` with fewer than 4 observations — no claim.
-pub fn is_bounded_series(samples: &[u64]) -> Option<bool> {
-    if samples.len() < 4 {
-        return None;
-    }
-    let quarter = samples.len() / 4;
-    let mean = |slice: &[u64]| -> f64 {
-        slice.iter().map(|&value| value as f64).sum::<f64>() / slice.len() as f64
-    };
-    let q2 = mean(&samples[quarter..2 * quarter]);
-    let q4 = mean(&samples[3 * quarter..]);
-    let steady = (q4 - q2).abs() <= BOUNDED_TOLERANCE_RATIO * q2.max(1.0);
-    if steady {
-        return Some(true);
-    }
-    if samples.len() < MIN_RESET_PLATEAU_SAMPLES {
-        // Too few samples to tell a bounded shape from drift.
-        return Some(false);
-    }
-    let min_of = |start: usize, end: usize| samples[start..end].iter().copied().min().unwrap();
-    let reset = (min_of(3 * quarter, samples.len()) as f64)
-        <= (1.0 + BOUNDED_TOLERANCE_RATIO) * (min_of(quarter, 2 * quarter) as f64).max(1.0);
-    let tail = &samples[3 * quarter..];
-    let tail_min = *tail.iter().min().unwrap();
-    let tail_max = *tail.iter().max().unwrap();
-    let tail_plateau = (tail_max - tail_min) as f64 <= PLATEAU_RANGE_RATIO * mean(tail).max(1.0);
-    Some(reset || tail_plateau)
-}
-
-/// Steady-state bytes attributable to one rule.
-///
-/// Returns `None` when `rules == 0` — the ratio is undefined, not zero.
-pub fn bytes_per_rule(steady_state_delta_bytes: u64, rules: usize) -> Option<f64> {
-    if rules == 0 {
-        return None;
-    }
-    Some(steady_state_delta_bytes as f64 / rules as f64)
-}
-
-/// Steady-state bytes attributable to one ingested coordinate.
-///
-/// Returns `None` when `total_vertices == 0`.
-pub fn bytes_per_vertex(steady_state_delta_bytes: u64, total_vertices: usize) -> Option<f64> {
-    if total_vertices == 0 {
-        return None;
-    }
-    Some(steady_state_delta_bytes as f64 / total_vertices as f64)
-}
-
-/// The headline publishable metric: steady-state bytes per **million**
-/// vertices (the number someone sizing a container asks for).
-pub fn bytes_per_million_vertices(
-    steady_state_delta_bytes: u64,
-    total_vertices: usize,
-) -> Option<f64> {
-    if total_vertices == 0 {
-        return None;
-    }
-    let per_vertex = bytes_per_vertex(steady_state_delta_bytes, total_vertices)?;
-    Some(per_vertex * 1_000_000.0)
-}
-
-// ---- measurement phases -----------------------------------------------------
-
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use spatial_rules_core::{Engine, Query, SpatialPredicate};
-
 /// Progress logging goes to stderr (stdout carries the JSON report); enabled
 /// by the binary so long cells don't look stuck.
 static PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -238,77 +84,6 @@ fn note(message: &str) {
     if PROGRESS.load(Ordering::Relaxed) {
         eprintln!("[memory-scaling] {message}");
     }
-}
-
-/// Byte-level measurements for one scale cell. All byte values are
-/// process-level resident ground truth ([`crate::rss`]); each cell runs in
-/// its own child process so peaks measure that cell alone.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CellReport {
-    pub scale: Scale,
-    pub total_vertices: usize,
-    /// Resident footprint and all-time peak before anything is generated.
-    pub baseline_rss_bytes: u64,
-    pub baseline_peak_bytes: u64,
-    /// Peak overhead while generating the rule list (transient input).
-    pub generation_peak_delta_bytes: u64,
-    pub build_duration_ms: u128,
-    /// Peak overhead during index construction (validation, envelopes,
-    /// rstar bulk load, property index).
-    pub build_peak_delta_bytes: u64,
-    /// Steady-state delta over baseline after the generated inputs are moved
-    /// into the ruleset and transients are freed — the resident footprint of
-    /// rules + envelopes + indexes. An upper bound: allocators may retain
-    /// freed transients.
-    pub steady_state_delta_bytes: u64,
-    pub bytes_per_rule: Option<f64>,
-    pub bytes_per_vertex: Option<f64>,
-    /// Headline metric: steady-state bytes per million vertices.
-    pub bytes_per_million_vertices: Option<f64>,
-    pub query_time: QueryTimeReport,
-    pub lifecycle: LifecycleReport,
-}
-
-/// Allocation behavior under repeated batch queries.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct QueryTimeReport {
-    /// Time of the first (cold) batch — includes the touched rules'
-    /// prepared-geometry fills for this thread (ADR-0010). Lazily prepared, so
-    /// it tracks the rules the candidates touch, not the whole ruleset.
-    pub first_batch_ms: u128,
-    pub batches: usize,
-    pub candidates_per_batch: usize,
-    /// Steady-state throughput across the remaining batches.
-    pub queries_per_sec: f64,
-    pub rss_first_bytes: u64,
-    pub rss_last_bytes: u64,
-    pub bounded: bool,
-}
-
-/// Retention across repeated atomic ruleset replacement (ADR-0007 swap path),
-/// one query per swap to exercise the per-thread prepared-geometry memo
-/// eviction (ADR-0010).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LifecycleReport {
-    pub replacements: usize,
-    pub rss_after_first_bytes: u64,
-    pub rss_after_last_bytes: u64,
-    pub spread_bytes: i64,
-    pub bounded: bool,
-    /// Resident set after every swap — lets a reader tell a monotonic
-    /// climb (leak) from one-off wobble (allocator retention).
-    pub rss_after_each_bytes: Vec<u64>,
-    /// Committed (private) bytes after every swap. The leak discriminator:
-    /// resident memory can climb while pages are merely freed-but-resident;
-    /// commit charge falls on real frees. Flat commit under climbing RSS
-    /// ⇒ allocator retention, not a leak.
-    pub commit_after_each_bytes: Vec<u64>,
-    /// Extra peak the whole lifecycle added over the pre-lifecycle peak —
-    /// captures old + in-build-new coexisting mid-swap plus the fresh
-    /// thread-local prepared geometries.
-    pub lifecycle_peak_delta_bytes: u64,
-    /// Total build time across all replacement builds.
-    pub replace_build_ms_total: u128,
 }
 
 fn snapshot() -> crate::rss::Snapshot {
@@ -434,93 +209,6 @@ pub fn measure_cell(scale: Scale, opts: CellOptions) -> Result<CellReport, Spati
             replace_build_ms_total: lifecycle_duration.as_millis(),
         },
     })
-}
-
-// ---- deterministic generator ------------------------------------------------
-
-/// Deterministic star-shaped ring around `(cx, cy)` with exactly `vertices`
-/// distinct points plus the closing repeat. Positive radius at every angle
-/// keeps the ring simple, so the polygon passes strict validation (ADR-0005).
-fn ring(rng: &mut crate::dataset::Rng, cx: f64, cy: f64, vertices: usize) -> LineString<f64> {
-    let mut coords = Vec::with_capacity(vertices + 1);
-    for index in 0..vertices {
-        let angle = (index as f64 / vertices as f64) * std::f64::consts::TAU;
-        // Jitter keeps the shape irregular but always positive-radius
-        // (star-shaped ⇒ simple ⇒ valid), mirroring dataset.rs's blobs.
-        let radius = 1.0 + 0.45 * rng.f64();
-        coords.push(Coord {
-            x: cx + radius * angle.cos(),
-            y: cy + radius * angle.sin(),
-        });
-    }
-    coords.push(coords[0]);
-    LineString::from(coords)
-}
-
-/// Generate `scale.rules` valid MultiPolygon rules laid out on a coarse grid
-/// so envelopes don't fully overlap (the rstar index must be able to prune).
-/// Deterministic for a given [`Scale`]: same seed, same layout, same shapes.
-pub fn generate_rules(scale: Scale) -> Vec<Rule> {
-    let mut rng = crate::dataset::Rng::new(0x5EED_1A2B_3C4D);
-    let columns = (scale.rules as f64).sqrt().ceil() as usize;
-    let pitch = 10.0_f64;
-    (0..scale.rules)
-        .map(|index| {
-            let column = (index % columns.max(1)) as f64;
-            let row = (index / columns.max(1)) as f64;
-            let cx = column * pitch;
-            let cy = row * pitch;
-
-            let mut properties = BTreeMap::new();
-            properties.insert("active".to_string(), PropertyValue::Bool(index % 2 == 0));
-            properties.insert(
-                "classification".to_string(),
-                PropertyValue::Str(format!("c{}", index % 5)),
-            );
-
-            Rule {
-                id: format!("rule-{index:06}"),
-                properties,
-                geometry: geo::Geometry::MultiPolygon(MultiPolygon::new(vec![Polygon::new(
-                    ring(&mut rng, cx, cy, scale.vertices),
-                    vec![],
-                )])),
-                priority: 0,
-            }
-        })
-        .collect()
-}
-
-/// Generate `count` small square candidates scattered over the same grid
-/// extent the rules occupy, deterministically.
-pub fn generate_candidates(count: usize, scale: Scale) -> Vec<Candidate> {
-    let mut rng = crate::dataset::Rng::new(0xCAFE_2026_F00D);
-    let columns = (scale.rules as f64).sqrt().ceil() as usize;
-    let extent = columns.max(1) as f64 * 10.0;
-    (0..count)
-        .map(|index| {
-            let cx = rng.f64() * extent - extent / 2.0;
-            let cy = rng.f64() * extent - extent / 2.0;
-            let half = 0.25;
-            let corners = [
-                (cx - half, cy - half),
-                (cx - half, cy + half),
-                (cx + half, cy + half),
-                (cx + half, cy - half),
-                (cx - half, cy - half),
-            ];
-            let line = LineString::from(
-                corners
-                    .iter()
-                    .map(|(x, y)| Coord { x: *x, y: *y })
-                    .collect::<Vec<_>>(),
-            );
-            Candidate::new(
-                format!("candidate-{index:06}"),
-                geo::Geometry::Polygon(Polygon::new(line, vec![])),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

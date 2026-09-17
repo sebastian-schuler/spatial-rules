@@ -33,3 +33,6 @@ benchmarks/data/deu.geojson
 
 # Throwaway local scratch/benchmark output (never part of the source).
 tmp/
+
+# Local desloppify scan state (never part of the source).
+.desloppify/

@@ -495,8 +495,8 @@ export class SpatialRuleset {
    * @param rules - Canonical ruleset serialization as a Buffer.
    * @returns The observability report as a JSON string.
    */
-  fromCanonical(rules: Buffer): string {
-    return callNative(() => this._native.fromCanonical(rules));
+  replaceFromCanonical(rules: Buffer): string {
+    return callNative(() => this._native.replaceFromCanonical(rules));
   }
 
   /**

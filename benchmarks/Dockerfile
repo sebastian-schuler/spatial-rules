@@ -1,7 +1,7 @@
 # Reproducible Linux memory-benchmark image (memory-benchmark tickets 01-03).
 #
 # Builds the release `memory_scaling` binary and the node addon for linux-gnu,
-# then runs the harnesses under the pinned Bun (oven/bun:1.3.14,
+# then runs the harnesses under the pinned Bun (oven/bun:1.4.2,
 # architecture-hardening 06) so the numbers match what a deployed container
 # sees. All measurements report process-level RSS from `/proc/self/status`
 # (VmRSS/VmHWM) — the Linux ground truth the Windows runs could not sample.
@@ -21,7 +21,7 @@ COPY . .
 RUN cargo build --release -p spatial-rules-benchmarks --bin memory_scaling \
     && cargo build --release -p spatial-rules-node
 
-FROM oven/bun:1.3.14
+FROM oven/bun:1.4.2
 WORKDIR /app
 # `target/` and `*.node` are dockerignored, so the repo copy below brings no
 # binaries; the release artifacts are placed here *after* it so they win.

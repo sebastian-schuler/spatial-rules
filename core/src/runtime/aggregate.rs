@@ -1,25 +1,19 @@
 //! Per-candidate analytics over the applicable rule set (ADR-0018).
+//!
+//! The [`Aggregate`] and [`AggregateSpec`] data types live in
+//! [`crate::model::aggregate`] (so the domain `Query` type can own a spec
+//! without depending upward); this module holds the parsing and computation,
+//! and re-exports the data types.
 
 use geo::{BooleanOps, GeodesicArea, Geometry, MultiPolygon};
 
-use crate::candidate::Candidate;
+use crate::runtime::access::RuleAccess;
+use crate::model::candidate::Candidate;
 use crate::error::SpatialError;
-use crate::properties::PropertyValue;
-use crate::rule::RuleId;
-use crate::ruleset::Ruleset;
+use crate::model::properties::PropertyValue;
+use crate::model::rule::RuleId;
 
-/// A query-level request for per-candidate aggregates (ADR-0018). `count` and
-/// `coverage` are booleans; each numeric function names its own rule-property
-/// field (Mongo `$min: "$field"` idiom).
-#[derive(Debug, Clone, PartialEq)]
-pub struct AggregateSpec {
-    pub count: bool,
-    pub min: Option<String>,
-    pub max: Option<String>,
-    pub sum: Option<String>,
-    pub avg: Option<String>,
-    pub coverage: bool,
-}
+pub use crate::model::aggregate::{Aggregate, AggregateSpec};
 
 impl AggregateSpec {
     /// Parse the `aggregate` query member. Strict: an object with unknown
@@ -81,11 +75,11 @@ impl AggregateSpec {
     /// Each numeric field is `Some` only when the function was requested and at
     /// least one applicable rule contributes a numeric value; `coverage` is
     /// `Some` only when requested.
-    pub fn compute(
+    pub fn compute<R: RuleAccess + ?Sized>(
         &self,
         candidate: &Candidate,
         applicable: &[RuleId],
-        ruleset: &Ruleset,
+        ruleset: &R,
     ) -> Aggregate {
         Aggregate {
             count: self.count.then_some(applicable.len() as u32),
@@ -102,16 +96,6 @@ impl AggregateSpec {
 /// function was not requested (or, for the numeric fields, when no applicable
 /// rule contributed a numeric value), so serialization emits only requested
 /// results.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Aggregate {
-    pub count: Option<u32>,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    pub sum: Option<f64>,
-    pub avg: Option<f64>,
-    pub coverage: Option<f64>,
-}
-
 #[derive(Clone, Copy)]
 enum NumericOp {
     Min,
@@ -122,10 +106,10 @@ enum NumericOp {
 
 /// The numeric (Int/Float) values of `field` across the applicable rules; a
 /// rule whose property is missing or non-numeric is skipped (ADR-0018).
-fn numeric_values<'a>(
+fn numeric_values<'a, R: RuleAccess + ?Sized>(
     field: &'a str,
     applicable: &'a [RuleId],
-    ruleset: &'a Ruleset,
+    ruleset: &'a R,
 ) -> impl Iterator<Item = f64> + 'a {
     applicable.iter().filter_map(move |&rule_id| match ruleset.properties(rule_id).get(field) {
         Some(PropertyValue::Int(value)) => Some(*value as f64),
@@ -136,10 +120,10 @@ fn numeric_values<'a>(
 
 /// Apply a numeric aggregate to the field's values across the applicable rules;
 /// `None` when no applicable rule contributes a numeric value.
-fn numeric<'a>(
+fn numeric<'a, R: RuleAccess + ?Sized>(
     field: &'a str,
     applicable: &'a [RuleId],
-    ruleset: &'a Ruleset,
+    ruleset: &'a R,
     op: NumericOp,
 ) -> Option<f64> {
     let values = numeric_values(field, applicable, ruleset);
@@ -154,33 +138,41 @@ fn numeric<'a>(
             let first = values.next()?;
             Some(values.fold(first, f64::max))
         }
-        NumericOp::Sum => {
-            let mut sum = 0.0;
-            let mut n = 0;
-            for value in values {
-                sum += value;
-                n += 1;
-            }
-            (n > 0).then_some(sum)
-        }
-        NumericOp::Avg => {
-            let mut sum = 0.0;
-            let mut n = 0;
-            for value in values {
-                sum += value;
-                n += 1;
-            }
-            (n > 0).then_some(sum / n as f64)
+        NumericOp::Sum | NumericOp::Avg => {
+            // Share one (sum, count) fold; the projection is the only datum
+            // that differs between Sum (the total) and Avg (total / count).
+            let (sum, count) = numeric_sum_count(values);
+            (count > 0).then(|| match op {
+                NumericOp::Sum => sum,
+                NumericOp::Avg => sum / count as f64,
+                // MIN/MAX are handled above, so this arm is unreachable.
+                NumericOp::Min | NumericOp::Max => unreachable!(),
+            })
         }
     }
+}
+
+/// Fold an iterator of numeric values into `(sum, count)` in a single pass.
+fn numeric_sum_count(values: impl Iterator<Item = f64>) -> (f64, usize) {
+    let mut sum = 0.0;
+    let mut count = 0;
+    for value in values {
+        sum += value;
+        count += 1;
+    }
+    (sum, count)
 }
 
 /// Union coverage (ADR-0018): the fraction of the candidate's area covered by
 /// the union of the applicable rules, via `BooleanOps::union` + `GeodesicArea`
 /// (the same spherical machinery `overlap_metric` uses). Point/MultiPoint
 /// candidates have zero area → `0`.
-fn coverage_ratio(candidate: &Candidate, applicable: &[RuleId], ruleset: &Ruleset) -> f64 {
-    if matches!(candidate.geometry, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+fn coverage_ratio<R: RuleAccess + ?Sized>(
+    candidate: &Candidate,
+    applicable: &[RuleId],
+    ruleset: &R,
+) -> f64 {
+    if matches!(candidate.geometry(), Geometry::Point(_) | Geometry::MultiPoint(_)) {
         return 0.0;
     }
     let mut union: Option<MultiPolygon<f64>> = None;
@@ -198,13 +190,13 @@ fn coverage_ratio(candidate: &Candidate, applicable: &[RuleId], ruleset: &Rulese
     let Some(union) = union else {
         return 0.0;
     };
-    let intersection = match &candidate.geometry {
+    let intersection = match candidate.geometry() {
         Geometry::Polygon(polygon) => polygon.intersection(&union),
         Geometry::MultiPolygon(multipolygon) => multipolygon.intersection(&union),
         _ => unreachable!("coverage requires a polygon candidate"),
     };
     let covered_area = intersection.geodesic_area_signed().abs();
-    let candidate_area = candidate.geometry.geodesic_area_signed().abs();
+    let candidate_area = candidate.geometry().geodesic_area_signed().abs();
     if candidate_area > 0.0 {
         covered_area / candidate_area
     } else {
@@ -215,8 +207,9 @@ fn coverage_ratio(candidate: &Candidate, applicable: &[RuleId], ruleset: &Rulese
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::candidate::Candidate;
-    use crate::rule::Rule;
+    use crate::model::candidate::Candidate;
+    use crate::model::rule::Rule;
+    use crate::runtime::ruleset::Ruleset;
     use geo::LineString;
 
     #[test]
@@ -243,17 +236,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn validate_rejects_an_empty_request() {
+        // A programmatic all-false spec (which from_json rejects) must be caught
+        // by validate so Query::validate surfaces it as Invalid.
+        let empty = AggregateSpec {
+            count: false,
+            min: None,
+            max: None,
+            sum: None,
+            avg: None,
+            coverage: false,
+        };
+        assert!(empty.validate().is_some());
+
+        for spec in [
+            AggregateSpec { count: true, ..empty.clone() },
+            AggregateSpec { coverage: true, ..empty.clone() },
+            AggregateSpec { min: Some("m".to_string()), ..empty.clone() },
+            AggregateSpec { sum: Some("s".to_string()), ..empty.clone() },
+        ] {
+            assert_eq!(spec.validate(), None);
+        }
+    }
+
     fn rule(id: &str, speed_limit: Option<i64>, tax_rate: Option<f64>) -> Rule {
-        let mut properties = crate::properties::properties_from_json(&serde_json::Map::new());
+        let mut pairs: Vec<(&str, PropertyValue)> = Vec::new();
         if let Some(v) = speed_limit {
-            properties.insert("speedLimit".to_string(), PropertyValue::Int(v));
+            pairs.push(("speedLimit", PropertyValue::Int(v)));
         }
         if let Some(v) = tax_rate {
-            properties.insert("taxRate".to_string(), PropertyValue::Float(v));
+            pairs.push(("taxRate", PropertyValue::Float(v)));
         }
         Rule {
             id: id.to_string(),
-            properties,
+            properties: crate::model::properties::Properties::from_pairs(pairs),
             geometry: Geometry::Polygon(geo::Polygon::new(
                 LineString::from(vec![(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]),
                 vec![],
@@ -270,7 +287,7 @@ mod tests {
             rule("c", Some(50), None),
         ];
         let ruleset = Ruleset::build(rules).unwrap();
-        let ids: Vec<RuleId> = (0..3).map(RuleId).collect();
+        let ids: Vec<RuleId> = (0..3).map(|index| RuleId::new(index, ruleset.id())).collect();
         let candidate = Candidate::new(
             "c".to_string(),
             Geometry::Polygon(geo::Polygon::new(
@@ -301,7 +318,7 @@ mod tests {
     #[test]
     fn absent_fields_when_nothing_contributes_or_not_requested() {
         let ruleset = Ruleset::build(vec![rule("a", None, None)]).unwrap();
-        let ids = vec![RuleId(0)];
+        let ids = vec![RuleId::new(0, 0)];
         let candidate = Candidate::new(
             "c".to_string(),
             Geometry::Polygon(geo::Polygon::new(
@@ -323,7 +340,7 @@ mod tests {
     #[test]
     fn point_candidate_coverage_is_zero() {
         let ruleset = Ruleset::build(vec![rule("a", Some(10), None)]).unwrap();
-        let ids = vec![RuleId(0)];
+        let ids = vec![RuleId::new(0, 0)];
         let point = Candidate::new("p".to_string(), Geometry::Point(geo::Point::new(0.5, 0.5)));
         let spec = AggregateSpec::from_json(&serde_json::json!({ "count": true, "coverage": true })).unwrap();
         let aggregate = spec.compute(&point, &ids, &ruleset);

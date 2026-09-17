@@ -5,13 +5,13 @@
 //! property is an independent identity from the DE-9IM spec (ADR-0008) or the
 //! documented result model (ADR-0004).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use geo::{Coord, Relate, Rect};
 use proptest::prelude::*;
 use serde_json::json;
 use spatial_rules_core::{
-    AggregateSpec, Candidate, CandidateOutcome, PropertyValue, Query, ResolutionOutcome, Rule,
+    AggregateSpec, Candidate, CandidateOutcome, Properties, PropertyValue, Query, ResolutionOutcome, Rule,
     RuleId, Ruleset, SpatialIndexKind, SpatialPredicate, WhereExpr,
 };
 
@@ -78,14 +78,14 @@ fn property_value_strategy() -> impl Strategy<Value = PropertyValue> {
     ]
 }
 
-fn property_map_strategy() -> impl Strategy<Value = BTreeMap<String, PropertyValue>> {
+fn property_map_strategy() -> impl Strategy<Value = Properties> {
     let key = prop::sample::select(vec![
         "active".to_string(),
         "priority".to_string(),
         "country".to_string(),
         "classification".to_string(),
     ]);
-    prop::collection::btree_map(key, property_value_strategy(), 0..6)
+    prop::collection::btree_map(key, property_value_strategy(), 0..6).prop_map(|map| map.into_iter().collect())
 }
 
 /// A fixed suite covering every `where` operator, evaluated against random
@@ -133,7 +133,7 @@ proptest! {
             .enumerate()
             .map(|(index, rect)| Rule {
                 id: format!("r{index}"),
-                properties: BTreeMap::new(),
+                properties: Default::default(),
                 geometry: rect_to_geometry(*rect),
                 priority: 0,
             })
@@ -233,7 +233,12 @@ proptest! {
         }
 
         for outcome in &outcomes {
-            let ResolutionOutcome::Resolved { winner, values, applicable } = outcome else {
+            let ResolutionOutcome::Resolved {
+                winner,
+                values,
+                applicable,
+                ..
+            } = outcome else {
                 continue;
             };
 
@@ -258,17 +263,17 @@ proptest! {
             for rule in applicable {
                 prop_assert_eq!(
                     rule.priority,
-                    ruleset.priority(rule.rule_id),
+                    ruleset.priority(rule.rule_id).expect("minted by this ruleset"),
                     "explanation priority must match the ruleset's hoisted priority"
                 );
             }
             let max_priority = applicable
                 .iter()
-                .map(|rule| ruleset.priority(rule.rule_id))
+                .map(|rule| ruleset.priority(rule.rule_id).expect("minted by this ruleset"))
                 .max()
                 .unwrap();
             prop_assert_eq!(
-                ruleset.priority(*winner),
+                ruleset.priority(*winner).expect("minted by this ruleset"),
                 max_priority,
                 "an unprioritized (0) rule never outranks an explicitly prioritized one"
             );
@@ -279,19 +284,29 @@ proptest! {
             // invented field appears.
             for (key, value) in values {
                 let provider = applicable.iter().find(|rule| {
-                    ruleset.properties(rule.rule_id).contains_key(key)
+                    ruleset
+                        .properties(rule.rule_id)
+                        .expect("minted by this ruleset")
+                        .contains_key(key)
                 });
                 prop_assert!(
                     provider.is_some(),
                     "values never carry a field no applicable rule defines (key {key})"
                 );
                 prop_assert_eq!(
-                    ruleset.properties(provider.unwrap().rule_id).get(key),
+                    ruleset
+                        .properties(provider.unwrap().rule_id)
+                        .expect("minted by this ruleset")
+                        .get(key),
                     Some(value)
                 );
             }
             for rule in applicable {
-                for key in ruleset.properties(rule.rule_id).keys() {
+                for key in ruleset
+                    .properties(rule.rule_id)
+                    .expect("minted by this ruleset")
+                    .keys()
+                {
                     prop_assert!(values.contains_key(key), "a defined field is never dropped");
                 }
             }
@@ -310,7 +325,7 @@ proptest! {
             .iter()
             .enumerate()
             .map(|(index, (rect, priority))| {
-                let mut properties = BTreeMap::new();
+                let mut properties = Properties::default();
                 properties.insert(
                     "source".to_string(),
                     PropertyValue::Str(format!("r{index}")),
@@ -342,17 +357,28 @@ proptest! {
                 continue;
             };
             // No excluded rule is applicable, and no excluded rule wins.
+            let excluded_str: Vec<String> = excluded.iter().cloned().collect();
             for rule in &applicable {
-                prop_assert!(!excluded.contains(ruleset.string_id(rule.rule_id)));
+                prop_assert!(
+                    !excluded_str.contains(
+                        &ruleset.string_id(rule.rule_id).expect("minted by this ruleset").to_string()
+                    )
+                );
             }
-            prop_assert!(!excluded.contains(ruleset.string_id(winner)));
+            prop_assert!(
+                !excluded_str.contains(
+                    &ruleset.string_id(winner).expect("minted by this ruleset").to_string()
+                )
+            );
 
             // Every rule defines a unique `source`, so the merged source is the
             // winner's — which the assertion above guarantees is not excluded,
             // so no excluded rule's field leaks into the values.
             prop_assert_eq!(
                 values.get("source"),
-                Some(&PropertyValue::Str(ruleset.string_id(winner).to_string()))
+                Some(&PropertyValue::Str(
+                    ruleset.string_id(winner).expect("minted by this ruleset").to_string()
+                ))
             );
         }
     }
@@ -371,7 +397,7 @@ proptest! {
             .iter()
             .enumerate()
             .map(|(index, (rect, priority, active))| {
-                let mut properties = BTreeMap::new();
+                let mut properties = Properties::default();
                 properties.insert("active".to_string(), PropertyValue::Bool(*active));
                 Rule {
                     id: format!("r{index}"),
@@ -472,7 +498,7 @@ proptest! {
             .enumerate()
             .map(|(index, rect)| Rule {
                 id: format!("r{index}"),
-                properties: BTreeMap::new(),
+                properties: Default::default(),
                 geometry: rect_to_geometry(*rect),
                 priority: 0,
             })
@@ -523,10 +549,16 @@ fn independent_numeric_fold(
 ) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
     let values: Vec<f64> = applicable
         .iter()
-        .filter_map(|&rule_id| match ruleset.properties(rule_id).get(field) {
-            Some(PropertyValue::Int(value)) => Some(*value as f64),
-            Some(PropertyValue::Float(value)) => Some(*value),
-            _ => None,
+        .filter_map(|&rule_id| {
+            match ruleset
+                .properties(rule_id)
+                .expect("minted by this ruleset")
+                .get(field)
+            {
+                Some(PropertyValue::Int(value)) => Some(*value as f64),
+                Some(PropertyValue::Float(value)) => Some(*value),
+                _ => None,
+            }
         })
         .collect();
     let min = values.iter().copied().reduce(f64::min);
@@ -547,7 +579,7 @@ fn independent_coverage(candidate: &geo::Geometry<f64>, applicable: &[RuleId], r
     }
     let mut union: Option<geo::MultiPolygon<f64>> = None;
     for &rule_id in applicable {
-        let rule = match ruleset.geometry(rule_id) {
+        let rule = match ruleset.geometry(rule_id).expect("minted by this ruleset") {
             geo::Geometry::Polygon(polygon) => geo::MultiPolygon::new(vec![polygon.clone()]),
             geo::Geometry::MultiPolygon(multipolygon) => multipolygon.clone(),
             _ => continue,
@@ -587,7 +619,7 @@ proptest! {
             .iter()
             .enumerate()
             .map(|(index, (rect, speed))| {
-                let mut properties = BTreeMap::new();
+                let mut properties = Properties::default();
                 if let Some(speed) = speed {
                     properties.insert("speedLimit".to_string(), PropertyValue::Int(*speed));
                 }
@@ -623,7 +655,7 @@ proptest! {
             prop_assert_eq!(aggregate.max, max);
             prop_assert_eq!(aggregate.sum, sum);
             prop_assert_eq!(aggregate.avg, avg);
-            let coverage = independent_coverage(&candidate.geometry, &rule_ids, &ruleset);
+            let coverage = independent_coverage(candidate.geometry(), &rule_ids, &ruleset);
             let engine_coverage = aggregate.coverage.unwrap_or(-1.0);
             prop_assert!(
                 (engine_coverage - coverage).abs() < 1e-9,

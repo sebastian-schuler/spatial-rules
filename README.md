@@ -5,30 +5,26 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/sebastian-schuler/spatial-rules/test.yml?branch=main)](https://github.com/sebastian-schuler/spatial-rules/actions/workflows/test.yml)
 
 A high-performance spatial rules/query engine: evaluate batches of candidate
-GeoJSON geometries against an indexed, attribute-bearing ruleset, with a Rust
-core distributed three ways — a zero-toolchain Node/Bun native addon, a wasm
-build for Deno/browser/edge, and a PyO3 wheel for Python (ADR-0019).
+GeoJSON geometries against an indexed, attribute-bearing ruleset. The Rust core
+ships as a Node/Bun native addon, a wasm build for Deno/browser/edge, and a PyO3
+wheel for Python, and it is generic. It knows nothing about any application
+domain.
 
-The motivating use case is a batch of candidate geometries checked against a set
-of geometry-bearing rules with queryable properties; the library is generic and
-knows nothing about any specific application domain.
+New here? [docs/examples.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/examples.md)
+walks a city delivery/parking rules engine through matching, `where` filters,
+temporal conditions, geofencing, resolution, and aggregation end to end.
 
-> **New here?** Jump to the end-to-end walkthrough — a city delivery/parking
-> rules engine exercising matching, `where` filters, temporal conditions,
-> geofencing, resolution, and aggregation together:
-> [docs/examples.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/examples.md).
-
-**One number:** ~18.5 ms to evaluate 1,000 candidates × 30 rules — about **60×
-faster** than the equivalent turf.js check (~1.1 s). See
-[docs/benchmarks.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md)
-and the summary below.
+**One number:** ~18.5 ms to evaluate 1,000 candidates × 30 rules, about **60×**
+faster than the same check in turf.js (~1.1 s). That figure is against a pure-JS
+engine; against the native GEOS baseline the engine does not win, see
+[Performance vs Python](#performance-vs-python-shapelygeos). Full numbers live in
+[docs/benchmarks.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md).
 
 ## Performance vs turf.js
 
-The quick picture: every row compares the engine's full batch query (parse +
-spatial predicate + `where` filter + result mask) against a turf.js
-implementation of the same check. Both sides assert the same matched count
-before timing, and the numbers are the recorded ones — not cherry-picked.
+Every row is the engine's full batch query (parse + spatial predicate + `where`
+filter + result mask) against a turf.js implementation of the same check, with
+both sides asserting the same matched count before timing.
 
 | Workload | turf.js | spatial-rules | speedup |
 |---|---|---|---|
@@ -39,59 +35,85 @@ before timing, and the numbers are the recorded ones — not cherry-picked.
 | Full query over HTTP (`where` + exclusions) | 182 ms | 22.3 ms | ~8× |
 | 5,000 candidates, real country boundaries | 14.4 s | 1.9 s | ~7.6× |
 
-The short version:
+The engine prepares each rule's geometry once and indexes the rules with an
+R*-tree, so query cost barely moves as rules are added: 4–6 ms from 500 to
+20,000 rules, against turf's 15→62 ms. The strongest hand-rolled JS answer, a
+prebuilt `rbush` index plus turf relate, is still ~2.8× slower at 300 rules, and
+you have to build that index yourself. Across real data (258 countries, 546k
+vertices) per-query cost is independent of rule complexity for the same reason.
+Turf only comes out ahead on a tiny query: 20 candidates clustered on one
+country, where its bbox fast-reject beats the addon's ~5 ms per-call floor
+(parse + FFI).
 
-- **~60× faster** on the reference workload, and the gap **widens as the
-  ruleset grows**: the R*-tree bbox index + per-thread prepared geometries
-  keep the engine near-flat (4–5.6 ms from 500 to 20,000 rules), while turf
-  degrades with every rule (15→62 ms).
-- **Even the strongest hand-rolled JS answer loses**: a prebuilt `rbush` index
-  + turf relate is still ~2.8× slower at 300 rules — and you'd have to build
-  that index yourself.
-- **Real-world data**: across a full national boundary file (258 countries,
-  546k vertices) per-query cost is independent of rule complexity, because
-  geometry is prepared once per ruleset per thread (turf re-does its relate
-  work on every call).
-- **One honest caveat**: on a tiny query (20 candidates clustered on one
-  country), turf's bbox fast-reject dips under the addon's ~5 ms per-call
-  floor (parse + FFI). Everywhere realistic, the engine wins — usually by
-  10–1,000×.
-- **Memory**: the production 30-rule workload peaks at ~67 MB resident
-  (Linux container, comfortably inside a 128 MB limit) and repeated ruleset
-  replacements leak nothing — proven to 50 swaps at 100k rules on Linux
-  (bounded sawtooth, not a leak). Rulesets size by **rule count**, not
-  coordinate count (~1–3 kB/rule — 100k rules ≈ 120–260 MiB of ruleset), are
-  ~2–5× smaller than a turf.js baseline holding the same data, and prepare
-  rule geometries **lazily on first touch** — so a serving process's footprint
-  is proportional to the rules queries actually touch, not the whole ruleset
-  (the 100k×100 serving footprint dropped from ~1.8 GiB to ~282 MiB at 1,000
-  candidates). Worst case (touch-everything workloads) and the per-thread
-  duplication remain at the pre-lazy ceiling (geo 0.34 deferral).
+## Performance vs Python (Shapely/GEOS)
 
-## What it does
+Turf's DE-9IM engine (JSTS) is pure JS, which is why it loses. **Shapely 2.x**
+wraps **GEOS**, a native C++ engine with prepared geometry and its own spatial
+index, so it is a real competitor.
 
-- **Ruleset** — an immutable, query-optimized collection of geometry-bearing
-  rules with typed properties, built and validated once, then atomically
-  replaceable at runtime without dropping in-flight queries.
-- **Query** — one batch evaluation: a spatial predicate (`intersects` /
-  `contains` / `within` / `covers` / `covered_by` / `touches` / `overlaps`, or
-  the metric `withinDistance` with a radius), an optional property `where`
-  clause, optional excluded rule ids, and an optional reference time `at` for
-  temporal predicates.
-- **Spatial index** — a packed `rstar` R*-tree over rule envelopes, plus a
-  linear-scan baseline for the benchmark ladder.
-- **Property predicates** — Mongo-style `where`: equality, `$ne`,
-  `$gt/$gte/$lt/$lte`, `$in`/`$nin`, `$exists`, `$not`, `$and`/`$or`/`$nor`,
-  and the temporal `$activeAt` window predicate, served by a compile-time
-  equality index with a per-rule fallback.
-- **Result model** — a compact `Uint8Array` mask (`0` no match, `1` matched,
-  `2` invalid) for the hot path, and a per-candidate outcomes API with string
-  rule ids.
-- **Resolution** — `resolve()`/`resolveAsync()` answer "which rule wins, what
-  values apply, and why" per candidate: an ordered applicable set, its winner,
-  and first-provider-wins derived values (ADR-0015).
-- **Errors** — a stable `SR_*` code model (see below), surfaced in Node as
-  `SpatialRulesError`.
+| Workload | Shapely/GEOS | spatial-rules | winner |
+|---|---|---|---|
+| 1,000 candidates × 30 rules (core batch) | ~3 ms | ~13 ms | **Shapely ~4.5×** |
+| 1,000 candidates × 30 rules, naive scan | ~32 ms | ~13 ms | engine ~2.4× |
+| 1,000 candidates × 300 rules (indexed) | ~2 ms | ~5 ms | Shapely ~2× |
+| 1,000 candidates × 1,000 rules (indexed) | ~2 ms | ~5 ms | Shapely ~2× |
+
+Shapely wins the reference point (~4.5×) and stays ahead as the ruleset grows:
+prepared GEOS relate beats the engine's `geo` relate loop on complex
+multipolygons, and the engine pays a per-call parse and PyO3 boundary that
+Shapely's pre-parsed, pre-indexed setup avoids. Both stay flat with rule count,
+each having a real index, so the gap is the relate engine rather than index
+scaling. The engine only wins the naive scan (~2.4×). The "thousands of ×" story
+belongs to turf.js/JSTS: the PyO3 wheel is a thin binding over the same Rust core
+and does not out-run native GEOS on core `intersects`. What it offers over
+Shapely is the ruleset model, meaning `where`, DE-9IM predicates, resolution, and
+aggregation. The masks are byte-identical across all 1,000 candidates (`bun run
+bench python`, release wheel, min-of-3; full picture in
+[docs/benchmarks.md §2b](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md)).
+
+## Memory
+
+The same synthetic rules held in each stack: the engine's compiled ruleset
+against turf's pre-parsed form (feature objects and precomputed bboxes, what the
+timed baseline holds). Linux, Bun 1.4.2, 2026-09-17, `bun run bench memory-turf`:
+
+| rules × vertices | engine\* | turf.js |
+|---|---|---|
+| 1,000 × 10 | 1.8 MiB | 7.9 MiB |
+| 1,000 × 100 | 3.2 MiB | 19.3 MiB |
+| 1,000 × 1,000 | 16.9 MiB | 80.5 MiB |
+| 10,000 × 10 | 8.0 MiB | 24.4 MiB |
+| 10,000 × 100 | 21.9 MiB | 83.4 MiB |
+| 100,000 × 10 | 71.5 MiB | 122.4 MiB |
+| 100,000 × 100 | 208.8 MiB | 640.1 MiB |
+
+\* compiled ruleset — the held footprint. The lazy per-thread prepared-geometry
+memo (ADR-0010) adds well under 1 MiB at the default 1,000 candidates, so the
+serving footprint is essentially the same.
+
+The ruleset sizes by **rule count**, not coordinate count: ~0.7–2.2 kB per rule
+at 100k rules (100k rules ≈ 72–209 MiB), plus ~18 bytes per coordinate. That
+makes it ~2–6× smaller than turf's pre-parsed form at normal zoning shapes,
+narrowing to ~1.7× on trivial 10-vertex rules where per-rule index overhead
+dominates both sides. Serving is workload-proportional, because rule geometry is
+prepared lazily on first touch and a process therefore holds only the rules its
+queries reach.
+
+The table above measures a **hold**: how much it takes to keep the rules loaded.
+A server also does temporary per-request work (buffer the body, parse the
+candidates, hand them to the engine, build the response), which is freed after
+each request but churns hard. At ~675 requests/second the allocator does not
+return memory to the OS fast enough, so the peak climbs well past the hold:
+~65 MiB in-process becomes ~138–149 MiB served. Concurrency is not the driver
+either; even one request at a time peaks at ~126 MiB.
+
+Of the two numbers, the one that matters is the container's **charged** peak
+(`memory.peak`, ~119 MiB), not the process's resident high-water (`VmHWM`,
+~138–149 MiB), because the kernel reclaims some of the latter. Size limits off
+the charged peak: 119 of 128 MiB is 93%, which fits but leaves ~9 MiB, so use
+192–256 MB. For the same work a turf-backed server needs ~199 MiB and is
+OOM-killed at 128 MB, at 5× lower throughput. Method and numbers:
+[docs/benchmarks.md §HTTP serving memory](https://github.com/sebastian-schuler/spatial-rules/blob/main/docs/benchmarks.md#http-serving-memory-architecture-hardening-09).
 
 ## Install
 
@@ -101,30 +123,20 @@ npm install spatial-rules-wasm      # wasm: Deno/browser/edge/Node ESM (npm)
 pip install spatial-rules           # Python (PyPI)
 ```
 
-The engine ships in three flavors (ADR-0019): the zero-toolchain Node/Bun
-native addon `spatial-rules`, a wasm build `spatial-rules-wasm` for
-Deno/browser/edge, and a PyO3 native wheel `spatial-rules` on PyPI. The wasm
-and Python packages publish from the same release pipeline (see
-[RELEASING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/RELEASING.md)).
+The three packages are the same Rust core, sharing a query shape, result
+contracts, and `SR_*` error model, differing only in packaging and method
+coverage. The Node/Bun addon is the full engine: `query`/`queryAsync`/`resolve`/
+`resolveAsync`, atomic `replace`, `stats`, `toCanonical`/`replaceFromCanonical`,
+and the chainable `QueryResult`/`ResolutionResult` views. The wasm build covers
+the ruleset-level subset (build, `query`/`resolve`, the rich JSON views, and
+`toCanonical`) with no `replace`/`stats`, whose clock-backed observability is
+degenerate without a clock, and no async; its release blob is 829 KB. Python
+exposes the full engine with Pythonic types.
 
-## Distributions
+Requires Node ≥ 18 (Bun works via the same prebuilt binaries), a wasm-ESM
+runtime for the wasm build, or CPython 3.9–3.13 (abi3) for the wheel.
 
-The same Rust core, three surfaces (ADR-0019). Every surface shares the query
-shape, result contracts, and `SR_*` error model; they differ in packaging and
-which Engine methods are in scope.
-
-### Node/Bun — `spatial-rules` (native addon)
-
-The full engine: `SpatialRuleset` with `query`/`queryAsync`/`resolve`/
-`resolveAsync`, atomic `replace`, `stats`, `toCanonical`/`fromCanonical`, and
-the `QueryResult`/`ResolutionResult` chainable views. This README's examples
-use this surface.
-
-### Deno / browser / edge — `spatial-rules-wasm` (wasm)
-
-```bash
-npm install spatial-rules-wasm
-```
+### Deno / browser / edge — `spatial-rules-wasm`
 
 ```ts
 import { SpatialRuleset } from 'spatial-rules-wasm';
@@ -134,20 +146,7 @@ const result = ruleset.query(candidates, query); // mask via result.mask()
 console.log(result.toOutcomesJson());
 ```
 
-The **Ruleset-level subset** of the wrapper: `build` (`new SpatialRuleset`),
-`query`/`resolve` (mask as `Uint8Array`), the rich JSON views
-(`toOutcomesJson`/`toJson`), and `toCanonical`. Inputs accept
-`GeoJSON string | Uint8Array | object` and queries accept `string | object`
-(reimplemented in-package). **No `replace`/`stats`** — their clock-backed
-observability is degenerate on wasm (no clock) — and **no async** (the engine
-is sync and whole-buffer). Errors surface as `SpatialRulesError` with the same
-`SR_*` codes. Release wasm blob: 829 KB.
-
-### Python — `spatial-rules` (PyPI)
-
-```bash
-pip install spatial-rules
-```
+### Python — `spatial-rules`
 
 ```python
 from spatial_rules import Ruleset
@@ -159,22 +158,13 @@ resolved = ruleset.resolve_rich(candidates, query)
 print(ruleset.replace(rules))  # dict report
 ```
 
-The **full Engine surface** with Pythonic types: `Ruleset.from_geojson`
-(`bytes | str | dict`), `query`/`resolve` (mask as `list[int]`),
-`query_rich`/`resolve_rich` (`list[dict]`), `replace`, `to_canonical`, and
-`stats` — dicts/lists in and out. Python runs natively, so the clock-backed
-`replace`/`stats` observability is real. JSON serialization is identical to
-the napi/wasm paths. Errors raise `SpatialRulesError` with the `SR_*` code in
-the message.
-
 ## Usage
 
 ```js
 import { SpatialRuleset } from 'spatial-rules';
 
-// Rules: a GeoJSON FeatureCollection of polygon rules. Each feature has a
-// unique `id`, typed `properties` (queried by `where`), and a Polygon or
-// MultiPolygon `geometry`.
+// Rules: a GeoJSON FeatureCollection of polygon rules, each with a unique `id`,
+// typed `properties` (queried by `where`), and a Polygon/MultiPolygon geometry.
 const rules = {
   type: 'FeatureCollection',
   features: [
@@ -189,7 +179,7 @@ const rules = {
 
 const ruleset = new SpatialRuleset(rules); // Buffer | string | object
 
-// Candidates: a GeoJSON FeatureCollection of Polygon / MultiPolygon / Point /
+// Candidates: a GeoJSON FeatureCollection of Polygon, MultiPolygon, Point, or
 // MultiPoint features.
 const candidates = {
   type: 'FeatureCollection',
@@ -198,51 +188,32 @@ const candidates = {
   ],
 };
 
-// Query: the JSON query object (or its string form) — see "Query shape".
+// Query: the JSON query object (or its string form), see "Query shape".
 const result = ruleset.query(candidates, {
   spatial: { predicate: 'intersects' },
   where: { active: true, country: { $in: ['HR', 'SI'] } },
   excludeRuleIds: ['zone-b'],
 });
 
-// `query()` returns a chainable QueryResult: one evaluation, many output
-// views (ADR-0014). See "Outputs" for each terminal's exact type and meaning.
+// `query()` returns a chainable QueryResult. One evaluation, many views (see
+// "Outputs" for each terminal's exact type and meaning).
 result.mask();           // Uint8Array
-result.indices();        // Uint32Array
-result.invalidIndices(); // Uint32Array
 result.count();          // number
-result.summary();        // { matched, notMatched, invalid }
-result.toGeoJson();      // string (FeatureCollection)
 result.toOutcomesJson(); // string (per-candidate outcomes, lazy)
+// plus indices(), invalidIndices(), summary(), toGeoJson()
 
-// Atomic ruleset replacement + observability (ADR-0007): pass another
-// FeatureCollection of the same shape to swap the active ruleset.
+// Atomic ruleset replacement (ADR-0007): pass another FeatureCollection of the
+// same shape to swap the active ruleset.
 const report = JSON.parse(ruleset.replace(rules)); // { version, ruleCount, ... }
 console.log(ruleset.stats()); // same report shape for the current ruleset
 ```
 
-### Inputs
-
-| Method | Argument | Accepted JS types | Normalized to |
-|---|---|---|---|
-| `new SpatialRuleset(rules)` | rules | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
-| `ruleset.replace(rules)` | rules | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
-| `ruleset.query(candidates, query)` | candidates | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
-| `ruleset.query(candidates, query)` | query | `string` · `object` | `string` |
-| `ruleset.queryAsync(candidates, query)` | candidates | `Buffer` · `string` · `object` (GeoJSON) | `Buffer` |
-| `ruleset.queryAsync(candidates, query)` | query | `string` · `object` | `string` |
-| `ruleset.fromCanonical(rules)` | rules | `Buffer` (canonical JSON from `toCanonical()`) | — |
-
-Any other type throws a `TypeError` from the wrapper. A `Buffer` passes
-through untouched (byte-faithful); a `string`/`object` is serialized by the
-wrapper (value-faithful — properties preserved, formatting normalized).
-
-Rules and candidates are both GeoJSON `FeatureCollection`s:
-
-- **Rules** — Polygon/MultiPolygon only, with a unique `id` and typed
-  `properties`; geometries are OGC-validated once at build time.
-- **Candidates** — Polygon, MultiPolygon, Point, or MultiPoint; an invalid
-  candidate never fails the batch, it is reported per candidate (mask `2`).
+Rules must be Polygon or MultiPolygon, with a unique `id` and typed
+`properties`, and are OGC-validated once at build time. Candidates may also be
+Point or MultiPoint, and an invalid candidate never fails the batch: it is
+reported per candidate (mask `2`). A `Buffer` input passes through byte-faithful;
+a `string` or object is serialized value-faithfully by the wrapper. Any other
+type throws a `TypeError`.
 
 ### Query shape
 
@@ -259,27 +230,21 @@ The query is a JSON object (or its string form):
 }
 ```
 
-- `spatial.predicate` — one of `intersects`, `contains`, `within`, `covers`,
-  `covered_by`, `touches`, `overlaps` (DE-9IM; ADR-0008, ADR-0012), or
-  `withinDistance` (metric; ADR-0016). Required.
-- `spatial.distance` — the `withinDistance` radius in meters; required (a
-  finite positive number) when the predicate is `withinDistance`, rejected with
-  any other predicate. Optional.
-- `where` — a Mongo-style filter over rule `properties` (see below). Optional.
-- `excludeRuleIds` — rule ids excluded from the evaluation. Optional.
-- `includeOverlap` — when `true`, matched candidates in the outcomes path also
-  carry per-rule geodesic `overlapArea` (m²) / `overlapRatio` ([0, 1]). The
-  mask ignores this flag. Optional.
-- `at` — the reference time (ISO-8601, e.g. `2026-08-24T10:00`), required when
-  a `$activeAt` predicate is present; a present-but-unused `at` is validated and
-  ignored. Optional (ADR-0017).
-- `aggregate` — per-candidate analytics over the applicable rule set
-  (ADR-0018): `count`/`coverage` are booleans, `min`/`max`/`sum`/`avg` each
-  name a rule-property field (`{ count: true, min: "speedLimit", coverage: true }`).
-  `min`/`max`/`sum`/`avg` fold the named numeric property across applicable
-  rules (missing/non-numeric rules skipped; absent if nothing contributes);
-  `coverage` is the geodesic fraction of the candidate covered by the union of
-  applicable rules. Computed on the rich path only. Optional.
+- `spatial.predicate` (required): one of `intersects`, `contains`, `within`,
+  `covers`, `covered_by`, `touches`, `overlaps` (DE-9IM), or `withinDistance`
+  (metric, ADR-0016).
+- `spatial.distance`: the `withinDistance` radius in meters; required (finite,
+  positive) for `withinDistance`, rejected with any other predicate.
+- `where`: a Mongo-style filter over rule `properties` (see below).
+- `excludeRuleIds`: rule ids excluded from the evaluation.
+- `includeOverlap`: outcomes path only; matched candidates also carry geodesic
+  `overlapArea` (m²) / `overlapRatio` ([0, 1]). The mask ignores it.
+- `at`: the ISO-8601 reference time (e.g. `2026-08-24T10:00`), required when a
+  `$activeAt` predicate is present (ADR-0017).
+- `aggregate`: per-candidate analytics over the applicable set (ADR-0018).
+  `count`/`coverage` are booleans; `min`/`max`/`sum`/`avg` name a numeric rule
+  property, and rules with a missing or non-numeric value are skipped. Rich path
+  only.
 
 `where` operators:
 
@@ -293,13 +258,13 @@ The query is a JSON object (or its string form):
 | `$and`, `$or`, `$nor` | boolean composition (`$nor` = whole-clause negation) |
 | `$activeAt: { daysOfWeek, startHour, endHour }` | admits a rule whose window properties (Int bitmask Mon=1..Sun=64; Int hours) contain the query's `at`; requires `at` (ADR-0017) |
 
-A missing property or a type mismatch is a **non-match** (even for `$ne`); only
+A missing property or a type mismatch is a non-match, even for `$ne`; only
 malformed predicates throw.
 
 ### Outputs
 
-`query()` returns a `QueryResult` (ADR-0014). Every view is aligned to the
-input candidate order.
+`query()` returns a `QueryResult` (ADR-0014). Every view is aligned to the input
+candidate order.
 
 | Method | Returns | Meaning |
 |---|---|---|
@@ -309,7 +274,7 @@ input candidate order.
 | `count()` | `number` | number of matched candidates |
 | `summary()` | `{ matched, notMatched, invalid }` | count breakdown |
 | `toGeoJson()` | `string` | matched candidates as a FeatureCollection; original properties preserved (unmatched and invalid are dropped) |
-| `toOutcomesJson()` | `string` | per-candidate outcomes as a JSON array (lazy — one native call on first use) |
+| `toOutcomesJson()` | `string` | per-candidate outcomes as a JSON array (lazy, one native call on first use) |
 
 `toOutcomesJson()` element shapes:
 
@@ -320,10 +285,9 @@ input candidate order.
 { "outcome": "invalid", "reason": "..." }
 ```
 
-`overlaps` appears only when the query set `includeOverlap: true`.
-
-When the query sets `aggregate`, matched candidates also carry an `aggregate`
-object (absent for `notMatched`/`invalid`):
+`overlaps` appears only when the query set `includeOverlap: true`. When the query
+sets `aggregate`, matched candidates also carry an `aggregate` object (absent for
+`notMatched`/`invalid`):
 
 ```jsonc
 { "outcome": "matched", "ruleIds": ["zone-a"],
@@ -332,7 +296,7 @@ object (absent for `notMatched`/`invalid`):
 
 ### Resolution (ADR-0015)
 
-`resolve()` / `resolveAsync()` answer "which rule wins, what values apply, and
+`resolve()` and `resolveAsync()` answer "which rule wins, what values apply, and
 why" for each candidate. Both return a chainable `ResolutionResult`:
 
 | Method | Returns | Meaning |
@@ -340,7 +304,7 @@ why" for each candidate. Both return a chainable `ResolutionResult`:
 | `mask()` | `Uint8Array` | one byte per candidate: `0` no resolution, `1` resolved, `2` invalid |
 | `count()` | `number` | number of resolved candidates |
 | `summary()` | `{ resolved, notResolved, invalid }` | count breakdown |
-| `toJson()` | `string` | per-candidate resolution outcomes (lazy — one native call on first use) |
+| `toJson()` | `string` | per-candidate resolution outcomes (lazy, one native call on first use) |
 
 `toJson()` element shapes:
 
@@ -353,9 +317,8 @@ why" for each candidate. Both return a chainable `ResolutionResult`:
 ```
 
 The query shape is the same as `query()` (`spatial`/`where`/`excludeRuleIds`,
-plus `at`/`distance` as above); `resolveAsync()` computes off the main thread.
-
-Other methods:
+plus `at`/`distance` as above), and `resolveAsync()` computes off the main
+thread. Other methods:
 
 | Method | Returns | Meaning |
 |---|---|---|
@@ -365,7 +328,7 @@ Other methods:
 | `replace(rules)` | `string` | JSON report `{ version, ruleCount, buildDurationMs, lastSwapTime }` |
 | `stats()` | `string` | the same report for the current ruleset |
 | `toCanonical()` | `string` | the ruleset in canonical JSON form (array of rules) |
-| `fromCanonical(rules)` | `string` | replace from canonical JSON; returns a report (a failed load keeps the old ruleset) |
+| `replaceFromCanonical(rules)` | `string` | replace from canonical JSON; returns a report (a failed load keeps the old ruleset) |
 
 ### Error codes
 
@@ -383,32 +346,20 @@ Construction and query errors throw a `SpatialRulesError` with a stable `.code`:
 | `SR_UNSUPPORTED_PROPERTY_OPERATOR` | operator outside the Mongo subset |
 | `SR_NATIVE` | unexpected native/runtime failure |
 
-Invalid *candidates* never fail the batch — they produce a `2` in the mask /
-an `invalid` outcome with a reason.
-
-## Requirements
-
-- Node/Bun (`spatial-rules`): Node.js **>= 18** (Bun also supported via the
-  same prebuilt binaries).
-- Deno/browser/edge (`spatial-rules-wasm`): any runtime with wasm ESM support.
-- Python (`spatial-rules`): CPython **3.9–3.13** (abi3 wheel).
+Invalid *candidates* never fail the batch; they produce a `2` in the mask or an
+`invalid` outcome with a reason.
 
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-## Contributing
+## Contributing & releasing
 
-See [CONTRIBUTING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/CONTRIBUTING.md)
-for how to report issues and submit changes, and
-[DEVELOPMENT.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/DEVELOPMENT.md)
-for building and testing locally.
-
-## Releasing
-
-See [RELEASING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/RELEASING.md)
-for the release process (release-please →
-prebuilt platform binaries → npm publish).
+[CONTRIBUTING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/CONTRIBUTING.md)
+covers issues and changes, [DEVELOPMENT.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/DEVELOPMENT.md)
+covers building and testing locally, and
+[RELEASING.md](https://github.com/sebastian-schuler/spatial-rules/blob/main/RELEASING.md)
+covers the release process.
 
 ## License
 

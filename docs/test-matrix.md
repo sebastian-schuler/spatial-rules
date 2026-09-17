@@ -11,13 +11,13 @@ below is unchanged; only the duplication moved into that module.
 
 | Area | Test file | What it owns |
 | ---- | --------- | ------------ |
-| Where operators (`$eq/$ne/$gt/$gte/$lt/$lte/$in/$nin/$exists/$not`, `$and`/`$or`) | `core/tests/query.rs`, `core/src/where_expr.rs` (unit) | parse + eval semantics, missing/type-mismatch = non-match, indexability |
-| Spatial predicates (`intersects/contains/within/covers/covered_by/touches/overlaps`) | `core/tests/query.rs`, `core/src/ruleset.rs` (unit) | directional DE-9IM semantics, boundary-touch cases |
+| Where operators (`$eq/$ne/$gt/$gte/$lt/$lte/$in/$nin/$exists/$not`, `$and`/`$or`) | `core/tests/query.rs`, `core/src/model/where_expr.rs` (unit) | parse + eval semantics, missing/type-mismatch = non-match, indexability |
+| Spatial predicates (`intersects/contains/within/covers/covered_by/touches/overlaps`) | `core/tests/query.rs`, `core/src/runtime/ruleset.rs` (unit) | directional DE-9IM semantics, boundary-touch cases |
 | Overlap area/ratio (`includeOverlap`) | `core/tests/query.rs` | geodesic metrics, ratio bounds, mask invariance, alignment |
-| Ruleset build/validation | `core/tests/ruleset.rs`, `core/src/validation.rs` (unit) | ids, envelopes, spatial index, property index, invalid geometry |
-| Canonical persistence | `core/tests/ruleset.rs`, `core/tests/engine.rs`, `core/src/ruleset.rs` (unit) | round-trip, fresh id, failed load keeps old ruleset |
+| Ruleset build/validation | `core/tests/ruleset.rs`, `core/src/model/validation.rs` (unit) | ids, envelopes, spatial index, property index, invalid geometry |
+| Canonical persistence | `core/tests/ruleset.rs`, `core/tests/engine.rs`, `core/src/runtime/ruleset.rs` (unit) | round-trip, fresh id, failed load keeps old ruleset |
 | Engine replacement/concurrency | `core/tests/engine.rs` | atomic swap, snapshot semantics, cache invalidation |
-| Ingestion | `core/src/ingestion.rs` (unit), `core/tests/edge_matrix.rs` | feature→rule/candidate, id extraction, malformed input |
+| Ingestion | `core/src/runtime/ingestion.rs` (unit), `core/tests/edge_matrix.rs` | feature→rule/candidate, id extraction, malformed input |
 | Error model | `core/src/error.rs` (unit), `core/tests/error_matrix.rs` | every `SR_*` code reachable by a documented input |
 | Edge/input matrix | `core/tests/edge_matrix.rs` | empty, missing id, BOM, NaN/Infinity, antimeridian, unsupported types, skipped property types |
 | Property invariants | `core/tests/proptest.rs` | DE-9IM identities, `WhereExpr` eval totality, batch alignment on random inputs |

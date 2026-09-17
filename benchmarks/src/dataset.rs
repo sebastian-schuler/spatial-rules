@@ -8,10 +8,10 @@
 //! real Natural Earth data; real open data can be dropped in without changing
 //! the harness.
 
-use std::collections::BTreeMap;
-
 use geo::{Coord, Geometry, LineString, MultiPolygon, Point, Polygon};
-use spatial_rules_core::{Candidate, CandidateClass, PropertyValue, Rule, TemporalInstant, WhereExpr};
+use spatial_rules_core::{
+    Candidate, CandidateClass, Properties, PropertyValue, Rule, TemporalInstant, WhereExpr,
+};
 
 pub const RULE_COUNT: usize = 30;
 pub const CANDIDATE_COUNT: usize = 1000;
@@ -123,7 +123,7 @@ pub fn rules() -> Vec<Rule> {
             polygons.push(Polygon::new(exterior, holes));
         }
 
-        let mut properties = BTreeMap::new();
+        let mut properties = Properties::default();
         properties.insert("active".to_string(), PropertyValue::Bool(index % 2 == 0));
         properties.insert(
             "priority".to_string(),
@@ -266,7 +266,7 @@ pub fn rules_geojson() -> String {
             let properties: serde_json::Map<String, serde_json::Value> = rule
                 .properties
                 .iter()
-                .map(|(key, value)| (key.clone(), property_value_to_json(value)))
+                .map(|(key, value)| (key.to_string(), property_value_to_json(value)))
                 .collect();
             serde_json::json!({
                 "type": "Feature",
@@ -292,7 +292,7 @@ pub fn candidates_geojson() -> String {
                 "type": "Feature",
                 "id": candidate.id,
                 "properties": {},
-                "geometry": geometry_to_geojson(&candidate.geometry),
+                "geometry": geometry_to_geojson(candidate.geometry()),
             })
         })
         .collect();
@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(points.len(), CANDIDATE_COUNT);
         for (point, candidate) in points.iter().zip(&candidates) {
             assert!(
-                matches!(point.geometry, Geometry::Point(_)),
+                matches!(point.geometry(), Geometry::Point(_)),
                 "{} must be a point",
                 point.id
             );
@@ -379,7 +379,7 @@ mod tests {
                 (envelope.min().x + envelope.max().x) / 2.0,
                 (envelope.min().y + envelope.max().y) / 2.0,
             ));
-            assert_eq!(point.geometry, expected, "{}", point.id);
+            assert_eq!(point.geometry(), &expected, "{}", point.id);
         }
     }
 

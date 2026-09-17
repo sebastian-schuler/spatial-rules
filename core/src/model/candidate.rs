@@ -25,7 +25,9 @@ pub struct Candidate {
     /// Application-supplied identifier (feature `id`).
     pub id: String,
     /// The candidate geometry (Polygon, MultiPolygon, Point, or MultiPoint).
-    pub geometry: Geometry<f64>,
+    /// Private so the caching `class` below can never describe a different
+    /// geometry: the field is write-once at [`Candidate::new`].
+    geometry: Geometry<f64>,
     /// The precomputed classification (envelope or invalid reason).
     class: CandidateClass,
 }
@@ -35,15 +37,26 @@ impl Candidate {
     /// geometry, or record the reason it is invalid. Never fails — an invalid
     /// candidate is stored as such and reported per query (ADR-0005).
     pub fn new(id: String, geometry: Geometry<f64>) -> Self {
-        let class = match crate::validation::classify_candidate(&geometry) {
+        let class = match crate::model::validation::classify_candidate(&geometry) {
             Ok(envelope) => CandidateClass::Valid { envelope },
-            Err(reason) => CandidateClass::Invalid { reason },
+            Err(error) => CandidateClass::Invalid {
+                reason: error.message,
+            },
         };
         Candidate {
             id,
             geometry,
             class,
         }
+    }
+
+    /// The candidate geometry (Polygon, MultiPolygon, Point, or MultiPoint).
+    ///
+    /// Read-only by construction: mutating the geometry after [`Candidate::new`]
+    /// would orphan the cached `class` (envelope or invalid reason), so the
+    /// field is private and exposed through this accessor.
+    pub fn geometry(&self) -> &Geometry<f64> {
+        &self.geometry
     }
 
     /// The precomputed classification (envelope for valid candidates, invalid
@@ -56,9 +69,9 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::{Query, SpatialPredicate};
-    use crate::rule::Rule;
-    use crate::ruleset::Ruleset;
+    use crate::model::query::{Query, SpatialPredicate};
+    use crate::model::rule::Rule;
+    use crate::runtime::ruleset::Ruleset;
     use geo::{LineString, Polygon};
 
     #[test]

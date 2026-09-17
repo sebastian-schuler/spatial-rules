@@ -3,12 +3,12 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::aggregate::AggregateSpec;
+use crate::model::aggregate::{Aggregate, AggregateSpec};
 use crate::error::SpatialError;
-use crate::properties::PropertyValue;
-use crate::rule::RuleId;
-use crate::temporal::TemporalInstant;
-use crate::where_expr::WhereExpr;
+use crate::model::properties::PropertyValue;
+use crate::model::rule::RuleId;
+use crate::model::temporal::TemporalInstant;
+use crate::model::where_expr::WhereExpr;
 
 /// A spatial predicate between a candidate and a rule (ADR-0008, ADR-0012).
 ///
@@ -132,6 +132,46 @@ impl Query {
         self
     }
 
+    /// Validate the invariants the JSON shape enforces so a programmatic
+    /// [`Query`] built with the public builders cannot silently misbehave
+    /// (the same rules [`Query::from_json`] applies):
+    ///
+    /// - `distance_meters` is `Some` (finite, positive, and only ever for
+    ///   `WithinDistance`).
+    /// - `at` is present whenever the `where` clause uses `$activeAt`.
+    ///
+    /// Returns the human-readable reason a malformed query would be rejected
+    /// with, or `None` when the query is well-formed. Evaluation consumes this
+    /// seam so a programmatic violation surfaces as a per-candidate
+    /// [`CandidateOutcome::Invalid`] (or [`ResolutionOutcome::Invalid`]) rather
+    /// than an unexplained non-match.
+    pub fn validate(&self) -> Option<&'static str> {
+        let distance_reason: Option<&'static str> = match self.spatial {
+            SpatialPredicate::WithinDistance => {
+                if self.distance_meters.is_some_and(|d| d.is_finite() && d > 0.0) {
+                    None
+                } else {
+                    Some("withinDistance requires a positive distance")
+                }
+            }
+            _ => {
+                if self.distance_meters.is_some() {
+                    Some("distance is only valid with the 'withinDistance' predicate")
+                } else {
+                    None
+                }
+            }
+        };
+        distance_reason.or_else(|| {
+            if self.at.is_none() && self.where_clause.as_ref().is_some_and(WhereExpr::has_active_at) {
+                Some("'at' is required when a '$activeAt' predicate is present")
+            } else {
+                None
+            }
+        })
+        .or_else(|| self.aggregate.as_ref().and_then(AggregateSpec::validate))
+    }
+
     /// Parse the JSON query shape (Initial-plan §22):
     /// `{ "spatial": { "predicate": "..." }, "where": {...}, "excludeRuleIds": [...], "includeOverlap": true, "at": "YYYY-MM-DDTHH:MM" }`.
     /// For `withinDistance` the `spatial` object also carries `"distance"` in
@@ -190,8 +230,7 @@ impl Query {
                 let text = value.as_str().ok_or_else(|| {
                     SpatialError::invalid_query("'at' must be an ISO-8601 string")
                 })?;
-                let instant = TemporalInstant::parse_iso8601(text)
-                    .map_err(|e| SpatialError::invalid_query(format!("invalid 'at': {e}")))?;
+                let instant = TemporalInstant::parse_iso8601(text)?;
                 Some(instant)
             }
         };
@@ -255,11 +294,15 @@ pub struct OverlapMetric {
 ///
 /// `Matched.overlaps` is `Some(per-rule metrics, aligned to `rule_ids`)` only
 /// when the query requested `includeOverlap`; otherwise `None` (ADR-0012).
+/// `Matched.aggregate` is `Some` only when the query requested an
+/// [`AggregateSpec`] (ADR-0018); the analytics are computed over the matched
+/// rule set — the same set resolution calls applicable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CandidateOutcome {
     Matched {
         rule_ids: Vec<RuleId>,
         overlaps: Option<Vec<OverlapMetric>>,
+        aggregate: Option<Aggregate>,
     },
     NotMatched,
     Invalid { reason: String },
@@ -288,14 +331,71 @@ pub struct ApplicableRule {
 /// `Resolved.winner` is the head of the priority-descending applicable order;
 /// `values` is the first-provider-wins merge of the applicable rules'
 /// properties down that order (a field no applicable rule defines is absent);
-/// `applicable` is the ordered set, which is the explanation.
+/// `applicable` is the ordered set, which is the explanation; `aggregate` is
+/// the requested analytics over that set (ADR-0018), `None` when not asked.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolutionOutcome {
     Resolved {
         winner: RuleId,
         values: BTreeMap<String, PropertyValue>,
         applicable: Vec<ApplicableRule>,
+        aggregate: Option<Aggregate>,
     },
     NotMatched,
     Invalid { reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::where_expr::WhereExpr;
+
+    #[test]
+    fn well_formed_programmatic_query_has_no_reason() {
+        let query = Query::new(SpatialPredicate::WithinDistance).with_distance(200.0);
+        assert_eq!(query.validate(), None);
+
+        let query = Query::new(SpatialPredicate::Intersects);
+        assert_eq!(query.validate(), None);
+    }
+
+    #[test]
+    fn distance_on_non_within_predicate_is_rejected() {
+        let query = Query::new(SpatialPredicate::Intersects).with_distance(200.0);
+        assert!(query
+            .validate()
+            .is_some_and(|r| r.contains("only valid with the 'withinDistance'")));
+    }
+
+    #[test]
+    fn within_distance_requires_a_positive_finite_radius() {
+        for missing in [None, Some(f64::NAN), Some(f64::INFINITY), Some(0.0), Some(-1.0)] {
+            let mut query = Query::new(SpatialPredicate::WithinDistance);
+            if let Some(d) = missing {
+                query = query.with_distance(d);
+            }
+            assert!(query
+                .validate()
+                .is_some_and(|r| r.contains("positive distance")));
+        }
+    }
+
+    #[test]
+    fn active_at_requires_a_reference_time() {
+        let where_clause = WhereExpr::parse(&serde_json::json!({
+            "$activeAt": {
+                "daysOfWeek": "d",
+                "startHour": "s",
+                "endHour": "e"
+            }
+        }))
+        .unwrap();
+        let query = Query::new(SpatialPredicate::Intersects).with_where(where_clause);
+        assert!(query
+            .validate()
+            .is_some_and(|r| r.contains("'at' is required")));
+
+        let with_at = query.with_at(TemporalInstant::parse_iso8601("2024-01-01T00:00").unwrap());
+        assert_eq!(with_at.validate(), None);
+    }
 }

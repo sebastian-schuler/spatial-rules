@@ -7,11 +7,10 @@
 //! non-match (even for `$ne`); only malformed predicates error.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 
 use crate::error::SpatialError;
-use crate::properties::PropertyValue;
-use crate::temporal::TemporalInstant;
+use crate::model::properties::{Properties, PropertyValue};
+use crate::model::temporal::TemporalInstant;
 
 /// A boolean property predicate tree.
 #[derive(Debug, Clone, PartialEq)]
@@ -120,7 +119,7 @@ impl WhereExpr {
     /// for temporal predicates (ADR-0017); it is `None` only when the query
     /// carries none, in which case any `$activeAt` clause is a non-match (the
     /// query validator prevents this combination).
-    pub fn eval(&self, properties: &BTreeMap<String, PropertyValue>, at: Option<TemporalInstant>) -> bool {
+    pub fn eval(&self, properties: &Properties, at: Option<TemporalInstant>) -> bool {
         match self {
             WhereExpr::And(exprs) => exprs.iter().all(|expr| expr.eval(properties, at)),
             WhereExpr::Or(exprs) => exprs.iter().any(|expr| expr.eval(properties, at)),
@@ -132,7 +131,7 @@ impl WhereExpr {
 }
 
 impl FieldPredicate {
-    fn eval(&self, properties: &BTreeMap<String, PropertyValue>) -> bool {
+    fn eval(&self, properties: &Properties) -> bool {
         match &self.op {
             FieldOp::Eq(expected) => properties.get(&self.field) == Some(expected),
             FieldOp::Ne(expected) => match properties.get(&self.field) {
@@ -143,13 +142,11 @@ impl FieldPredicate {
             },
             FieldOp::Gt(expected) => compares(properties, &self.field, expected, Ordering::Greater),
             FieldOp::Gte(expected) => {
-                compares(properties, &self.field, expected, Ordering::Greater)
-                    || compares(properties, &self.field, expected, Ordering::Equal)
+                compares_inclusive(properties, &self.field, expected, Ordering::Greater)
             }
             FieldOp::Lt(expected) => compares(properties, &self.field, expected, Ordering::Less),
             FieldOp::Lte(expected) => {
-                compares(properties, &self.field, expected, Ordering::Less)
-                    || compares(properties, &self.field, expected, Ordering::Equal)
+                compares_inclusive(properties, &self.field, expected, Ordering::Less)
             }
             FieldOp::In(values) => match properties.get(&self.field) {
                 Some(actual) => values.iter().any(|value| actual == value),
@@ -193,7 +190,7 @@ impl FieldPredicate {
 /// Whether `properties[field]` compares to `expected` with `ordering`
 /// (numeric comparison only; a non-numeric side is a non-match).
 fn compares(
-    properties: &BTreeMap<String, PropertyValue>,
+    properties: &Properties,
     field: &str,
     expected: &PropertyValue,
     ordering: Ordering,
@@ -202,6 +199,22 @@ fn compares(
         .get(field)
         .and_then(|actual| compare_numbers(actual, expected))
         .is_some_and(|found| found == ordering)
+}
+
+/// Inclusive comparison (`>=`/`<=`): resolve the actual-vs-expected ordering
+/// once, then admit `Equal` or the strict `ordering`. Computing the ordering
+/// once avoids re-looking-up the field and re-converting the number for the
+/// equality half of `Gte`/`Lte`.
+fn compares_inclusive(
+    properties: &Properties,
+    field: &str,
+    expected: &PropertyValue,
+    ordering: Ordering,
+) -> bool {
+    properties
+        .get(field)
+        .and_then(|actual| compare_numbers(actual, expected))
+        .is_some_and(|found| found == ordering || found == Ordering::Equal)
 }
 
 /// Numeric comparison across `Int`/`Float`; `None` when either side is not
@@ -257,7 +270,7 @@ fn parse_active_at(value: &serde_json::Value) -> Result<ActiveAtClause, SpatialE
 /// admits; `startHour == endHour` is an empty window.
 fn eval_active_at(
     clause: &ActiveAtClause,
-    properties: &BTreeMap<String, PropertyValue>,
+    properties: &Properties,
     at: Option<TemporalInstant>,
 ) -> bool {
     let Some(at) = at else {
@@ -276,16 +289,17 @@ fn eval_active_at(
     let Some(end) = get_int(&clause.end_hour_field) else {
         return false;
     };
-    // The parse always yields a valid day (1..=7); guard anyway so a malformed
-    // programmatic `TemporalInstant` evaluates as a non-match, never underflowing
-    // the bit shift below (no-panic stance).
-    if !(1..=7).contains(&at.day_of_week) {
+    let day = at.day_of_week();
+    // The type enforces day 1..=7 at construction; guard anyway so a malformed
+    // value (were one ever constructible) evaluates as a non-match, never
+    // underflowing the bit shift below (no-panic stance).
+    if !(1..=7).contains(&day) {
         return false;
     }
-    if days & (1 << (at.day_of_week - 1)) == 0 {
+    if days & (1 << (day - 1)) == 0 {
         return false;
     }
-    let hour = at.hour as i64;
+    let hour = at.hour() as i64;
     if start <= end {
         start <= hour && hour < end
     } else {

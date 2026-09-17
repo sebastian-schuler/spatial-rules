@@ -34,8 +34,8 @@ identical everywhere; only the packaging and the set of Engine methods differ.
   observability is real, not degenerate.
 - Internally serializes to exactly the JSON the napi/wasm paths use, so
   semantics are identical across Node/wasm/Python. The rich-JSON serializers
-  live in a shared `spatial-rules-bindings-common` crate used by the wasm and
-  Python bindings (the node addon's copy stays inline, out of scope).
+  live in a shared `spatial-rules-bindings-common` crate used by all three
+  bindings (see the superseding note below).
 
 ## Build/CI and release
 
@@ -71,3 +71,10 @@ identical everywhere; only the packaging and the set of Engine methods differ.
 - Async/streaming wasm surfaces.
 - Any change to `spatial-rules-core` or the Node addon.
 - A headless-browser CI job.
+
+## Note — the node addon's inline serializers
+
+The original scoping kept node's rich-JSON serializers inline ("out of scope").
+**ADR-0020 supersedes that clause**: the rich-outcome wire contract now lives in
+`spatial-rules-bindings-common` and node consumes it, so all three bindings
+share one serializer rather than node carrying its own copy.

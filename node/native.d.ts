@@ -31,7 +31,7 @@ export declare class SpatialRuleset {
     /** Canonical (validated) ruleset serialization (ADR-0013). */
     toJSON(): string;
     /** Atomic replace from canonical JSON; observability report as JSON. */
-    fromCanonical(rules: Buffer): string;
+    replaceFromCanonical(rules: Buffer): string;
     /** Observability for the current ruleset as JSON. */
     stats(): string;
 }

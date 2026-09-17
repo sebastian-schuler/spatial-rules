@@ -1,37 +1,78 @@
 //! Query-supplied reference time for temporal predicates (ADR-0017).
 
+use crate::error::SpatialError;
+
 /// A point in time the engine can test rule windows against: the naive-local
 /// day-of-week (ISO 8601, 1 = Monday .. 7 = Sunday) and hour of day (0..=23).
 /// The engine has no wall clock; the query supplies this via its `at` member,
 /// so evaluation stays deterministic and pure.
+///
+/// The fields are private so the documented ranges (day `1..=7`, hour `0..=23`)
+/// are enforced at construction: `parse_iso8601` and [`TemporalInstant::new`]
+/// are the only ways to build a value, so a malformed programmatic instant
+/// cannot be constructed as structurally-valid but semantically impossible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemporalInstant {
     /// ISO 8601 day-of-week: 1 = Monday .. 7 = Sunday.
-    pub day_of_week: u8,
+    day_of_week: u8,
     /// Hour of day, 0..=23 (the v1 window granularity).
-    pub hour: u8,
+    hour: u8,
 }
 
 impl TemporalInstant {
+    /// Build a [`TemporalInstant`] from validated (day, hour) components.
+    ///
+    /// Returns `None` when `day_of_week` is outside `1..=7` or `hour` is
+    /// outside `0..=23`, so callers cannot construct an invalid invariant.
+    pub fn new(day_of_week: u8, hour: u8) -> Option<Self> {
+        if (1..=7).contains(&day_of_week) && hour <= 23 {
+            Some(TemporalInstant {
+                day_of_week,
+                hour,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// The ISO 8601 day-of-week (`1 = Monday .. 7 = Sunday`), always in range.
+    pub fn day_of_week(&self) -> u8 {
+        self.day_of_week
+    }
+
+    /// The hour of day (`0..=23`), always in range.
+    pub fn hour(&self) -> u8 {
+        self.hour
+    }
+
     /// Parse a naive ISO-8601 datetime (`YYYY-MM-DDTHH:MM` or with seconds)
     /// into the local day-of-week + hour. Timezone offsets (`Z`/`±HH:MM`) are
     /// rejected for v1 — windows are local-frame; offset handling is additive
-    /// (ADR-0017).
-    pub fn parse_iso8601(input: &str) -> Result<Self, String> {
+    /// (ADR-0017). Failures return a structured [`SpatialError`]
+    /// (`SR_INVALID_QUERY`), matching the other core parsers so a direct caller
+    /// receives stable error classification rather than a bare `String`.
+    pub fn parse_iso8601(input: &str) -> Result<Self, SpatialError> {
         let bytes = input.as_bytes();
         let with_seconds = bytes.len() == 19;
+        // All parse failures share the invalid-query code; the message carries
+        // the specific reason for a caller to surface.
+        let parse_error = |detail: String| SpatialError::invalid_query(detail);
         if bytes.len() != 16 && !with_seconds {
-            return Err(format!("expected 'YYYY-MM-DDTHH:MM' (optionally with seconds), got {input:?}"));
+            return Err(parse_error(format!(
+                "expected 'YYYY-MM-DDTHH:MM' (optionally with seconds), got {input:?}"
+            )));
         }
         if bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' || bytes[13] != b':' {
-            return Err(format!("expected 'YYYY-MM-DDTHH:MM', got {input:?}"));
+            return Err(parse_error(format!(
+                "expected 'YYYY-MM-DDTHH:MM', got {input:?}"
+            )));
         }
         let digits = |lo: usize, hi: usize| (lo..hi).all(|i| bytes[i].is_ascii_digit());
         if !digits(0, 4) || !digits(5, 7) || !digits(8, 10) || !digits(11, 13) || !digits(14, 16) {
-            return Err(format!("non-numeric field in {input:?}"));
+            return Err(parse_error(format!("non-numeric field in {input:?}")));
         }
         if with_seconds && (bytes[16] != b':' || !digits(17, 19)) {
-            return Err(format!("invalid seconds in {input:?}"));
+            return Err(parse_error(format!("invalid seconds in {input:?}")));
         }
         let field = |lo: usize, hi: usize| {
             bytes[lo..hi]
@@ -45,19 +86,19 @@ impl TemporalInstant {
         let minute = field(14, 16);
         let second = if with_seconds { field(17, 19) } else { 0 };
         if !(1..=12).contains(&month) {
-            return Err(format!("month out of range in {input:?}"));
+            return Err(parse_error(format!("month out of range in {input:?}")));
         }
         if !(1..=days_in_month(year, month)).contains(&day) {
-            return Err(format!("day out of range in {input:?}"));
+            return Err(parse_error(format!("day out of range in {input:?}")));
         }
         if hour > 23 {
-            return Err(format!("hour out of range in {input:?}"));
+            return Err(parse_error(format!("hour out of range in {input:?}")));
         }
         if minute > 59 {
-            return Err(format!("minute out of range in {input:?}"));
+            return Err(parse_error(format!("minute out of range in {input:?}")));
         }
         if second > 59 {
-            return Err(format!("second out of range in {input:?}"));
+            return Err(parse_error(format!("second out of range in {input:?}")));
         }
         Ok(TemporalInstant {
             day_of_week: iso_weekday(year, month, day),
@@ -109,32 +150,34 @@ mod tests {
         // 1970-01-01 was a Thursday (4); 2026-08-23 was a Sunday (7).
         assert_eq!(
             TemporalInstant::parse_iso8601("1970-01-01T00:00").unwrap(),
-            TemporalInstant {
-                day_of_week: 4,
-                hour: 0,
-            }
+            TemporalInstant::new(4, 0).unwrap()
         );
         assert_eq!(
             TemporalInstant::parse_iso8601("2026-08-23T14:30").unwrap(),
-            TemporalInstant {
-                day_of_week: 7,
-                hour: 14,
-            }
+            TemporalInstant::new(7, 14).unwrap()
         );
         // 2026-08-24 was a Monday (1).
-        assert_eq!(TemporalInstant::parse_iso8601("2026-08-24T09:00").unwrap().day_of_week, 1);
+        assert_eq!(
+            TemporalInstant::parse_iso8601("2026-08-24T09:00")
+                .unwrap()
+                .day_of_week(),
+            1
+        );
     }
 
     #[test]
     fn seconds_are_accepted_and_ignored() {
         let instant = TemporalInstant::parse_iso8601("2026-08-23T14:30:45").unwrap();
-        assert_eq!(
-            instant,
-            TemporalInstant {
-                day_of_week: 7,
-                hour: 14,
-            }
-        );
+        assert_eq!(instant, TemporalInstant::new(7, 14).unwrap());
+    }
+
+    #[test]
+    fn new_rejects_out_of_range_components() {
+        for (day, hour) in [(0, 5), (8, 5), (3, 24), (3, 255)] {
+            assert_eq!(TemporalInstant::new(day, hour), None, "{day}:{hour}");
+        }
+        assert_eq!(TemporalInstant::new(1, 0), Some(TemporalInstant::new(1, 0).unwrap()));
+        assert_eq!(TemporalInstant::new(7, 23), Some(TemporalInstant::new(7, 23).unwrap()));
     }
 
     #[test]
@@ -161,5 +204,12 @@ mod tests {
         ] {
             assert!(TemporalInstant::parse_iso8601(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn parse_failures_carry_the_invalid_query_code() {
+        let error = TemporalInstant::parse_iso8601("not-a-date").unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::InvalidQuery);
+        assert!(error.message.contains("not-a-date"));
     }
 }

@@ -1,0 +1,137 @@
+//! Equality index over rule properties, built at compile time (ADR-0003).
+//!
+//! `$in` is served by repeated equality lookups; range predicates are not
+//! indexed and are scanned by the query engine. The indexability decision
+//! lives in `where_expr` ([`IndexQuery`]); this module only implements the
+//! lookup behind the [`PropertyIndex`] seam.
+
+use std::collections::{BTreeMap, HashSet};
+
+use crate::model::properties::PropertyValue;
+use crate::model::rule::{Rule, RuleId};
+use crate::model::where_expr::{FieldPredicate, IndexQuery, WhereExpr};
+
+/// Answers property lookups from a compiled index (ADR-0003). A seam so the
+/// index can be swapped (e.g. a future range index); one adapter today,
+/// [`EqualityIndex`].
+pub trait PropertyIndex: Send + Sync {
+    /// The set of rule ids that can satisfy `where_clause` using only indexed
+    /// lookups, or `None` when the clause needs per-rule evaluation.
+    fn indexable_matches(&self, where_clause: &WhereExpr) -> Option<HashSet<RuleId>>;
+}
+
+/// Compile-time equality index: property name → (value → rule positions).
+///
+/// Buckets store `u32` **positions**, not [`RuleId`]s: a `RuleId` carries the
+/// `owner: u64` (16 B) that every id in one ruleset shares, so storing it per
+/// value would double the index for information the index already holds
+/// (`owner`). The owning ruleset's id is minted back at the lookup seam.
+#[derive(Debug, Default)]
+pub struct EqualityIndex {
+    owner: u64,
+    equality: BTreeMap<String, BTreeMap<PropertyValue, Vec<u32>>>,
+}
+
+impl EqualityIndex {
+    /// Build the equality index from rules, assigning ids by position (`0..n-1`)
+    /// bound to the owning ruleset `owner`.
+    pub fn build(rules: &[Rule], owner: u64) -> Self {
+        let mut equality: BTreeMap<String, BTreeMap<PropertyValue, Vec<u32>>> = BTreeMap::new();
+        for (index, rule) in rules.iter().enumerate() {
+            for (name, value) in &rule.properties {
+                // Avoid allocating a key String or cloning the value when the
+                // bucket already exists (perf-memory 04) — the build visits
+                // every rule × property.
+                let by_value = match equality.get_mut(name) {
+                    Some(by_value) => by_value,
+                    None => equality.entry(name.to_string()).or_default(),
+                };
+                match by_value.get_mut(value) {
+                    Some(ids) => ids.push(index as u32),
+                    None => {
+                        by_value.insert(value.clone(), vec![index as u32]);
+                    }
+                }
+            }
+        }
+        // `push` leaves each bucket at the next power of two; drop the slack so
+        // the index holds exactly one 4 B entry per matched (rule × property)
+        // (perf-memory 12).
+        for by_value in equality.values_mut() {
+            for ids in by_value.values_mut() {
+                ids.shrink_to_fit();
+            }
+        }
+        EqualityIndex { owner, equality }
+    }
+
+    /// The owner every position in this index mints its [`RuleId`] from — the
+    /// ruleset id it was built for.
+    #[inline]
+    fn rule_id(&self, index: u32) -> RuleId {
+        RuleId::new(index, self.owner)
+    }
+
+    /// Rule positions whose `name` property equals `value` (empty when none).
+    fn matching(&self, name: &str, value: &PropertyValue) -> &[u32] {
+        self.equality
+            .get(name)
+            .and_then(|values| values.get(value))
+            .map(|ids| ids.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Rule ids whose `name` property equals any of `values` — the `$in`
+    /// operator. Union, sorted ascending, deduplicated.
+    fn matching_in(&self, name: &str, values: &[PropertyValue]) -> Vec<RuleId> {
+        let mut indices: Vec<u32> = Vec::new();
+        for value in values {
+            indices.extend_from_slice(self.matching(name, value));
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+            .into_iter()
+            .map(|index| self.rule_id(index))
+            .collect()
+    }
+
+    fn predicate_matches(&self, predicate: &FieldPredicate) -> Option<HashSet<RuleId>> {
+        match predicate.index_query()? {
+            IndexQuery::Eq { field, value } => Some(
+                self.matching(field, value)
+                    .iter()
+                    .map(|&index| self.rule_id(index))
+                    .collect(),
+            ),
+            IndexQuery::In { field, values } => {
+                Some(self.matching_in(field, values).into_iter().collect())
+            }
+        }
+    }
+}
+
+impl PropertyIndex for EqualityIndex {
+    fn indexable_matches(&self, where_clause: &WhereExpr) -> Option<HashSet<RuleId>> {
+        match where_clause {
+            WhereExpr::Predicate(predicate) => self.predicate_matches(predicate),
+            WhereExpr::And(exprs) => {
+                if exprs.is_empty() {
+                    return None;
+                }
+                let mut result: Option<HashSet<RuleId>> = None;
+                for expr in exprs {
+                    let set = self.indexable_matches(expr)?;
+                    result = Some(match result {
+                        None => set,
+                        Some(acc) => acc.intersection(&set).copied().collect(),
+                    });
+                }
+                result
+            }
+            WhereExpr::Or(_) => None,
+            WhereExpr::Nor(_) => None,
+            WhereExpr::ActiveAt(_) => None,
+        }
+    }
+}

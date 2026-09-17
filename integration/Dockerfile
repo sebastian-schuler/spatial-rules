@@ -10,7 +10,7 @@ WORKDIR /app
 COPY . .
 RUN cargo build --release -p spatial-rules-node
 
-FROM oven/bun:1.3.14
+FROM oven/bun:1.4.2
 WORKDIR /app
 COPY --from=build /app/target/release/libspatial_rules_node.so /app/node/spatial_rules.node
 COPY node/index.ts /app/node/index.ts

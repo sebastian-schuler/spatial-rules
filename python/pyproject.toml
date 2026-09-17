@@ -11,3 +11,6 @@ license = "MIT OR Apache-2.0"
 
 [tool.maturin]
 module-name = "spatial_rules"
+
+[project.optional-dependencies]
+dev = ["shapely>=2.0", "numpy"]

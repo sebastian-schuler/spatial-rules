@@ -68,6 +68,7 @@ it (architecture-hardening 04):
 | `batch_within_distance/*` | P2 `withinDistance` geofencing vs the point-mask baseline |
 | `batch_temporal/*` | P2 `$activeAt` window scan vs the no-where mask |
 | `batch_aggregation/*` | aggregation (count/numeric/coverage) vs the mask + rich baselines |
+| `batch_rich_json/*` | rich wire serialization (`query_rich_json`/`resolve_rich_json`) — perf-memory 07 |
 
 The two levers are isolated: bbox/index filter = B→C→D; prepared geometries =
 B→E (and D→F with the index held constant).
@@ -117,6 +118,19 @@ index on top (F) adds nothing (E ≈ F). Previous ladder tables conflated the tw
 because the C/D rungs ran the full engine (bbox **and** prepared); the rungs
 above isolate one variable each (architecture-hardening 04).
 
+**Amendment (2026-09-16, perf-memory 01, Windows).** The release profile now
+sets `lto = "thin"`, `codegen-units = 1` workspace-wide, and `build_30_rules`
+no longer times its per-iteration rule clone (`iter_batched`, required because
+`Ruleset::build` consumes its input). A **controlled** re-measurement — `bun run
+bench samples` runs the bench 5× and reports the median with the run-to-run
+spread, so a delta is judged against the noise floor — gives **F 10.9 ms with
+LTO vs 12.2 ms without (+12.2%, noise ±4.7%)**. So thin LTO is a real ~12% win
+on the prepared hot path. A single criterion run cannot see this: it reported a
+spurious "regression" here against a stale `target/criterion` baseline from an
+unknown profile. Use `bun run bench samples --save= --compare=` for any
+timing-sensitive change; the absolute figures in the table above predate both
+the profile change and the harness.
+
 vs turf.js (`bun run bench perf`): turf 1 111 ms vs addon **18.5 ms = 60.0×** (both report
 481 matched candidates). The addon figure includes the Buffer→parse→mask
 round-trip.
@@ -140,6 +154,25 @@ read the **ratios** (each table vs its own baseline), not the absolute ms.
 | mask baseline | 14.7 ms | 1× |
 | resolve_mask (admission loop, no winner/values) | 15.1 ms | +3% |
 | resolve_full (gather + sort + winner + values) | 15.0 ms | +2% |
+
+**Amendment (2026-09-16, perf-memory 05, Windows).** The resolution and rich
+gather paths now admit `intersects` with geo's boolean predicate on the
+unprepared rules — no prepared memo, no 9-cell `IntersectionMatrix` — which is
+the same admission the mask fast path always used. A controlled same-session A/B
+(`bun run bench samples`, 5 runs each, with the prepared path restored
+temporarily) on `batch_resolve`:
+
+| bench | prepared relate | boolean intersects | delta | noise |
+|---|---|---|---|---|
+| `mask_baseline` (control) | 3.303 ms | 3.326 ms | +0.7% | ±3.0% |
+| `resolve_mask` | 10.805 ms | **4.576 ms** | **−57.6%** | ±7.5% |
+| `resolve_full` | 11.423 ms | **4.785 ms** | **−58.1%** | ±3.0% |
+
+So resolution got **~2.4× faster**; the unchanged mask path stayed within noise,
+which is the control. Post-05 `resolve_mask` sits ~1.4× the early-exit mask: the
+gather cannot early-exit, so it runs the full boolean scan per candidate. The
+"+3% / free" reading in the table above is **superseded** — it predates this
+change and was a quick noisy-box run; read the controlled numbers here.
 
 **`withinDistance`** (`batch_within_distance`, point candidates, radius 100 km):
 
@@ -192,6 +225,15 @@ read the **ratios** (each table vs its own baseline), not the absolute ms.
   country-scale multipolygons and measures the geodesic intersection per
   candidate. Coverage is the aggregation to budget for; the numeric/count path
   is free.
+- **The rich wire serialization streams.** `query().toOutcomesJson()` /
+  `resolve().toJson()` no longer build a `serde_json::Value` DOM — outcomes
+  serialize straight to text. Measured at 1,000 candidates (perf-memory 07;
+  `bun run bench samples --filter=batch_rich_json`, 5 runs, the DOM side restored
+  by `git stash` of `bindings-common/src/lib.rs`): `query_rich_json`
+  **167.76 → 34.84 µs (−79.2%**, noise ±15.5%) and `resolve_rich_json`
+  **471.90 → 82.75 µs (−82.5%**, noise ±8.3%). Sub-millisecond in absolute terms
+  at this shape — the rich path is opt-in and separate from the ~15 ms mask — but
+  a ~5× reduction, and now tracked by the new `batch_rich_json` group.
 
 ## Findings
 
@@ -201,7 +243,7 @@ read the **ratios** (each table vs its own baseline), not the absolute ms.
   but those rungs ran the full engine — bbox **and** prepared — conflating the
   two (architecture-hardening 04).
 - **Prepare cost is ~6.2 ms for 30 rules**, now paid once per thread per
-  ruleset: `PreparedGeometry` is `!Send` in geo 0.33, so owned prepared
+  ruleset: `PreparedGeometry` is `!Send + !Sync` in geo 0.33, so owned prepared
   geometries are cached in a `thread_local!` keyed by ruleset identity
   (ADR-0010) rather than rebuilt per query or stored in the shared
   `Arc<Ruleset>`.
@@ -263,13 +305,67 @@ query batches):
 are a small constant). \*\* resident right after the cold query — ruleset + the
 per-thread **lazy prepared-geometry memo** (ADR-0010) at the default 1,000
 candidates, which a serving process holds for the ruleset's lifetime. Because
-preparation is now lazy, this number is **workload-dependent**: it grows with
-the rules the candidates actually touch, not the whole ruleset. \*\*\*
+preparation is now lazy, the prepared geometries are **workload-dependent** —
+they grow with the rules the candidates actually touch, not the whole ruleset.
+(Before perf-memory 02 the slot *table* was dense, so this cell also paid
+~O(rules) even when nothing was prepared; it now stores boxed slots at ~8 B/rule.
+The 100k×10 margin measured ~26 MiB on 2026-08-23 and ~5 MiB after 02 on
+2026-09-16, Windows.) \*\*\*
 steady-state candidates/sec across the 20 timed batches (cold first batch
 excluded, ADR-0010 prepare is warmed).
 
+**Amendment (2026-09-16, perf-memory 02 + 03, Windows).** Two per-rule storage
+changes were re-recorded on the `100,000 × 10` cell: the prepared-geometry memo
+now stores boxed slots (~8 B/rule instead of a full `Option<PreparedGeometry>`
+per rule — ticket 02), and `Rule.properties` is a sorted
+`Box<[(Box<str>, PropertyValue)]>` instead of a `BTreeMap`, whose first insert
+allocated an 11-entry leaf (~600 B) per rule however few properties it held
+(ticket 03):
+
+| cell | ruleset steady | bytes/rule | after 1st query |
+|---|---|---|---|
+| `100,000 × 10` (2026-08-23) | 117.7 MiB | 1.24 kB | 143.3 MiB |
+| `100,000 × 10` (2026-09-16) | **78.7 MiB** | **0.83 kB** | **84.0 MiB** |
+
+The after-query margin is now ~5 MiB (was ~26 MiB): the fixed part is the
+~8 B/rule slot table and the rest scales with touched rules. The other cells in
+the 2026-08-23 grids predate these changes, so their `bytes/rule` is higher.
+perf-memory 04 (build/load allocations — property-index clone removal,
+`Box<str>` id map, single-parse canonical load) nudged this cell to
+**77.8 MiB / 0.82 kB**; its canonical-load and ingestion wins are not covered
+by this grid.
+
+**Amendment (2026-09-17, perf-memory 12, Windows + Linux/Bun 1.4.2).** Two more
+per-rule side tables were compacted (ticket 12): `EqualityIndex` now stores
+4-byte rule *positions* instead of 16-byte `RuleId`s (the `owner` is one per
+ruleset) and drops each bucket's capacity-doubling slack, and `Ruleset.ids` is a
+`Vec<u32>` of positions sorted by id instead of a `HashMap<Box<str>, RuleId>`
+that copied every id string. Re-recorded on the two 100k cells (Windows
+`100,000 × 10` three runs, spread ≤ 3 MiB / 3 ms; Linux in the Bun 1.4.2 bench
+image):
+
+| cell | ruleset steady | bytes/rule | after 1st query | build |
+|---|---|---|---|---|
+| Linux `100,000 × 10` (2026-08-23, pre-compaction) | 120.8 MiB | 1.24 kB | 144.7 MiB | 129 ms |
+| **Linux `100,000 × 10` (2026-09-17)** | **71.6 MiB** | **0.75 kB** | **71.8 MiB** | 100 ms |
+| Windows `100,000 × 10` (2026-09-17) | 67.3 MiB | 0.71 kB | 68.1 MiB | 97–100 ms |
+| Linux `100,000 × 100` (2026-08-23, pre-compaction) | 257.9 MiB | 2.64 kB | 282.0 MiB | 4.0 s |
+| **Linux `100,000 × 100` (2026-09-17)** | **208.8 MiB** | **2.19 kB** | **208.9 MiB** | 4.0 s |
+| Windows `100,000 × 100` (2026-09-17) | 209.6 MiB | 2.20 kB | 210.4 MiB | ~4.7 s |
+
+On the Linux deploy platform that is **120.8 → 71.6 MiB (−40.7%) / −490 B/rule**
+at 10-vertex rings and **257.9 → 208.8 MiB (−19.0%) / −450 B/rule** at
+100-vertex rings (cumulative for tickets 02–04 + 12; the Windows before/after
+isolates ticket 12 at −10.6 MiB / −111 B/rule and −50.6 MiB / −530 B/rule). The
+id lookup changes from a hash map to a binary search over the sorted table, which
+is only consulted for a query's exclusions — never per candidate — so the edit is
+on the build and query-planning paths only; the `intersects` mask fast path that
+sets this cell's steady-state throughput is untouched. The other cells in the
+table above predate this change.
+
 **Results — Linux (the deploy platform)** (release profile, linux-gnu, inside
-the pinned `oven/bun:1.3.14` container via the reproducible
+the then-pinned `oven/bun:1.3.14` container — the image now pins 1.4.2 — via the
+reproducible
 [`benchmarks/Dockerfile`](https://github.com/sebastian-schuler/spatial-rules/blob/development/benchmarks/Dockerfile)
 — "Reproducible Linux run" below; 2026-08-23; same grid/workload as Windows):
 
@@ -293,14 +389,14 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
 **Findings:**
 
 - **The ruleset sizes by rule count, not coordinate count.** The same 1M
-  vertices cost ~7× more resident as *rules* when spread across 100k tiny
-  10-vertex rules (124 MB/1M verts) than across 1k 1,000-vertex rules
-  (18 MB/1M). The steady ruleset footprint is dominated by **per-rule fixed
-  overhead** — envelope + R*-tree entry + property-key table, ~1.2–2 kB/rule —
+  vertices cost ~4× more resident as *rules* when spread across 100k tiny
+  10-vertex rules (72 MB/1M verts) than across 1k 1,000-vertex rules
+  (17 MB/1M). The steady ruleset footprint is dominated by **per-rule fixed
+  overhead** — envelope + R*-tree entry + property-key table, ~0.75–2.2 kB/rule —
   plus ~18 bytes per coordinate. So bytes/vertex *falls* as rings get complex
-  (196 → 35 → 18 B/vert at 10/100/1,000 verts) while bytes/rule grows only
-  1.2 → 18 kB. A national zoning ruleset therefore sizes almost purely by rule
-  count: ~1.2–2.7 kB/rule steady (118–260 MiB for 100k rules) — but that is
+  (199 → 33 → 18 B/vert at 10/100/1,000 verts) while bytes/rule grows only
+  0.75 → 17.7 kB. A national zoning ruleset therefore sizes almost purely by rule
+  count: ~0.75–2.2 kB/rule steady (72–209 MiB for 100k rules) — but that is
   the **data alone**, not what a serving process holds.
 - **Serving memory is now workload-dependent, not ruleset-sized: lazy
   prepared geometries (ADR-0010, memory-benchmark ticket 02).** Before this
@@ -311,14 +407,16 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
   100-vertex rings, and a whole-rule touch by any candidate paid it. Now the
   per-thread memo fills **lazily, per rule on first touch**: with the default
   1,000 candidates (which touch ~1,000 of the rules), serving after the first
-  query is ruleset + a small margin — **~145 MiB** at 100k×10 and **~282 MiB** at
+  query is ruleset + a small margin — **~72 MiB** at 100k×10 and **~209 MiB** at
   100k×100 instead of 359 MiB / 1.78 GiB — and the per-thread `queryAsync`
   duplication scales with touched rules too. Two caveats: (1) worst case is
   unchanged — a workload whose candidates touch every rule still prepares
   everything, so capacity planning still sizes to the ruleset + per-rule
-  prepared cost ceiling; (2) the per-thread *duplication* remains (the `Rc →
-  Arc` geo 0.34 deferral, post-v1 ticket 05). At the production 30-rule shape
-  the memo is small and the container's ~67 MB peak stands.
+  prepared cost ceiling; (2) the per-thread *duplication* remains — geo's
+  `PreparedGeometry` is `!Send + !Sync`, so it can be neither moved nor shared across
+  threads (ADR-0010). At the production 30-rule shape
+  the memo is small and the in-process ~67 MB peak stands; under sustained HTTP
+  load the serving peak is higher (see §HTTP serving memory).
 - **The first request no longer stalls on a prepare spike.** The cold batch
   (which used to prepare all 100k rules) drops from ~1.9 s to ~2 ms at 100k×100
   on Windows (~7 ms on Linux) — one-time prepare cost now lands only in the
@@ -352,8 +450,8 @@ dominates, leaner at 1k-vertex rings) and mostly 5–19% faster warm qps
     ruleset — the number to size a container for hot-reload at scale.
 - **queries/sec per GB of RAM** (the sizing metric) = steady-state
   candidates/sec ÷ resident footprint. On Linux against the *ruleset alone*
-  that is ~250 M cand/s/GB at 1k×1k (4.4 M ÷ 17 MiB) down to ~29 M cand/s/GB
-  at 100k×100; against the *serving* footprint (7.6 M ÷ 282 MiB ≈ 27 M/GB) it
+  that is ~130 M cand/s/GB at 1k×1k (2.1 M ÷ 17 MiB) down to ~70 M cand/s/GB
+  at 100k×100; against the *serving* footprint (14.4 M ÷ 209 MiB ≈ 70 M/GB) it
   is barely lower now that serving ≈ ruleset — per-rule fixed overhead, not
   the prepared memo, is the binding constraint at scale.
 - **Steady-state throughput is unchanged by the lazy switch.** Warmed batches
@@ -416,30 +514,43 @@ Windows (2026-08-23) was within a few MiB of every value:**
 
 \* serving = ruleset + per-thread lazy prepared-geometry memo (ADR-0010) after
 the first query at the default 1,000 candidates (touch ~1,000 of the rules) —
-workload-dependent, now close to the ruleset. Serving shows as 282 MiB in the
-memory-scale table (same-process, after 20 timed batches) and 279 MiB here
+workload-dependent, now close to the ruleset. Serving shows as ~210 MiB in the
+memory-scale table (same-process, after 20 timed batches) and ~210 MiB here
 (fresh child, after 1 batch): ~1% measurement variance.
 
+**Amendment (2026-09-17, perf-memory 12, Linux/Bun 1.4.2).** Two things moved
+the columns: the engine-side compaction (tickets 02–04 + 12) and a Bun
+1.3.14 → 1.4.2 bump, which shifts only the JS **turf** baseline. Re-measured in
+the bench image (`bun run bench memory-turf`, Linux, Bun 1.4.2):
+
+| rules × verts | engine ruleset | engine serving | turf baseline | turf / ruleset |
+|---|---|---|---|---|
+| 1,000 × 10 | 1.8 MiB | 1.9 MiB | 7.9 MiB | 4.4× |
+| 1,000 × 100 | 3.2 MiB | 3.2 MiB | 19.3 MiB | 6.0× |
+| 1,000 × 1,000 | 16.9 MiB | 16.9 MiB | 80.5 MiB | 4.8× |
+| 10,000 × 10 | 8.0 MiB | 8.1 MiB | 24.4 MiB | 3.1× |
+| 10,000 × 100 | 21.9 MiB | 21.9 MiB | 83.4 MiB | 3.8× |
+| 100,000 × 10 | 71.5 MiB | 71.7 MiB | 122.4 MiB | 1.7× |
+| 100,000 × 100 | 208.8 MiB | 208.9 MiB | 640.1 MiB | 3.1× |
+
 - **The engine's ruleset is the memory win.** At typical zoning shapes (100
-  and 1,000 vertices/ring) turf needs **~2.5–5×** the memory to *hold* the
-  same data: ~50–90 bytes per coordinate as pre-parsed JS vs ~18–27 B/coord
-  (+~1.2 kB/rule fixed) in the indexed ruleset. Turf never beats the ruleset
+  and 1,000 vertices/ring) turf needs **~3–6×** the memory to *hold* the
+  same data: ~50–90 bytes per coordinate as pre-parsed JS vs ~18 B/coord
+  (+~0.7–2.2 kB/rule fixed) in the indexed ruleset. Turf never beats the ruleset
   at any cell.
-- **The gap narrows for tiny rules.** At 10-vertex rings turf is only ~1–2×
+- **The gap narrows for tiny rules.** At 10-vertex rings turf is only ~1.7–4.4×
   the ruleset — per-rule index overhead dominates both sides when the geometry
-  itself is trivial (the engine's fixed ~1.2 kB/rule is real).
-- **The engine's serving footprint now beats turf everywhere except the
-  trivial-geometry corner.** With lazy per-rule preparation (memory-benchmark
-  ticket 02) serving is ruleset + a ~2–22 MiB margin at the default 1,000
-  candidates and **beats turf at every cell except 100k×10**, where the two are
-  within ~8% (engine serving 142 MiB vs turf 131 MiB): at 10-vertex rings
-  turf's low per-coordinate cost edges out the engine's per-rule fixed overhead
-  plus the touched-prepared slack. Everywhere else the engine wins, most
-  dramatically where turf used to: 100k×100 serving is **279 MiB vs turf's
-  634 MiB** (previously 1.78 GiB vs 640 MiB, turf ahead). Worst case is
+  itself is trivial (the engine's fixed ~0.7 kB/rule is real).
+- **The engine's serving footprint now beats turf everywhere.** With lazy
+  per-rule preparation (memory-benchmark ticket 02) serving is ruleset + a
+  small margin at the default 1,000 candidates and beats turf at every cell,
+  most dramatically at 100k×100 (209 MiB vs turf's 640 MiB; previously
+  1.78 GiB vs 640 MiB, turf ahead) and also at the trivial 100k×10 corner
+  (72 MiB vs 122 MiB; previously turf was ahead there). Worst case is
   unchanged: a touch-everything workload prepares everything and lands at the
   old ceiling (~ruleset + per-rule prepared cost), so the *duplication*
-  (per-thread copies) is still the geo 0.34 deferral (post-v1 ticket 05).
+  (per-thread copies) remains — geo's `PreparedGeometry` is not shareable across
+  threads (ADR-0010).
 
 Measured inside the `spatial-rules` Docker image (oven/bun:1.3.14 — pinned to
 CI's Bun version, architecture-hardening 06), 30 rules × 1,000 candidates.
@@ -456,42 +567,167 @@ conclusions stand:
 
 - **Peak resident ≈ 67 MB** on the production workload; replacement holds the
   query-phase footprint (old ruleset dropped by the atomic swap, both coexist
-  for only the ~18 ms build) — it adds no growth on top. `VmPeak` (~132 GB) is
-  Bun/JSC's virtual-address-space reservation, not resident memory.
+  for only the ~18 ms build) — it adds no growth on top.
 - **Bounded**: RSS does not climb across repeated replacements (first ≈ last),
   so there is no per-replacement leak.
 - **Works under a hard cap**: `docker run --memory=128m --memory-swap=128m`
   serves `/health`, `/query` (1,000 → 481 matched), and `/replace` (→ v2) at
   ~29 MiB actual cgroup usage (22.7% of the cap); `integration/smoke.mjs` green.
+  That is a light smoke run, not sustained load — the HTTP-serving peak is much
+  higher (see §HTTP serving memory below).
 - `VmPeak` (~132 GB) is Bun/JSC's virtual-address-space reservation, **not**
-  resident memory — ignore it when sizing container limits. The number that
-  matters for a K8s `limits.memory` is VmHWM (~67 MB), so a 128 MB limit leaves
-  comfortable headroom.
+  resident memory — ignore it when sizing container limits. These are
+  in-process figures: under sustained HTTP load the serving footprint is ~2.2×
+  higher, and the cgroup peak (not `VmHWM`) is the number to size limits off —
+  see §HTTP serving memory below.
 
-### Peak RSS under sustained load (architecture-hardening 09)
+### HTTP serving memory (architecture-hardening 09)
 
-Reproducible measurement method — the **load** harness (sustained HTTP
-concurrency), not the in-process memory harness above, run inside the pinned
-image:
+Everything above measures an **in-process hold**: it calls `query()` in a loop
+and never crosses a socket. A serving process also pays per-request memory —
+body buffering, the native parse/validate of each candidate batch, and (on the
+JSON path) the `express.json` object tree plus a re-`stringify`. That is
+transient, but at realistic request rates it dominates the peak, so it is
+measured separately here.
+
+Method — the **load** harness against a memory-capped container, reading PID 1's
+`VmHWM` (process high-water RSS) *and* the cgroup's `memory.peak` (charged peak,
+which excludes what the kernel can reclaim):
 
 ```
 docker build -f integration/Dockerfile -t spatial-rules .
-docker run --rm -d --name spatial-rules-load -p 3000:3000 spatial-rules
-bun run bench load --duration=20000            # sustained /query load
-docker exec spatial-rules-load cat /proc/1/status | grep -E 'VmHWM|VmRSS'
-docker stop spatial-rules-load
+docker run -d --name sr-load --memory=128m --memory-swap=128m -p 3000:3000 spatial-rules
+bun run bench load --endpoint=raw --concurrency=25 --duration=45000
+docker exec sr-load grep VmHWM /proc/1/status
+docker exec sr-load cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.max
+docker exec sr-load cat /sys/fs/cgroup/memory.events
 ```
 
-`VmHWM` of PID 1 (the Bun server) is the kernel-recorded all-time peak
-resident, capturing the load phase even though the event loop can't sample
-mid-request. **Baseline: peak resident ≈ 67 MB** (the 2026-08-23 Linux
-re-record of the memory harness above, which exercises 20 × 1,000-candidate
-batches in the container); the load-harness VmHWM is expected to sit in the
-same ~67 MB envelope against the documented 128 MB bound. The per-thread
-prepared-geometry duplication's marginal contribution (ADR-0010, one owned
-geometry clone per thread per ruleset) is deferred to the geo 0.34 upgrade
-(ticket 05 of `post-v1`), which moves the cache from owned per-thread clones to
-borrowed `Arc`-shared prepared forms.
+The turf comparison is the same request shape served by
+`benchmarks/js/turf-server.mjs` (`benchmarks/turf.Dockerfile`); both servers
+return **byte-identical masks** (36 matched on the production query). Results —
+2026-09-16, Windows Docker Desktop (WSL2), `oven/bun:1.3.14`, current release
+addon, 30 rules × 1,000 candidates, production query + `--concurrency=25`:
+
+| Server | Condition | VmHWM | cgroup peak | Throughput | Result |
+|---|---|---|---|---|---|
+| engine | in-process harness (20 batches) | 65.1 MiB | — | — | — |
+| engine | idle (Bun + Express + ruleset) | 65.9 MiB | — | — | — |
+| engine | HTTP raw, uncapped, 20 s | 144.7 MiB | — | 676 req/s | bounded |
+| engine | HTTP JSON, uncapped, 20 s | 175.1 MiB | — | 330 req/s | bounded |
+| engine | HTTP raw, 128 MB cap, 15 s | 138.1 MiB | 105.5 MiB | 684 req/s | survives |
+| engine | HTTP raw, 128 MB cap, 45 s | 145.1 MiB | 118.7 MiB | 674 req/s | survives |
+| turf | idle | 102.7 MiB | — | — | — |
+| turf | HTTP raw, uncapped, 20 s | 198.6 MiB | — | 126.6 req/s | bounded |
+| turf | HTTP raw, 128 MB cap, 15 s | — | — | — | **OOM-killed (137)** |
+
+**Findings:**
+
+- **Serving costs ~2.2× the in-process number.** The ~67 MB in-process peak
+  becomes ~138–149 MiB `VmHWM` over HTTP. The driver is per-request churn at
+  ~675 req/s, not queueing: a concurrency sweep (1/5/10/25) peaked
+  126/143/152/138 MiB, so even a fully serialized server reaches ~126 MiB.
+- **128 MB holds, but not comfortably.** The engine survives with
+  `memory.events` all zero, but the cgroup peak is 105–119 MiB — 82–93% of the
+  cap, ~9 MiB of headroom at the tightest. The old "~29 MiB, 22.7% of the cap"
+  figure was a smoke run. Size the container to the **cgroup peak** with real
+  headroom: 192–256 MB.
+- **`VmHWM` and `memory.peak` disagree — size limits off the latter.** Process
+  RSS reaches 138–149 MiB, but the kernel reclaims a large reclaimable share,
+  so the charged peak is only ~119 MiB. Sizing a K8s `limits.memory` off
+  `VmHWM` over-provisions; off the in-process ~67 MB it OOMs.
+- **Bounded, no leak.** `VmHWM` is flat from 25 s to 60 s; `VmRSS` trims back
+  (the same glibc sawtooth as the replacement probes), and `memory.events`
+  records no `max`/`oom` hits.
+- **Against turf, the gap widens over HTTP.** Turf needs ~199 MiB process RSS
+  and is **OOM-killed at the 128 MB cap** doing the work the engine completes
+  at 93% of it — at 5.3× the throughput. Over a socket this is no longer a
+  2–5× hold ratio; it is fits-versus-doesn't.
+
+The per-thread prepared-geometry duplication (ADR-0010, one owned prepared form
+per thread per ruleset) is accepted, not deferred: geo's `PreparedGeometry` is
+`!Send + !Sync`, so it can neither be moved nor shared through the `Sync`
+`Arc<Ruleset>` the concurrent engine requires. Its marginal contribution is
+bounded by the lazy per-rule memo — a thread prepares only the rules its
+candidates actually relate against.
+
+## 2b. Python baseline — engine PyO3 wheel vs Shapely/GEOS (`bun run bench python`)
+
+The JS harness's competitor is turf.js (a pure-JS JSTS DE-9IM engine, §2). The
+Python harness's competitor is **Shapely 2.x**, which is a thin wrapper over
+**GEOS** — a mature, heavily-optimized native C++ DE-9IM engine with its own
+prepared geometry and spatial-index machinery. This is *why* the Python numbers
+below are nothing like the turf numbers: an engine win here is a real proof,
+and a Shapely win is not an artifact.
+
+The harness compares the engine's `spatial-rules` (PyO3) wheel against two
+Shapely baselines on **core `intersects` only** (`benchmarks/py/bench.py` +
+`benchmarks/py/shapely_baseline.py`):
+
+- **naive** — every candidate × every rule, `shapely.intersects(c, r)`, rule
+  geometries `prepare`d once.
+- **indexed** — the strongest competitor: a bulk-loaded `shapely.STRtree` over
+  the rules, each rule `prepare`d once, then one vectorized
+  `tree.query(cands_array, predicate="intersects")` per batch.
+
+**Fairness (mirrors the JS harness, §"Limitations suite"):** the engine is timed
+for the full steady-state call a user makes — `Ruleset.query(bytes, query)` —
+GeoJSON parse + PyO3 + index + relate + mask on every query. The Shapely side is
+given pre-parsed geometries, a prebuilt STRtree and prepared rule forms, all
+excluded from timing. So an *engine* win is conservative; a Shapely win is real.
+Both sides assert an identical matched count before timing (min-of-N).
+
+### Results (Windows, release wheel, 2026-09-02, min-of-3)
+
+**Reference — 30 rules × 1,000 candidates (481 matched):**
+
+| baseline | time/batch | winner |
+|---|---|---|
+| Shapely naive (scan) | ~32 ms | engine 2.4× |
+| Shapely STRtree + prepare | ~3.0 ms | **Shapely 4.4×** |
+| engine (PyO3, full) | ~13 ms | baseline |
+
+**Rules sweep — fixed 1,000 candidates, grid rules (both sides agree):**
+
+| rules | Shapely indexed (ms) | engine (ms) | winner | matched |
+|---|---|---|---|---|
+| 30 | 2.1 | 4.4 | Shapely 2.1× | 448 |
+| 300 | 2.2 | 4.7 | Shapely 2.1× | 596 |
+| 1,000 | 2.4 | 4.9 | Shapely 2.2× | 654 |
+
+**Findings:**
+
+- **The engine loses the reference point to Shapely (~4.4×), and this is real.**
+  Shapely's prepared GEOS relate on country-scale multipolygons genuinely beats
+  the engine's `geo` `relate` loop, and the engine eats a per-call parse + PyO3
+  FFI floor that Shapely's pre-parsed setup avoids. The masks are byte-identical
+  (verified across all 1,000 candidates), so this isn't a measurement artifact.
+- **This is the honest story: GEOS is a first-class competitor.** The
+  "engine is thousands of x faster" narrative holds against pure-JS
+  turf.js/JSTS, but not against a native C++ GEOS-backed baseline. Anyone
+  comparing the Python wheel to Shapely should expect a single-digit × gap in
+  Shapely's favor on the reference shape.
+- **The rules sweep is *not* the engine's redeeming plot here.** Unlike the turf
+  crossover (§5), where turf's scan grows linearly and the engine stays flat, in
+  Python **both sides stay roughly flat** (2.1→2.4 ms for Shapely, 4.4→4.9 ms
+  for the engine) — because Shapely's STRtree + prepared relate is as
+  index-benefited as the engine's R\*-tree + prepared geometry. The gap is
+  constant, driven by GEOS prepared relate vs the engine's relate loop, not by
+  index scaling.
+- **The naive row is the only place the engine wins** (engine 2.4×). This is
+  the analog of the naive-turf row, but even here the engine's win is small:
+  GEOS beats JSTS at the underlying relate, so the per-pair crossing is less
+  punishing than it was for turf.
+- **Shapely only wins by leveraging its pre-parse/predict slate.** If the engine
+  were measured relate-only (the criterion ladder's F rung, ~14.7 ms for the same
+  1k×30 shape), it would still lose to Shapely's ~3 ms — that delta is GEOS
+  being a faster native DE-9IM engine, not the PyO3 boundary.
+
+**Provisioning:** `bun run bench python` builds the PyO3 wheel into
+`python/.venv` with `maturin develop --release` (if not already importable),
+installs `shapely>=2.0` + `numpy` into that venv if absent, then runs the
+harness. A pure-python (no-deps) baseline is intentionally out of scope — it
+would be a strawman nobody ships.
 
 ## Limitations suite — why turf doesn't scale
 
@@ -759,13 +995,17 @@ bun run bench crossover      # candidate-count crossover sweep (§5)
 bun run bench http           # full query over HTTP (spawns the server)
 bun run bench load           # sustained concurrent load (server must be running)
 bun run bench server         # start the integration server
+bun run bench turf-server    # start the turf.js HTTP baseline (for `load --base-url=...`)
 bun run bench smoke          # integration smoke (server must be running)
 bun run bench memory         # container memory (§24/§25)
 bun run bench memory --replacements-only   # isolate replacement peak
 bun run bench memory-scale   # scaling & lifecycle grid [--cells= --rules= --vertices=]
 bun run bench memory-turf    # engine vs turf.js memory footprint [--cells=]
+bun run bench python         # engine (PyO3 wheel) vs Shapely/GEOS baseline [--reps= --points= --candidates= --rules-file=]
 bun run bench smoke:node     # node package smoke test
 bun run bench crit           # criterion ladder
+bun run bench samples        # controlled sampling: N runs, median + spread, --save=/--compare=
+bun run bench samples --no-lto --save=tmp/lto.json   # A/B a profile change
 bun run bench all            # full battery (build + gen if needed)
 
 # verify under a hard cap (§26)
@@ -795,6 +1035,15 @@ the harnesses read, with the flag that overrides it:
 | `load` | `endpoint` `concurrency` `duration` | `--endpoint` `--concurrency` `--duration` | `json` `25` `10000` |
 | `memory` | `queryBatches` `replacements` `replacementsOnly` | `--query-batches` `--replacements` `--replacements-only` | `20` `10` `false` |
 | `memoryScale` | `cells` `rules` `vertices` `candidates` `queryBatches` `replacements` | `--cells` `--rules` `--vertices` `--candidates` `--query-batches` `--replacements` | `1000x10,…,100000x100` `1000,10000,100000` `10,100,1000` `1000` `20` `20` |
+| `python` | `reps` `points` `candidates` | `--reps` `--points` `--candidates` | `3` `30,300,1000` `1000` |
+| `samples` | `bench` `runs` `warmUp` `measureTime` `sampleSize` `filter` | `--bench` `--runs` `--warm-up` `--measure-time` `--sample-size` `--filter` | `ladder` `5` `1` `2` `10` `null` |
+
+`samples` runs a criterion bench N times and reports the median with the
+run-to-run spread, so a change is judged against its noise floor rather than a
+stale `target/criterion` baseline (`--save=`/`--compare=` a JSON summary).
+`--no-lto` re-runs with the release profile's LTO disabled for an A/B. It is the
+only place the harness sets environment variables, and only for the child cargo
+process (`CARGO_PROFILE_BENCH_*`) — every harness knob is still a flag.
 
 `rulesFile: null` means synthetic mode; set it (or pass `--rules-file=…`) to run
 against a real GeoJSON boundary file. Paths are repo-root-relative. There are no

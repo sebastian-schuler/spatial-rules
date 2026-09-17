@@ -53,7 +53,7 @@ Format: `<type>(<scope>): <subject>`
 Examples:
 
 ```
-feat(node): add fromCanonical round-trip
+feat(node): add replaceFromCanonical round-trip
 fix(core): guard empty ruleset against division by zero
 docs: document query shape operators
 ```

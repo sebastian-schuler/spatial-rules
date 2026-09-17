@@ -4,16 +4,17 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 
 use geo::algorithm::relate::IntersectionMatrix;
-use geo::{BooleanOps, GeodesicArea, Geometry, Rect, Relate};
+use geo::{BooleanOps, GeodesicArea, Geometry, Intersects, Rect, Relate};
 
-use crate::candidate::{Candidate, CandidateClass};
-use crate::prepared_cache::PreparedMemo;
-use crate::properties::PropertyValue;
-use crate::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
-use crate::rule::RuleId;
-use crate::ruleset::Ruleset;
-use crate::temporal::TemporalInstant;
-use crate::where_expr::WhereExpr;
+use crate::runtime::access::RuleAccess;
+use crate::model::candidate::{Candidate, CandidateClass};
+use crate::runtime::aggregate::AggregateSpec;
+use crate::indexing::prepared_cache::PreparedMemo;
+use crate::model::properties::PropertyValue;
+use crate::model::query::{ApplicableRule, CandidateOutcome, OverlapMetric, Query, ResolutionOutcome, SpatialPredicate};
+use crate::model::rule::RuleId;
+use crate::model::temporal::TemporalInstant;
+use crate::model::where_expr::WhereExpr;
 
 /// Mean Earth radius used by geo's haversine measure (GRS80 mean radius,
 /// IUGG/Moritz 2000) — the same model the exact admission uses, so the
@@ -56,7 +57,14 @@ fn spatial_predicate_holds(
 /// the Earth-complement area for a clockwise exterior, while the signed
 /// magnitude is correct for any winding of a polygon smaller than half the
 /// Earth (always true for rules/candidates).
-fn overlap_metric(candidate: &Geometry<f64>, rule: &Geometry<f64>) -> OverlapMetric {
+///
+/// `candidate_area` is the candidate's geodesic area, computed once per
+/// candidate by the caller (perf-memory 05) instead of once per matched rule.
+fn overlap_metric(
+    candidate: &Geometry<f64>,
+    rule: &Geometry<f64>,
+    candidate_area: f64,
+) -> OverlapMetric {
     // A point has zero area: there is no polygon intersection to measure.
     if matches!(candidate, Geometry::Point(_) | Geometry::MultiPoint(_)) {
         return OverlapMetric {
@@ -72,7 +80,6 @@ fn overlap_metric(candidate: &Geometry<f64>, rule: &Geometry<f64>) -> OverlapMet
         _ => unreachable!("overlap metrics require Polygon/MultiPolygon candidates and rules"),
     };
     let overlap_area = intersection.geodesic_area_signed().abs();
-    let candidate_area = candidate.geodesic_area_signed().abs();
     let overlap_ratio = if candidate_area > 0.0 {
         overlap_area / candidate_area
     } else {
@@ -105,7 +112,7 @@ fn envelope_or_invalid(candidate: &Candidate) -> Result<Rect<f64>, String> {
 /// (or multipoint) candidate has a well-defined minimum distance to a rule.
 /// Polygon/MultiPolygon candidates are reported invalid for this predicate.
 fn within_distance_supported(candidate: &Candidate) -> bool {
-    matches!(candidate.geometry, Geometry::Point(_) | Geometry::MultiPoint(_))
+    matches!(candidate.geometry(), Geometry::Point(_) | Geometry::MultiPoint(_))
 }
 
 /// The minimum haversine distance from a point candidate to a rule, in meters
@@ -157,7 +164,7 @@ fn expand_envelope(bbox: &Rect<f64>, distance_meters: f64) -> Rect<f64> {
 }
 
 pub struct PreparedQuery<'a> {
-    ruleset: &'a Ruleset,
+    ruleset: &'a dyn RuleAccess,
     spatial: SpatialPredicate,
     where_clause: Option<WhereExpr>,
     excluded: HashSet<RuleId>,
@@ -170,15 +177,26 @@ pub struct PreparedQuery<'a> {
     distance_meters: Option<f64>,
     /// The reference time for `$activeAt` predicates (ADR-0017).
     at: Option<TemporalInstant>,
+    /// The requested per-candidate analytics (ADR-0018), computed on the rich
+    /// match/resolve paths over the applicable set.
+    aggregate: Option<AggregateSpec>,
+    /// Why the programmatic [`Query`] is malformed (from [`Query::validate`]),
+    /// or `None` when it is well-formed. When set, every candidate is reported
+    /// `Invalid` with this reason instead of silently mis-evaluating.
+    invalid_query_reason: Option<&'static str>,
     /// Reused across the batch so the spatial-index result is filled into one
     /// buffer instead of allocated per candidate; then filtered in place to
     /// the rules the candidate will relate against (envelope order).
     scratch: RefCell<Vec<RuleId>>,
+    /// A second reusable buffer for `withinDistance`, whose pre-filter unions the
+    /// planar and fringe index hits (perf-memory 09/11) and so needs a temporary
+    /// distinct from `scratch`.
+    fringe_scratch: RefCell<Vec<RuleId>>,
 }
 
 impl<'a> PreparedQuery<'a> {
     pub(crate) fn new(
-        ruleset: &'a Ruleset,
+        ruleset: &'a dyn RuleAccess,
         query: &Query,
         excluded: HashSet<RuleId>,
         memo: PreparedMemo<'a>,
@@ -194,7 +212,10 @@ impl<'a> PreparedQuery<'a> {
             include_overlap: query.include_overlap,
             distance_meters: query.distance_meters,
             at: query.at,
+            aggregate: query.aggregate.clone(),
+            invalid_query_reason: query.validate(),
             scratch: RefCell::new(Vec::new()),
+            fringe_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -257,13 +278,23 @@ impl<'a> PreparedQuery<'a> {
     }
 
     pub fn evaluate(&self, candidate: &Candidate) -> CandidateOutcome {
+        if let Some(reason) = self.invalid_query_reason {
+            return CandidateOutcome::Invalid {
+                reason: reason.to_string(),
+            };
+        }
         let result = self.evaluate_result(candidate, true);
         if let Some(reason) = result.invalid {
             CandidateOutcome::Invalid { reason }
         } else if result.matched {
+            let aggregate = self
+                .aggregate
+                .as_ref()
+                .map(|spec| spec.compute(candidate, &result.rule_ids, self.ruleset));
             CandidateOutcome::Matched {
                 rule_ids: result.rule_ids,
                 overlaps: result.overlaps,
+                aggregate,
             }
         } else {
             CandidateOutcome::NotMatched
@@ -271,6 +302,26 @@ impl<'a> PreparedQuery<'a> {
     }
 
     pub fn evaluate_mask(&self, candidate: &Candidate) -> u8 {
+        if self.invalid_query_reason.is_some() {
+            return 2;
+        }
+        // Mask fast path for the `intersects` predicate. The mask record is
+        // "did ANY admitted rule intersect the candidate", so we only need a
+        // boolean — not the full 9-cell DE-9IM `IntersectionMatrix` that
+        // `relate()` builds for every touched rule. geo's `Intersects` is the
+        // exact, symmetric DE-9IM `intersects` (not FF*FF****), so the mask is
+        // byte-identical to the full-matrix path, and the loop can early-exit
+        // on the first admit without changing the answer. This is the hot path
+        // for the union-find / serve-the-mask workloads (docs/benchmarks §2b).
+        //
+        // Only the mask early-exits, and only `intersects` takes this dedicated
+        // path. The rich `query()` and resolution need the full applicable set
+        // (no early exit) but share the same unprepared boolean admission in
+        // `for_each_admitted` (perf-memory 05); the six directional predicates
+        // still need the directional matrix cells from a prepared relate.
+        if self.spatial == SpatialPredicate::Intersects {
+            return self.evaluate_mask_intersects(candidate);
+        }
         let result = self.evaluate_result(candidate, false);
         if result.invalid.is_some() {
             2
@@ -281,36 +332,76 @@ impl<'a> PreparedQuery<'a> {
         }
     }
 
-    /// The shared relate step of the fixed pipeline (bbox → property → exact
-    /// DE-9IM): fill the scratch buffer with the candidate-touching, admitted
-    /// rules, lazily prepare them, and invoke `on_hold(rule_id, matrix)` for
-    /// each in envelope order. Both the match and resolve paths layer their
-    /// per-rule action on this one loop; the mask hot path is unchanged
-    /// because the closure does the same per-rule work it always did.
+    /// The `intersects`-predicate mask fast path: scan the bbox-touching,
+    /// property-admitted rules and return `1` at the first `intersects` admit
+    /// (early exit), else `0`. Runs the same bbox → property admission pipeline
+    /// as [`PreparedQuery::evaluate_result`], but uses the boolean
+    /// [`Intersects`] predicate on the unprepared geometries instead of
+    /// building a DE-9IM matrix per touched rule, and does not prepare the
+    /// rules (a boolean intersects needs no prepared form).
+    fn evaluate_mask_intersects(&self, candidate: &Candidate) -> u8 {
+        let bbox = match envelope_or_invalid(candidate) {
+            Ok(bbox) => bbox,
+            Err(_) => return 2,
+        };
+        let candidate_geometry = candidate.geometry();
+        let mut scratch = self.scratch.borrow_mut();
+        self.ruleset.query_envelope_into(&bbox, &mut scratch);
+        scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
+        for &rule_id in scratch.iter() {
+            if candidate_geometry.intersects(self.ruleset.geometry(rule_id)) {
+                return 1;
+            }
+        }
+        0
+    }
+
+    /// The shared exact-admission step of the fixed pipeline (bbox → property →
+    /// predicate): fill the scratch buffer with the candidate-touching,
+    /// property-admitted rules and invoke `on_admitted(rule_id)` for each whose
+    /// spatial predicate holds, in ascending rule-id (envelope) order. Both the
+    /// match and resolve paths layer their per-rule action on this one loop.
     ///
-    /// Lazy preparation (ADR-0010, memory-benchmark 02): filter the envelope
-    /// results to the rules this candidate will relate against, prepare
+    /// **`intersects` needs no prepared form and no DE-9IM matrix**
+    /// (perf-memory 05): geo's boolean `Intersects` is the exact symmetric
+    /// DE-9IM `intersects` (ADR-0008, architecture-hardening 08), so this path
+    /// answers it on the unprepared geometries and never populates the prepared
+    /// memo. The six directional predicates still build the matrix against the
+    /// lazily prepared rules (ADR-0010, memory-benchmark 02): filter the
+    /// envelope results to the rules this candidate relates against, prepare
     /// exactly the missing ones, then relate in envelope order — so matched
     /// rule ids stay in the eager path's deterministic ascending order whether
-    /// or not the memo was already warm. Warm batches find everything
-    /// prepared: `ensure` skips every slot fill and the loop adds one
-    /// predicted `None` check per touched rule.
-    fn relate_touched<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_hold: F)
+    /// or not the memo was already warm. Warm batches find everything prepared:
+    /// `ensure` skips every slot fill and the loop adds one predicted `None`
+    /// check per touched rule.
+    fn for_each_admitted<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_admitted: F)
     where
-        F: FnMut(RuleId, &IntersectionMatrix),
+        F: FnMut(RuleId),
     {
         let mut scratch = self.scratch.borrow_mut();
         self.ruleset.query_envelope_into(bbox, &mut scratch);
         scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
-        if !scratch.is_empty() {
-            self.memo.ensure(&scratch);
-            let slots = self.memo.slots();
+        if scratch.is_empty() {
+            return;
+        }
+        if self.spatial == SpatialPredicate::Intersects {
+            let candidate_geometry = candidate.geometry();
             for &rule_id in scratch.iter() {
-                let prepared = slots[rule_id.index()]
-                    .as_ref()
-                    .expect("touched rules are prepared");
-                let matrix = candidate.geometry.relate(prepared);
-                on_hold(rule_id, &matrix);
+                if candidate_geometry.intersects(self.ruleset.geometry(rule_id)) {
+                    on_admitted(rule_id);
+                }
+            }
+            return;
+        }
+        self.memo.ensure(&scratch);
+        let slots = self.memo.slots();
+        for &rule_id in scratch.iter() {
+            let prepared = slots[rule_id.index()]
+                .as_deref()
+                .expect("touched rules are prepared");
+            let matrix = candidate.geometry().relate(prepared);
+            if spatial_predicate_holds(self.spatial, &matrix) {
+                on_admitted(rule_id);
             }
         }
     }
@@ -334,22 +425,31 @@ impl<'a> PreparedQuery<'a> {
             return self.evaluate_result_distance(candidate, collect_ids, bbox);
         }
 
-        // Fixed pipeline: bbox -> property -> exact DE-9IM.
+        // Fixed pipeline: bbox -> property -> predicate admission.
         let compute_overlaps = collect_ids && self.include_overlap;
+        // The candidate's geodesic area is constant per candidate, so compute it
+        // once here rather than once per matched rule (perf-memory 05).
+        let candidate_area = if compute_overlaps {
+            match candidate.geometry() {
+                Geometry::Point(_) | Geometry::MultiPoint(_) => 0.0,
+                other => other.geodesic_area_signed().abs(),
+            }
+        } else {
+            0.0
+        };
         let mut matched: Vec<RuleId> = Vec::new();
         let mut overlaps: Vec<OverlapMetric> = Vec::new();
         let mut any_match = false;
-        self.relate_touched(candidate, &bbox, |rule_id, matrix| {
-            if spatial_predicate_holds(self.spatial, matrix) {
-                any_match = true;
-                if collect_ids {
-                    matched.push(rule_id);
-                    if compute_overlaps {
-                        overlaps.push(overlap_metric(
-                            &candidate.geometry,
-                            self.ruleset.geometry(rule_id),
-                        ));
-                    }
+        self.for_each_admitted(candidate, &bbox, |rule_id| {
+            any_match = true;
+            if collect_ids {
+                matched.push(rule_id);
+                if compute_overlaps {
+                    overlaps.push(overlap_metric(
+                        candidate.geometry(),
+                        self.ruleset.geometry(rule_id),
+                        candidate_area,
+                    ));
                 }
             }
         });
@@ -394,39 +494,54 @@ impl<'a> PreparedQuery<'a> {
     fn admit_within_distance(&self, candidate: &Candidate, bbox: &Rect<f64>, distance: f64, mut on_within: impl FnMut(RuleId)) {
         let expanded = expand_envelope(bbox, distance);
         let mut scratch = self.scratch.borrow_mut();
-        self.ruleset.query_envelope_into(&expanded, &mut scratch);
+        let mut fringe = self.fringe_scratch.borrow_mut();
+
+        // `extend_distance_hits` *appends*, so clear the accumulator first (the
+        // per-envelope index queries clear only the temporary they fill).
+        scratch.clear();
+        self.extend_distance_hits(&expanded, &mut scratch, &mut fringe);
         let e_min = expanded.min().x;
         let e_max = expanded.max().x;
-        let mut wrapped: Vec<RuleId> = Vec::new();
         if e_min < -180.0 {
-            let mut part = Vec::new();
-            self.ruleset.query_envelope_into(
+            self.extend_distance_hits(
                 &Rect::new((e_min + 360.0, expanded.min().y), (180.0, expanded.max().y)),
-                &mut part,
+                &mut scratch,
+                &mut fringe,
             );
-            wrapped.extend(part);
         }
         if e_max > 180.0 {
-            let mut part = Vec::new();
-            self.ruleset.query_envelope_into(
+            self.extend_distance_hits(
                 &Rect::new((-180.0, expanded.min().y), (e_max - 360.0, expanded.max().y)),
-                &mut part,
+                &mut scratch,
+                &mut fringe,
             );
-            wrapped.extend(part);
         }
-        if !wrapped.is_empty() {
-            scratch.extend(wrapped);
-            scratch.sort_unstable();
-            scratch.dedup();
-        }
+        scratch.sort_unstable();
+        scratch.dedup();
         scratch.retain(|&rule_id| self.admitted_by_properties(rule_id));
         for &rule_id in scratch.iter() {
-            if min_haversine_distance(&candidate.geometry, self.ruleset.geometry(rule_id))
+            if min_haversine_distance(candidate.geometry(), self.ruleset.geometry(rule_id))
                 <= distance
             {
                 on_within(rule_id);
             }
         }
+    }
+
+    /// Append the planar **and** fringe index hits for `envelope` into `hits`,
+    /// using `scratch` as a reused temporary. `withinDistance` needs both: the
+    /// planar box is exact for the DE-9IM predicates but under-covers the
+    /// great-circle arcs the distance confirm walks (perf-memory 09/11).
+    fn extend_distance_hits(
+        &self,
+        envelope: &Rect<f64>,
+        hits: &mut Vec<RuleId>,
+        scratch: &mut Vec<RuleId>,
+    ) {
+        self.ruleset.query_envelope_into(envelope, scratch);
+        hits.append(scratch);
+        self.ruleset.query_fringe_into(envelope, scratch);
+        hits.append(scratch);
     }
 
     fn evaluate_result_distance(&self, candidate: &Candidate, collect_ids: bool, bbox: Rect<f64>) -> EvalResult {
@@ -462,7 +577,7 @@ impl<'a> PreparedQuery<'a> {
     /// ascending rule-id (envelope) order. The resolve paths dispatch the
     /// spatial predicate here; their withinDistance invalid-reason guards
     /// still match the enum at the entries (they produce per-outcome invalids).
-    fn admit_by_predicate<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, mut on_admitted: F)
+    fn admit_by_predicate<F>(&self, candidate: &Candidate, bbox: &Rect<f64>, on_admitted: F)
     where
         F: FnMut(RuleId),
     {
@@ -472,11 +587,7 @@ impl<'a> PreparedQuery<'a> {
                     self.admit_within_distance(candidate, bbox, distance, on_admitted);
                 }
             }
-            _ => self.relate_touched(candidate, bbox, |rule_id, matrix| {
-                if spatial_predicate_holds(self.spatial, matrix) {
-                    on_admitted(rule_id);
-                }
-            }),
+            _ => self.for_each_admitted(candidate, bbox, on_admitted),
         }
     }
 
@@ -501,6 +612,11 @@ impl<'a> PreparedQuery<'a> {
     /// **Collect-then-resolve**: no early exit at the first spatial hit, the
     /// merge needs the full applicable set (ADR-0015 stance).
     pub fn evaluate_resolve(&self, candidate: &Candidate) -> ResolutionOutcome {
+        if let Some(reason) = self.invalid_query_reason {
+            return ResolutionOutcome::Invalid {
+                reason: reason.to_string(),
+            };
+        }
         if self.spatial == SpatialPredicate::WithinDistance {
             if let Some(reason) = self.within_distance_invalid_reason(candidate) {
                 return ResolutionOutcome::Invalid { reason };
@@ -539,14 +655,19 @@ impl<'a> PreparedQuery<'a> {
         let mut values: BTreeMap<String, PropertyValue> = BTreeMap::new();
         for rule in &applicable {
             for (key, value) in self.ruleset.properties(rule.rule_id) {
-                values.entry(key.clone()).or_insert_with(|| value.clone());
+                values.entry(key.to_string()).or_insert_with(|| value.clone());
             }
         }
+        let aggregate = self.aggregate.as_ref().map(|spec| {
+            let rule_ids: Vec<RuleId> = applicable.iter().map(|rule| rule.rule_id).collect();
+            spec.compute(candidate, &rule_ids, self.ruleset)
+        });
 
         ResolutionOutcome::Resolved {
             winner,
             values,
             applicable,
+            aggregate,
         }
     }
 
@@ -556,6 +677,9 @@ impl<'a> PreparedQuery<'a> {
     /// id buffer, the winner sort, the values merge, or the explanation —
     /// mirroring how the match mask skips per-match rule ids (ADR-0004).
     pub fn evaluate_resolve_mask(&self, candidate: &Candidate) -> u8 {
+        if self.invalid_query_reason.is_some() {
+            return 2;
+        }
         if self.spatial == SpatialPredicate::WithinDistance
             && self.within_distance_invalid_reason(candidate).is_some()
         {

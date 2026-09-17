@@ -138,7 +138,7 @@ fn query_envelope_into_dedups_and_reuses_the_buffer() {
     let ruleset = Ruleset::from_geojson(TWO_RULES).unwrap();
     let zone_a = ruleset.rule_id("zone-a").unwrap();
     let zone_b = ruleset.rule_id("zone-b").unwrap();
-    let envelope_a = *ruleset.envelope(zone_a);
+    let envelope_a = *ruleset.envelope(zone_a).expect("minted by this ruleset");
 
     // Duplicate entries mapping to one rule id must be deduplicated.
     let index = build_spatial_index(
@@ -210,17 +210,18 @@ fn classify_candidate_returns_envelope_or_reason() {
     assert_eq!(classify_candidate(&valid).unwrap(), Rect::new((0.0, 0.0), (10.0, 10.0)));
 
     let bowtie = Geometry::Polygon(bowtie());
-    assert!(classify_candidate(&bowtie).unwrap_err().starts_with("invalid geometry:"));
+    let error = classify_candidate(&bowtie).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidGeometry);
+    assert!(error.message.starts_with("invalid geometry:"));
 
     // Point and MultiPoint candidates are supported (filtering-scale 01).
     assert!(classify_candidate(&Geometry::Point(Point::new(1.0, 1.0))).is_ok());
 
     // LineString is not a supported candidate type.
     let line = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]));
-    assert_eq!(
-        classify_candidate(&line).unwrap_err(),
-        "unsupported geometry type: LineString"
-    );
+    let error = classify_candidate(&line).unwrap_err();
+    assert_eq!(error.code, ErrorCode::UnsupportedGeometryType);
+    assert_eq!(error.message, "unsupported geometry type: LineString");
 }
 
 #[test]
@@ -268,8 +269,12 @@ fn prepared_geometries_handle_is_indexed_by_rule_id() {
     // The handle returns the rule's own prepared geometry by opaque id: the
     // point (5, 5) is inside zone-a and disjoint from zone-b.
     let inside_a = Geometry::Point(Point::new(5.0, 5.0));
-    assert!(inside_a.relate(prepared.get(zone_a)).is_intersects());
-    assert!(inside_a.relate(prepared.get(zone_b)).is_disjoint());
+    assert!(inside_a
+        .relate(prepared.get(zone_a).expect("minted by this ruleset"))
+        .is_intersects());
+    assert!(inside_a
+        .relate(prepared.get(zone_b).expect("minted by this ruleset"))
+        .is_disjoint());
 }
 
 #[test]
